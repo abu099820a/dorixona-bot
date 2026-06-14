@@ -463,17 +463,36 @@ async def search_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     else:
         variants = search_variants(txt)
         mask = pd.Series([False]*len(df), index=df.index)
+        
+        # Barcha ustunlardan qidirish: nom, hudud, manzil, orientir
+        search_cols = [
+            "Nomi (UZ)", "Nomi (RU)",
+            "Hudud (UZ)", "Hudud (RU)",
+            "Tuman (UZ)", "Tuman (RU)",
+            "Manzil (UZ)", "Manzil (RU)",
+            "Orientir (UZ)", "Orientir (RU)",
+        ]
         for v in variants:
-            mask = mask | df["Nomi (UZ)"].str.contains(v, case=False, na=False)
-            mask = mask | df["Nomi (RU)"].str.contains(v, case=False, na=False)
+            for col in search_cols:
+                if col in df.columns:
+                    mask = mask | df[col].str.contains(v, case=False, na=False)
         results = df[mask]
+        
+        # Fuzzy qidirish — barcha ustunlardan
         if results.empty:
-            all_names = df["Nomi (UZ)"].tolist() + df["Nomi (RU)"].tolist()
-            matches = fuzz_process.extract(txt, all_names, limit=5)
-            good = [m[0] for m in matches if m[1] >= 45]
-            if good:
+            all_vals = []
+            for col in search_cols:
+                if col in df.columns:
+                    all_vals += df[col].fillna("").tolist()
+            matches = fuzz_process.extract(txt, all_vals, limit=10)
+            good_vals = [m[0] for m in matches if m[1] >= 50]
+            if good_vals:
                 await update.message.reply_text(T[language]["similar"])
-                results = df[df["Nomi (UZ)"].isin(good) | df["Nomi (RU)"].isin(good)]
+                fmask = pd.Series([False]*len(df), index=df.index)
+                for col in search_cols:
+                    if col in df.columns:
+                        fmask = fmask | df[col].isin(good_vals)
+                results = df[fmask]
 
     if results.empty:
         await update.message.reply_text(T[language]["not_found"])
