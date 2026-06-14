@@ -182,7 +182,7 @@ def format_card(row, language):
     if hours: lines.append(f"🕐 {hours}")
     if phone:
         clean_phone = str(phone).replace(" ","").replace("-","").replace("(","").replace(")","")
-        lines.append(f"📞 [{phone}](tel:{clean_phone})")
+        lines.append(f"📞 {phone}")
     return "\n".join(str(l) for l in lines)
 
 def get_map_buttons(lat, lon, language):
@@ -220,13 +220,32 @@ async def send_card(msg, row, language):
     text = format_card(row, language)
     lat = str(row.get("Latitude","")).strip()
     lon = str(row.get("Longitude","")).strip()
+    phone = str(row.get("Telefon","")).strip()
     has_coords = lat not in ["","nan"] and lon not in ["","nan"]
+    has_phone = phone not in ["","nan"]
+
+    # Tugmalar
+    buttons = []
+    if has_coords:
+        yandex_url = f"https://maps.yandex.ru/?pt={lon},{lat}&z=17&l=map"
+        google_url = f"https://maps.google.com/?q={lat},{lon}"
+        buttons.append([
+            InlineKeyboardButton("🗺 Yandex Maps", url=yandex_url),
+            InlineKeyboardButton("🗺 Google Maps", url=google_url),
+        ])
+    if has_phone:
+        clean_phone = phone.replace(" ","").replace("-","").replace("(","").replace(")","")
+        tg_username = clean_phone if clean_phone.startswith("+") else "+" + clean_phone.lstrip("0")
+        buttons.append([
+            InlineKeyboardButton("📞 Qo'ng'iroq qilish", url=f"tel:{clean_phone}"),
+            InlineKeyboardButton("💬 Telegram", url=f"https://t.me/{tg_username}"),
+        ])
+    kb = InlineKeyboardMarkup(buttons) if buttons else None
 
     if has_coords:
-        # Avval lokatsiya pin
         await msg.reply_location(latitude=float(lat), longitude=float(lon))
-        # Keyin matn + xarita tugmalari
-        kb = get_map_buttons(lat, lon, language)
+
+    if kb:
         await msg.reply_text(text, parse_mode="Markdown", reply_markup=kb)
     else:
         await msg.reply_text(text, parse_mode="Markdown")
