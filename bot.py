@@ -172,7 +172,7 @@ def format_card(row, language):
     hours = row.get(f"Ish vaqti ({lg_up})", "") or row.get("Ish vaqti (RU)", "")
     phone = row.get("Telefon", "")
 
-    lines = [f"🏥 *{nomi}*"]
+    lines = [f"🏥 {nomi}"]
     if filial and filial not in ["nan", ""]:
         lines.append(f"🔢 Filial: #{filial}")
     if hudud or tuman:
@@ -226,6 +226,14 @@ async def send_card(msg, row, language):
 
     # Tugmalar
     buttons = []
+    if has_phone:
+        digits = "".join(c for c in phone if c.isdigit())
+        if len(digits) >= 9:
+            last9 = digits[-9:]
+            full = "998" + last9
+            buttons.append([
+                InlineKeyboardButton("💬 Telegram", url=f"https://t.me/+{full}"),
+            ])
     if has_coords:
         yandex_url = f"https://maps.yandex.ru/?pt={lon},{lat}&z=17&l=map"
         google_url = f"https://maps.google.com/?q={lat},{lon}"
@@ -233,22 +241,16 @@ async def send_card(msg, row, language):
             InlineKeyboardButton("🗺 Yandex Maps", url=yandex_url),
             InlineKeyboardButton("🗺 Google Maps", url=google_url),
         ])
-    if has_phone:
-        clean_phone = phone.replace(" ","").replace("-","").replace("(","").replace(")","")
-        tg_username = clean_phone if clean_phone.startswith("+") else "+" + clean_phone.lstrip("0")
-        buttons.append([
-            InlineKeyboardButton("📞 Qo'ng'iroq qilish", url=f"tel:{clean_phone}"),
-            InlineKeyboardButton("💬 Telegram", url=f"https://t.me/{tg_username}"),
-        ])
+
     kb = InlineKeyboardMarkup(buttons) if buttons else None
 
     if has_coords:
         await msg.reply_location(latitude=float(lat), longitude=float(lon))
 
     if kb:
-        await msg.reply_text(text, parse_mode="Markdown", reply_markup=kb)
+        await msg.reply_text(text, reply_markup=kb)
     else:
-        await msg.reply_text(text, parse_mode="Markdown")
+        await msg.reply_text(text)
 
 async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ctx.user_data.clear()
@@ -256,7 +258,7 @@ async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         InlineKeyboardButton("🇺🇿 O'zbek", callback_data="lang_uz"),
         InlineKeyboardButton("🇷🇺 Русский", callback_data="lang_ru")
     ]])
-    await update.message.reply_text(T["uz"]["welcome"], reply_markup=kb, parse_mode="Markdown")
+    await update.message.reply_text(T["uz"]["welcome"], reply_markup=kb)
     return LANG
 
 async def set_lang(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -264,7 +266,7 @@ async def set_lang(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await q.answer()
     language = q.data.split("_")[1]
     ctx.user_data["lang"] = language
-    await q.message.reply_text(T[language]["menu"], reply_markup=main_keyboard(language), parse_mode="Markdown")
+    await q.message.reply_text(T[language]["menu"], reply_markup=main_keyboard(language))
     return MENU
 
 async def menu_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -276,12 +278,12 @@ async def menu_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             InlineKeyboardButton("🇺🇿 O'zbek", callback_data="lang_uz"),
             InlineKeyboardButton("🇷🇺 Русский", callback_data="lang_ru")
         ]])
-        await update.message.reply_text(T[language]["welcome"], reply_markup=kb, parse_mode="Markdown")
+        await update.message.reply_text(T[language]["welcome"], reply_markup=kb)
         return LANG
 
     elif txt == T[language]["search_btn"]:
         await update.message.reply_text(T[language]["search_menu"],
-                                         reply_markup=search_keyboard(language), parse_mode="Markdown")
+                                         reply_markup=search_keyboard(language))
         return SEARCH_MENU
 
     elif txt == T[language]["list_btn"]:
@@ -333,7 +335,7 @@ async def send_list_page(msg, ctx, language):
     if nav: buttons.append(nav)
     buttons.append([InlineKeyboardButton(T[language]["back"], callback_data="listpage_back")])
 
-    await msg.reply_text(text, reply_markup=InlineKeyboardMarkup(buttons), parse_mode="Markdown")
+    await msg.reply_text(text, reply_markup=InlineKeyboardMarkup(buttons))
 
 async def list_page_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
@@ -351,7 +353,7 @@ async def list_page_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await send_list_page(q.message, ctx, language)
         return LIST_PAGE
     elif q.data == "listpage_back":
-        await q.message.reply_text(T[language]["menu"], reply_markup=main_keyboard(language), parse_mode="Markdown")
+        await q.message.reply_text(T[language]["menu"], reply_markup=main_keyboard(language))
         return MENU
     elif q.data.startswith("list_"):
         idx = int(q.data.split("_")[1])
@@ -367,7 +369,7 @@ async def search_menu_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     txt = update.message.text
 
     if txt == T[language]["back"]:
-        await update.message.reply_text(T[language]["menu"], reply_markup=main_keyboard(language), parse_mode="Markdown")
+        await update.message.reply_text(T[language]["menu"], reply_markup=main_keyboard(language))
         return MENU
 
     elif txt == T[language]["nearest"]:
@@ -394,7 +396,7 @@ async def search_menu_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     elif txt in [T[language]["by_number"], T[language]["by_name"]]:
         ctx.user_data["stype"] = "number" if txt == T[language]["by_number"] else "name"
         prompt = T[language]["enter_number"] if ctx.user_data["stype"] == "number" else T[language]["enter_name"]
-        await update.message.reply_text(prompt, reply_markup=back_keyboard(language), parse_mode="Markdown")
+        await update.message.reply_text(prompt, reply_markup=back_keyboard(language))
         return SEARCH_INPUT
 
     return SEARCH_MENU
@@ -417,7 +419,7 @@ async def select_region(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             row_btns = []
     if row_btns: buttons.append(row_btns)
     await q.message.reply_text(f"📍 *{vil_name}*\n{T[language]['select_tuman']}",
-                                 reply_markup=InlineKeyboardMarkup(buttons), parse_mode="Markdown")
+                                 reply_markup=InlineKeyboardMarkup(buttons))
     return SELECT_DISTRICT
 
 async def select_district(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -438,13 +440,13 @@ async def select_district(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     if results.empty:
         await q.message.reply_text(T[language]["not_found"])
-        await q.message.reply_text(T[language]["menu"], reply_markup=main_keyboard(language), parse_mode="Markdown")
+        await q.message.reply_text(T[language]["menu"], reply_markup=main_keyboard(language))
         return MENU
 
     if len(results) <= 3:
         for _, row in results.iterrows():
             await send_card(q.message, row.to_dict(), language)
-        await q.message.reply_text(T[language]["menu"], reply_markup=main_keyboard(language), parse_mode="Markdown")
+        await q.message.reply_text(T[language]["menu"], reply_markup=main_keyboard(language))
         return MENU
 
     ctx.user_data["results"] = results.to_dict("records")
@@ -456,7 +458,7 @@ async def select_district(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         label = f"#{filial} — {nomi}" if filial not in ["","nan"] else nomi
         buttons.append([InlineKeyboardButton(label, callback_data=f"sel_{i}")])
     await q.message.reply_text(T[language]["found_many"].format(n=len(results)),
-                                 reply_markup=InlineKeyboardMarkup(buttons), parse_mode="Markdown")
+                                 reply_markup=InlineKeyboardMarkup(buttons))
     return SELECT_RESULT
 
 async def search_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -464,7 +466,7 @@ async def search_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     txt = update.message.text.strip()
     if txt == T[language]["back"]:
         await update.message.reply_text(T[language]["search_menu"],
-                                         reply_markup=search_keyboard(language), parse_mode="Markdown")
+                                         reply_markup=search_keyboard(language))
         return SEARCH_MENU
 
     df = load_df()
@@ -519,7 +521,7 @@ async def search_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     if len(results) == 1:
         await send_card(update.message, results.iloc[0].to_dict(), language)
-        await update.message.reply_text(T[language]["menu"], reply_markup=main_keyboard(language), parse_mode="Markdown")
+        await update.message.reply_text(T[language]["menu"], reply_markup=main_keyboard(language))
         return MENU
 
     ctx.user_data["results"] = results.to_dict("records")
@@ -531,7 +533,7 @@ async def search_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         label = f"#{filial} — {nomi}" if filial not in ["","nan"] else nomi
         buttons.append([InlineKeyboardButton(label, callback_data=f"sel_{i}")])
     await update.message.reply_text(T[language]["found_many"].format(n=len(results)),
-                                     reply_markup=InlineKeyboardMarkup(buttons), parse_mode="Markdown")
+                                     reply_markup=InlineKeyboardMarkup(buttons))
     return SELECT_RESULT
 
 async def select_result(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -542,14 +544,14 @@ async def select_result(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     results = ctx.user_data.get("results",[])
     if idx < len(results):
         await send_card(q.message, results[idx], language)
-    await q.message.reply_text(T[language]["menu"], reply_markup=main_keyboard(language), parse_mode="Markdown")
+    await q.message.reply_text(T[language]["menu"], reply_markup=main_keyboard(language))
     return MENU
 
 async def location_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     language = get_lang(ctx)
     if update.message.text == T[language]["back"]:
         await update.message.reply_text(T[language]["search_menu"],
-                                         reply_markup=search_keyboard(language), parse_mode="Markdown")
+                                         reply_markup=search_keyboard(language))
         return SEARCH_MENU
     if not update.message.location: return LOCATION_WAIT
 
@@ -562,7 +564,7 @@ async def location_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     if valid.empty:
         await update.message.reply_text("❌ Koordinatalar hali kiritilmagan!")
-        await update.message.reply_text(T[language]["menu"], reply_markup=main_keyboard(language), parse_mode="Markdown")
+        await update.message.reply_text(T[language]["menu"], reply_markup=main_keyboard(language))
         return MENU
 
     valid["_dist"] = valid.apply(lambda r: haversine(ulat,ulon,r["_lat"],r["_lon"]), axis=1)
@@ -571,10 +573,10 @@ async def location_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         text = format_card(r, language) + f"\n📏 {row['_dist']:.1f} {T[language]['km']}"
         lat, lon = str(row["_lat"]), str(row["_lon"])
         kb = get_map_buttons(lat, lon, language)
-        await update.message.reply_text(text, parse_mode="Markdown", reply_markup=kb)
+        await update.message.reply_text(text, reply_markup=kb)
         await update.message.reply_location(latitude=row["_lat"], longitude=row["_lon"])
 
-    await update.message.reply_text(T[language]["menu"], reply_markup=main_keyboard(language), parse_mode="Markdown")
+    await update.message.reply_text(T[language]["menu"], reply_markup=main_keyboard(language))
     return MENU
 
 def main():
