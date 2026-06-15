@@ -8,53 +8,40 @@ import requests
 import time
 import json
 import os
+import re
 
 TOKEN = "8837024109:AAGFZP5akA2nPo0RugVCCbEl2wgoe9N5_Uo"
 CHANNEL_ID = "-1003087072308"
 EXCEL_FILE = "dorixonalar.xlsx"
-SENT_FILE = "sent_filials.json"  # Yuborilganlarni eslab qoladi
+SENT_FILE = "sent_filials.json"
+
+OFFICE_LAT = 41.219104
+OFFICE_LON = 69.272889
+OFFICE_TEXT = """🏢 *Vaksin Med — Bosh ofis / Sklad*
+📍 Toshkent shahri
+🗺 Yandex va Google Maps orqali ko'ring"""
 
 def load_sent():
-    """Avval yuborilganlarni yuklash"""
     if os.path.exists(SENT_FILE):
         with open(SENT_FILE, "r") as f:
             return set(json.load(f))
     return set()
 
 def save_sent(sent):
-    """Yuborilganlarni saqlash"""
     with open(SENT_FILE, "w") as f:
         json.dump(list(sent), f)
 
-def send_text(text, parse_mode="Markdown", reply_to=None, lat=None, lon=None):
-    url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
-    payload = {
-        "chat_id": CHANNEL_ID,
-        "text": text,
-        "parse_mode": parse_mode,
-        "disable_web_page_preview": True
-    }
-    if reply_to:
-        payload["reply_to_message_id"] = reply_to
-    if lat and lon:
-        payload["reply_markup"] = {
-            "inline_keyboard": [[
-                {"text": "🗺 Yandex Maps", "url": f"https://maps.yandex.ru/?pt={lon},{lat}&z=17&l=map"},
-                {"text": "🗺 Google Maps", "url": f"https://maps.google.com/?q={lat},{lon}"}
-            ]]
-        }
-    for attempt in range(3):
-        r = requests.post(url, json=payload)
-        data = r.json()
-        if data.get("ok"):
-            return data
-        if "retry_after" in str(data):
-            wait = data.get("parameters", {}).get("retry_after", 30)
-            print(f"    ⏳ {wait} sekund kutilmoqda...")
-            time.sleep(wait + 2)
-        else:
-            return data
-    return data
+def phone_to_tg(phone):
+    digits = re.sub(r'\D', '', str(phone))
+    if not digits:
+        return None
+    if digits.startswith("998"):
+        number = digits
+    elif digits.startswith("0"):
+        number = "998" + digits[1:]
+    else:
+        number = "998" + digits
+    return f"https://t.me/+{number}"
 
 def send_location(lat, lon):
     url = f"https://api.telegram.org/bot{TOKEN}/sendLocation"
@@ -75,14 +62,61 @@ def send_location(lat, lon):
             return data
     return data
 
+def send_text(text, reply_to=None, lat=None, lon=None, phone=None):
+    url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
+    
+    # Inline tugmalar
+    buttons = []
+    if lat and lon:
+        buttons.append([
+            {"text": "🗺 Yandex Maps", "url": f"https://maps.yandex.ru/?pt={lon},{lat}&z=17&l=map"},
+            {"text": "🗺 Google Maps", "url": f"https://maps.google.com/?q={lat},{lon}"}
+        ])
+    if phone:
+        tg_url = phone_to_tg(phone)
+        if tg_url:
+            buttons.append([{"text": "💬 Telegram", "url": tg_url}])
+
+    payload = {
+        "chat_id": CHANNEL_ID,
+        "text": text,
+        "parse_mode": "Markdown",
+        "disable_web_page_preview": True
+    }
+    if reply_to:
+        payload["reply_to_message_id"] = reply_to
+    if buttons:
+        payload["reply_markup"] = {"inline_keyboard": buttons}
+
+    for attempt in range(3):
+        r = requests.post(url, json=payload)
+        data = r.json()
+        if data.get("ok"):
+            return data
+        if "retry_after" in str(data):
+            wait = data.get("parameters", {}).get("retry_after", 30)
+            print(f"    ⏳ {wait} sekund kutilmoqda...")
+            time.sleep(wait + 2)
+        else:
+            return data
+    return data
+
+def clean_md(text):
+    """Markdown xato belgilarini tozalash"""
+    special = ['`', '_', '[', ']', '~', '>', '#', '+', '=', '|', '{', '}', '!']
+    t = str(text)
+    for ch in special:
+        t = t.replace(ch, '')
+    return t
+
 def format_post(row):
     nomi = row.get("Nomi (RU)", "") or row.get("Nomi (UZ)", "")
     filial = str(row.get("filial_no", "")).strip()
-    hudud = row.get("Hudud (RU)", "")
-    tuman = row.get("Tuman (RU)", "")
-    manzil = row.get("Manzil (RU)", "")
-    orientir = row.get("Orientir (RU)", "")
-    hours = row.get("Ish vaqti (RU)", "")
+    hudud = clean_md(row.get("Hudud (RU)", ""))
+    tuman = clean_md(row.get("Tuman (RU)", ""))
+    manzil = clean_md(row.get("Manzil (RU)", ""))
+    orientir = clean_md(row.get("Orientir (RU)", ""))
+    hours = clean_md(row.get("Ish vaqti (RU)", ""))
     phone = row.get("Telefon", "")
     lat = str(row.get("Latitude", "")).strip()
     lon = str(row.get("Longitude", "")).strip()
@@ -103,7 +137,34 @@ def format_post(row):
         lines.append(f"📞 [{phone}](tel:{clean_phone})")
 
     has_coords = lat not in ["","nan"] and lon not in ["","nan"]
-    return "\n".join(str(l) for l in lines), lat, lon, has_coords
+    return "\n".join(str(l) for l in lines), lat, lon, has_coords, str(phone)
+
+def send_one(filial_no, text, lat, lon, has_coords, phone, sent):
+    """Bitta filialni yuborish: avval lokatsiya, keyin matn"""
+    location_msg_id = None
+    if has_coords:
+        r = send_location(lat, lon)
+        if not r.get("ok"):
+            print(f"    ❌ Lokatsiya xatosi: {r.get('description','')}")
+            return False
+        location_msg_id = r["result"]["message_id"]
+        time.sleep(1)
+
+    r = send_text(
+        text,
+        reply_to=location_msg_id,
+        lat=lat if has_coords else None,
+        lon=lon if has_coords else None,
+        phone=phone
+    )
+    if r.get("ok"):
+        sent.add(filial_no)
+        save_sent(sent)
+        print(f"    ✅ Yuborildi!")
+        return True
+    else:
+        print(f"    ❌ Xato: {r.get('description','')}")
+        return False
 
 def main():
     print("📂 Excel o'qilmoqda...")
@@ -112,60 +173,76 @@ def main():
     df["_sort"] = pd.to_numeric(df["filial_no"], errors="coerce").fillna(9999)
     df = df.sort_values("_sort").reset_index(drop=True)
 
-    # TEST: sent_filials ni tozalash
-    sent = set()
-    save_sent(sent)
-    print("🧹 sent_filials tozalandi — hammasi qaytadan yuboriladi")
+    sent = load_sent()
 
-    to_send = df
-    print(f"📤 Jami: {len(to_send)} ta | Faqat 5 ta test yuboriladi")
-    print()
-    to_send = to_send.head(5)  # FAQAT 5 TA
+    # --- 1. RAQAMLI FILIALLAR (1 dan oxirigacha) ---
+    # ASOSIY ni oxiriga qoldiramiz
+    raqamli = df[df["filial_no"].apply(lambda x: x.isdigit())]
+    asosiy = df[df["filial_no"] == "АСОСИЙ"]
 
     sent_count = 0
-
-    for _, row in to_send.iterrows():
+    for _, row in raqamli.iterrows():
         filial_no = row["filial_no"]
+        if filial_no in sent:
+            print(f"  ⏭ #{filial_no} allaqachon yuborilgan")
+            continue
+
         nomi = row.get("Nomi (RU)", "")
-        text, lat, lon, has_coords = format_post(row.to_dict())
-
         print(f"  Yuborilmoqda: #{filial_no} {nomi[:30]}...")
+        text, lat, lon, has_coords, phone = format_post(row.to_dict())
 
-        # Avval lokatsiya (agar bor bo'lsa)
-        location_msg_id = None
-        if has_coords:
-            r = send_location(lat, lon)
-            if not r.get("ok"):
-                print(f"    ❌ Lokatsiya xatosi: {r.get('description','')}")
-                print(f"    🛑 TO'XTATILDI! #{filial_no} dan davom ettiring.")
-                break
-            else:
-                location_msg_id = r["result"]["message_id"]
-
-        # Keyin matn — lokatsiyaga reply sifatida + xarita tugmalari
-        _lat = lat if has_coords else None
-        _lon = lon if has_coords else None
-        r = send_text(text, reply_to=location_msg_id, lat=_lat, lon=_lon)
-        if r.get("ok"):
-            sent.add(filial_no)
-            save_sent(sent)
+        ok = send_one(filial_no, text, lat, lon, has_coords, phone, sent)
+        if ok:
             sent_count += 1
-            print(f"    ✅ Yuborildi!")
         else:
-            print(f"    ❌ Xato: {r.get('description','')}")
             print(f"    🛑 TO'XTATILDI! #{filial_no} dan davom ettiring.")
             break
 
-        # Telegram limit
         time.sleep(3)
+
+    # --- 2. ASOSIY (oxirida) ---
+    for _, row in asosiy.iterrows():
+        filial_no = row["filial_no"]
+        if filial_no in sent:
+            print(f"  ⏭ Asosiy allaqachon yuborilgan")
+            continue
+        nomi = row.get("Nomi (RU)", "")
+        print(f"  Yuborilmoqda: Asosiy filial...")
+        text, lat, lon, has_coords, phone = format_post(row.to_dict())
+        ok = send_one(filial_no, text, lat, lon, has_coords, phone, sent)
+        if ok:
+            sent_count += 1
+        time.sleep(3)
+
+    # --- 3. OFIS (eng oxirida) ---
+    if "OFIS" not in sent:
+        print("  Yuborilmoqda: Bosh ofis...")
+        r = send_location(OFFICE_LAT, OFFICE_LON)
+        if r.get("ok"):
+            loc_id = r["result"]["message_id"]
+            time.sleep(1)
+            r2 = send_text(
+                OFFICE_TEXT,
+                reply_to=loc_id,
+                lat=str(OFFICE_LAT),
+                lon=str(OFFICE_LON)
+            )
+            if r2.get("ok"):
+                sent.add("OFIS")
+                save_sent(sent)
+                sent_count += 1
+                print("    ✅ Ofis yuborildi!")
+            else:
+                print(f"    ❌ Xato: {r2.get('description','')}")
+        else:
+            print(f"    ❌ Lokatsiya xatosi: {r.get('description','')}")
+    else:
+        print("  ⏭ Ofis allaqachon yuborilgan")
 
     print()
     print("=" * 40)
-    print(f"✅ Yuborildi: {sent_count} ta")
-    print(f"📁 {SENT_FILE} yangilandi")
+    print(f"✅ Jami yuborildi: {sent_count} ta")
     print("=" * 40)
-    print()
-    print("Davom ettirish uchun qaytadan ishga tushiring.")
 
 if __name__ == "__main__":
     main()

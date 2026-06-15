@@ -9,9 +9,19 @@ from telegram.ext import (
     Application, CommandHandler, MessageHandler,
     CallbackQueryHandler, ContextTypes, filters, ConversationHandler
 )
+import os
+from dotenv import load_dotenv
+load_dotenv()
 
-TOKEN = "8837024109:AAGFZP5akA2nPo0RugVCCbEl2wgoe9N5_Uo"
+TOKEN = os.getenv("TOKEN", "8837024109:AAGFZP5akA2nPo0RugVCCbEl2wgoe9N5_Uo")
 EXCEL_FILE = "dorixonalar.xlsx"
+FILIALLAR_FILE = "filiallar.xlsx"
+
+TELEGRAM_CHAT_LINK = "https://t.me/+gDbA_KTD5fdjOGE6"
+TELEGRAM_CHANNEL_LINK = "https://t.me/Vaksina_med_axborot"
+
+OFFICE_LAT = 41.219104
+OFFICE_LON = 69.272889
 
 LANG, MENU, SEARCH_MENU, SEARCH_INPUT, LOCATION_WAIT, \
 SELECT_RESULT, SELECT_REGION, SELECT_DISTRICT, LIST_PAGE = range(9)
@@ -66,24 +76,21 @@ def to_latin(text):
 def search_variants(text):
     return list(set([text, text.lower(), to_kirill(text), to_latin(text)]))
 
-BOT_NAME = {
-    "uz": "Vaksin Med Dorixonalari",
-    "ru": "Аптеки Vaksin Med",
-}
-
 T = {
     "uz": {
         "welcome": "👋 *Vaksin Med Dorixonalari* botiga xush kelibsiz!\n\n🏥 100+ filial, butun O'zbekiston bo'ylab\n\nTilni tanlang:",
         "menu": "📋 *Asosiy menyu*",
         "search_btn": "🔍 Filiallarni qidirish",
-        "list_btn": "📋 Filiallar ro'yxati",
-        "all_excel": "📄 Excel yuklash",
+        "chat_btn": "💬 Telegram chat",
+        "channel_btn": "📢 Kanal",
         "lang_btn": "🌐 Til o'zgartirish",
         "search_menu": "🔍 *Qidirish turi:*",
         "by_number": "🔢 Filial raqami",
         "by_name": "🔤 Nomi bo'yicha",
         "by_region": "🗺 Hudud bo'yicha",
         "nearest": "📍 Eng yaqin filial",
+        "office_loc": "🏢 Ofis/sklad lokatsiyasi",
+        "excel_btn": "📊 Excel olish",
         "back": "⬅️ Orqaga",
         "enter_number": "🔢 Filial raqamini kiriting:\n_(masalan: 1, 5, 23)_",
         "enter_name": "🔤 Dorixona nomini kiriting:",
@@ -103,19 +110,23 @@ T = {
         "map_choose": "Xaritani tanlang:",
         "yandex": "🗺 Yandex Maps",
         "google": "🗺 Google Maps",
+        "office_title": "🏢 *Ofis/Sklad manzili*",
+        "office_address": "📍 Toshkent shahri, Yunusobod tumani",
     },
     "ru": {
         "welcome": "👋 Добро пожаловать в бот *Vaksin Med*!\n\n🏥 100+ филиалов по всему Узбекистану\n\nВыберите язык:",
         "menu": "📋 *Главное меню*",
         "search_btn": "🔍 Найти филиал",
-        "list_btn": "📋 Список филиалов",
-        "all_excel": "📄 Скачать Excel",
+        "chat_btn": "💬 Telegram чат",
+        "channel_btn": "📢 Канал",
         "lang_btn": "🌐 Сменить язык",
         "search_menu": "🔍 *Тип поиска:*",
         "by_number": "🔢 По номеру филиала",
         "by_name": "🔤 По названию",
         "by_region": "🗺 По региону",
         "nearest": "📍 Ближайший филиал",
+        "office_loc": "🏢 Офис/склад локация",
+        "excel_btn": "📊 Скачать Excel",
         "back": "⬅️ Назад",
         "enter_number": "🔢 Введите номер филиала:\n_(например: 1, 5, 23)_",
         "enter_name": "🔤 Введите название аптеки:",
@@ -135,6 +146,8 @@ T = {
         "map_choose": "Выберите карту:",
         "yandex": "🗺 Yandex Maps",
         "google": "🗺 Google Maps",
+        "office_title": "🏢 *Адрес офиса/склада*",
+        "office_address": "📍 г. Ташкент, Юнусабадский район",
     }
 }
 
@@ -185,13 +198,37 @@ def format_card(row, language):
         lines.append(f"📞 [{phone}](tel:{clean_phone})")
     return "\n".join(str(l) for l in lines)
 
-def get_map_buttons(lat, lon, language):
+def phone_to_tg(phone):
+    digits = re.sub(r"\D", "", str(phone))
+    if not digits:
+        return None
+    if digits.startswith("998"):
+        number = digits
+    elif digits.startswith("0"):
+        number = "998" + digits[1:]
+    else:
+        number = "998" + digits
+    return f"https://t.me/+{number}"
+
+def get_map_buttons(lat, lon, language, phone=None):
     yandex_url = f"https://maps.yandex.ru/?pt={lon},{lat}&z=17&l=map"
     google_url = f"https://maps.google.com/?q={lat},{lon}"
-    return InlineKeyboardMarkup([[
+    buttons = [[
         InlineKeyboardButton(T[language]["yandex"], url=yandex_url),
         InlineKeyboardButton(T[language]["google"], url=google_url),
-    ]])
+    ]]
+    if phone:
+        tg_url = phone_to_tg(phone)
+        if tg_url:
+            buttons.append([InlineKeyboardButton("💬 Telegram", url=tg_url)])
+    return InlineKeyboardMarkup(buttons)
+
+def get_buttons_no_map(language, phone=None):
+    if phone:
+        tg_url = phone_to_tg(phone)
+        if tg_url:
+            return InlineKeyboardMarkup([[InlineKeyboardButton("💬 Telegram", url=tg_url)]])
+    return None
 
 def haversine(lat1, lon1, lat2, lon2):
     R = 6371
@@ -202,14 +239,15 @@ def haversine(lat1, lon1, lat2, lon2):
 def main_keyboard(language):
     return ReplyKeyboardMarkup([
         [T[language]["search_btn"]],
-        [T[language]["list_btn"]],
-        [T[language]["all_excel"], T[language]["lang_btn"]],
+        [T[language]["chat_btn"], T[language]["channel_btn"]],
+        [T[language]["lang_btn"]],
     ], resize_keyboard=True)
 
 def search_keyboard(language):
     return ReplyKeyboardMarkup([
         [T[language]["by_number"], T[language]["by_name"]],
         [T[language]["by_region"], T[language]["nearest"]],
+        [T[language]["office_loc"], T[language]["excel_btn"]],
         [T[language]["back"]],
     ], resize_keyboard=True)
 
@@ -220,16 +258,19 @@ async def send_card(msg, row, language):
     text = format_card(row, language)
     lat = str(row.get("Latitude","")).strip()
     lon = str(row.get("Longitude","")).strip()
+    phone = str(row.get("Telefon","")).strip()
     has_coords = lat not in ["","nan"] and lon not in ["","nan"]
 
     if has_coords:
-        # Avval lokatsiya pin
-        await msg.reply_location(latitude=float(lat), longitude=float(lon))
-        # Keyin matn + xarita tugmalari
-        kb = get_map_buttons(lat, lon, language)
-        await msg.reply_text(text, parse_mode="Markdown", reply_markup=kb)
+        loc_msg = await msg.reply_location(latitude=float(lat), longitude=float(lon))
+        kb = get_map_buttons(lat, lon, language, phone)
+        await loc_msg.reply_text(text, parse_mode="Markdown", reply_markup=kb)
     else:
-        await msg.reply_text(text, parse_mode="Markdown")
+        kb = get_buttons_no_map(language, phone)
+        if kb:
+            await msg.reply_text(text, parse_mode="Markdown", reply_markup=kb)
+        else:
+            await msg.reply_text(text, parse_mode="Markdown")
 
 async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ctx.user_data.clear()
@@ -265,29 +306,74 @@ async def menu_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                                          reply_markup=search_keyboard(language), parse_mode="Markdown")
         return SEARCH_MENU
 
-    elif txt == T[language]["list_btn"]:
-        df = load_df()
-        ctx.user_data["list_df"] = df.to_dict("records")
-        ctx.user_data["list_page"] = 0
-        await send_list_page(update.message, ctx, language)
-        return LIST_PAGE
+    elif txt == T[language]["chat_btn"]:
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("💬 Chat", url=TELEGRAM_CHAT_LINK)]])
+        await update.message.reply_text("💬 Telegram chatimizga xush kelibsiz!" if language == "uz" else "💬 Добро пожаловать в наш Telegram чат!", reply_markup=kb)
+        return MENU
 
-    elif txt == T[language]["all_excel"]:
-        df = load_df()
-        if df.empty:
-            await update.message.reply_text("❌ Fayl topilmadi!")
-            return MENU
-        out = io.BytesIO()
-        cols = {"Filial №":"Filial №","Nomi (UZ)":"Nomi","Hudud (RU)":"Hudud",
-                "Manzil (RU)":"Manzil","Telefon":"Telefon","Ish vaqti (RU)":"Ish vaqti"}
-        avail = {k:v for k,v in cols.items() if k in df.columns}
-        df[list(avail.keys())].rename(columns=avail).to_excel(out, index=False)
-        out.seek(0)
-        await update.message.reply_document(out, filename="vaksinmed_filiallar.xlsx",
-                                              caption=T[language]["excel_cap"])
+    elif txt == T[language]["channel_btn"]:
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("📢 Kanal" if language == "uz" else "📢 Канал", url=TELEGRAM_CHANNEL_LINK)]])
+        await update.message.reply_text("📢 Rasmiy kanalimiz:" if language == "uz" else "📢 Наш официальный канал:", reply_markup=kb)
         return MENU
 
     return MENU
+
+async def search_menu_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    language = get_lang(ctx)
+    txt = update.message.text
+
+    if txt == T[language]["back"]:
+        await update.message.reply_text(T[language]["menu"], reply_markup=main_keyboard(language), parse_mode="Markdown")
+        return MENU
+
+    elif txt == T[language]["nearest"]:
+        kb = ReplyKeyboardMarkup([
+            [KeyboardButton(T[language]["loc_btn"], request_location=True)],
+            [T[language]["back"]]
+        ], resize_keyboard=True)
+        await update.message.reply_text(T[language]["send_loc"], reply_markup=kb)
+        return LOCATION_WAIT
+
+    elif txt == T[language]["by_region"]:
+        buttons = []
+        row_btns = []
+        for i, vil in enumerate(VILOYATLAR.keys()):
+            row_btns.append(InlineKeyboardButton(vil, callback_data=f"vil_{i}"))
+            if len(row_btns) == 2:
+                buttons.append(row_btns)
+                row_btns = []
+        if row_btns: buttons.append(row_btns)
+        await update.message.reply_text(T[language]["select_viloyat"],
+                                         reply_markup=InlineKeyboardMarkup(buttons))
+        return SELECT_REGION
+
+    elif txt in [T[language]["by_number"], T[language]["by_name"]]:
+        ctx.user_data["stype"] = "number" if txt == T[language]["by_number"] else "name"
+        prompt = T[language]["enter_number"] if ctx.user_data["stype"] == "number" else T[language]["enter_name"]
+        await update.message.reply_text(prompt, reply_markup=back_keyboard(language), parse_mode="Markdown")
+        return SEARCH_INPUT
+
+    elif txt == T[language]["office_loc"]:
+        kb = get_map_buttons(str(OFFICE_LAT), str(OFFICE_LON), language)
+        await update.message.reply_location(latitude=OFFICE_LAT, longitude=OFFICE_LON)
+        await update.message.reply_text(T[language]["office_title"], parse_mode="Markdown", reply_markup=kb)
+        return SEARCH_MENU
+
+    elif txt == T[language]["excel_btn"]:
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        filiallar_path = os.path.join(base_dir, FILIALLAR_FILE)
+        try:
+            with open(filiallar_path, "rb") as f:
+                await update.message.reply_document(
+                    f,
+                    filename="filiallar.xlsx",
+                    caption=T[language]["excel_cap"]
+                )
+        except FileNotFoundError:
+            await update.message.reply_text("❌ Fayl topilmadi!" if language == "uz" else "❌ Файл не найден!")
+        return SEARCH_MENU
+
+    return SEARCH_MENU
 
 async def send_list_page(msg, ctx, language):
     records = ctx.user_data.get("list_df", [])
@@ -343,103 +429,6 @@ async def list_page_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     return LIST_PAGE
 
-async def search_menu_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    language = get_lang(ctx)
-    txt = update.message.text
-
-    if txt == T[language]["back"]:
-        await update.message.reply_text(T[language]["menu"], reply_markup=main_keyboard(language), parse_mode="Markdown")
-        return MENU
-
-    elif txt == T[language]["nearest"]:
-        kb = ReplyKeyboardMarkup([
-            [KeyboardButton(T[language]["loc_btn"], request_location=True)],
-            [T[language]["back"]]
-        ], resize_keyboard=True)
-        await update.message.reply_text(T[language]["send_loc"], reply_markup=kb)
-        return LOCATION_WAIT
-
-    elif txt == T[language]["by_region"]:
-        buttons = []
-        row_btns = []
-        for i, vil in enumerate(VILOYATLAR.keys()):
-            row_btns.append(InlineKeyboardButton(vil, callback_data=f"vil_{i}"))
-            if len(row_btns) == 2:
-                buttons.append(row_btns)
-                row_btns = []
-        if row_btns: buttons.append(row_btns)
-        await update.message.reply_text(T[language]["select_viloyat"],
-                                         reply_markup=InlineKeyboardMarkup(buttons))
-        return SELECT_REGION
-
-    elif txt in [T[language]["by_number"], T[language]["by_name"]]:
-        ctx.user_data["stype"] = "number" if txt == T[language]["by_number"] else "name"
-        prompt = T[language]["enter_number"] if ctx.user_data["stype"] == "number" else T[language]["enter_name"]
-        await update.message.reply_text(prompt, reply_markup=back_keyboard(language), parse_mode="Markdown")
-        return SEARCH_INPUT
-
-    return SEARCH_MENU
-
-async def select_region(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-    language = get_lang(ctx)
-    vil_idx = int(q.data.split("_")[1])
-    vil_name = list(VILOYATLAR.keys())[vil_idx]
-    ctx.user_data["viloyat"] = vil_name
-    tumanlar = VILOYATLAR[vil_name]
-
-    buttons = [[InlineKeyboardButton(T[language]["all_districts"], callback_data="tuman_all")]]
-    row_btns = []
-    for i, tuman in enumerate(tumanlar):
-        row_btns.append(InlineKeyboardButton(tuman, callback_data=f"tuman_{i}"))
-        if len(row_btns) == 2:
-            buttons.append(row_btns)
-            row_btns = []
-    if row_btns: buttons.append(row_btns)
-    await q.message.reply_text(f"📍 *{vil_name}*\n{T[language]['select_tuman']}",
-                                 reply_markup=InlineKeyboardMarkup(buttons), parse_mode="Markdown")
-    return SELECT_DISTRICT
-
-async def select_district(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-    language = get_lang(ctx)
-    vil_name = ctx.user_data.get("viloyat","")
-    tumanlar = VILOYATLAR.get(vil_name, [])
-    df = load_df()
-
-    if q.data == "tuman_all":
-        lower_t = [t.lower() for t in tumanlar]
-        results = df[df["Hudud (RU)"].str.lower().isin(lower_t)]
-    else:
-        tuman_idx = int(q.data.split("_")[1])
-        tuman_name = tumanlar[tuman_idx]
-        results = df[df["Hudud (RU)"].str.lower() == tuman_name.lower()]
-
-    if results.empty:
-        await q.message.reply_text(T[language]["not_found"])
-        await q.message.reply_text(T[language]["menu"], reply_markup=main_keyboard(language), parse_mode="Markdown")
-        return MENU
-
-    if len(results) <= 3:
-        for _, row in results.iterrows():
-            await send_card(q.message, row.to_dict(), language)
-        await q.message.reply_text(T[language]["menu"], reply_markup=main_keyboard(language), parse_mode="Markdown")
-        return MENU
-
-    ctx.user_data["results"] = results.to_dict("records")
-    col = "Nomi (UZ)" if language == "uz" else "Nomi (RU)"
-    buttons = []
-    for i, (_, row) in enumerate(results.head(15).iterrows()):
-        nomi = str(row.get(col,""))[:25]
-        filial = str(row.get("filial_no",""))
-        label = f"#{filial} — {nomi}" if filial not in ["","nan"] else nomi
-        buttons.append([InlineKeyboardButton(label, callback_data=f"sel_{i}")])
-    await q.message.reply_text(T[language]["found_many"].format(n=len(results)),
-                                 reply_markup=InlineKeyboardMarkup(buttons), parse_mode="Markdown")
-    return SELECT_RESULT
-
 async def search_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     language = get_lang(ctx)
     txt = update.message.text.strip()
@@ -481,8 +470,8 @@ async def search_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     if len(results) == 1:
         await send_card(update.message, results.iloc[0].to_dict(), language)
-        await update.message.reply_text(T[language]["menu"], reply_markup=main_keyboard(language), parse_mode="Markdown")
-        return MENU
+        await update.message.reply_text(T[language]["search_menu"], reply_markup=search_keyboard(language), parse_mode="Markdown")
+        return SEARCH_MENU
 
     ctx.user_data["results"] = results.to_dict("records")
     col = "Nomi (UZ)" if language == "uz" else "Nomi (RU)"
@@ -504,8 +493,8 @@ async def select_result(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     results = ctx.user_data.get("results",[])
     if idx < len(results):
         await send_card(q.message, results[idx], language)
-    await q.message.reply_text(T[language]["menu"], reply_markup=main_keyboard(language), parse_mode="Markdown")
-    return MENU
+    await q.message.reply_text(T[language]["search_menu"], reply_markup=search_keyboard(language), parse_mode="Markdown")
+    return SEARCH_MENU
 
 async def location_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     language = get_lang(ctx)
@@ -524,8 +513,8 @@ async def location_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     if valid.empty:
         await update.message.reply_text("❌ Koordinatalar hali kiritilmagan!")
-        await update.message.reply_text(T[language]["menu"], reply_markup=main_keyboard(language), parse_mode="Markdown")
-        return MENU
+        await update.message.reply_text(T[language]["search_menu"], reply_markup=search_keyboard(language), parse_mode="Markdown")
+        return SEARCH_MENU
 
     valid["_dist"] = valid.apply(lambda r: haversine(ulat,ulon,r["_lat"],r["_lon"]), axis=1)
     for _, row in valid.nsmallest(3,"_dist").iterrows():
@@ -536,8 +525,68 @@ async def location_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(text, parse_mode="Markdown", reply_markup=kb)
         await update.message.reply_location(latitude=row["_lat"], longitude=row["_lon"])
 
-    await update.message.reply_text(T[language]["menu"], reply_markup=main_keyboard(language), parse_mode="Markdown")
-    return MENU
+    await update.message.reply_text(T[language]["search_menu"], reply_markup=search_keyboard(language), parse_mode="Markdown")
+    return SEARCH_MENU
+
+async def select_region(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    language = get_lang(ctx)
+    vil_idx = int(q.data.split("_")[1])
+    vil_name = list(VILOYATLAR.keys())[vil_idx]
+    ctx.user_data["viloyat"] = vil_name
+    tumanlar = VILOYATLAR[vil_name]
+
+    buttons = [[InlineKeyboardButton(T[language]["all_districts"], callback_data="tuman_all")]]
+    row_btns = []
+    for i, tuman in enumerate(tumanlar):
+        row_btns.append(InlineKeyboardButton(tuman, callback_data=f"tuman_{i}"))
+        if len(row_btns) == 2:
+            buttons.append(row_btns)
+            row_btns = []
+    if row_btns: buttons.append(row_btns)
+    await q.message.reply_text(f"📍 *{vil_name}*\n{T[language]['select_tuman']}",
+                                 reply_markup=InlineKeyboardMarkup(buttons), parse_mode="Markdown")
+    return SELECT_DISTRICT
+
+async def select_district(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    language = get_lang(ctx)
+    vil_name = ctx.user_data.get("viloyat","")
+    tumanlar = VILOYATLAR.get(vil_name, [])
+    df = load_df()
+
+    if q.data == "tuman_all":
+        lower_t = [t.lower() for t in tumanlar]
+        results = df[df["Hudud (RU)"].str.lower().isin(lower_t)]
+    else:
+        tuman_idx = int(q.data.split("_")[1])
+        tuman_name = tumanlar[tuman_idx]
+        results = df[df["Hudud (RU)"].str.lower() == tuman_name.lower()]
+
+    if results.empty:
+        await q.message.reply_text(T[language]["not_found"])
+        await q.message.reply_text(T[language]["search_menu"], reply_markup=search_keyboard(language), parse_mode="Markdown")
+        return SEARCH_MENU
+
+    if len(results) <= 3:
+        for _, row in results.iterrows():
+            await send_card(q.message, row.to_dict(), language)
+        await q.message.reply_text(T[language]["search_menu"], reply_markup=search_keyboard(language), parse_mode="Markdown")
+        return SEARCH_MENU
+
+    ctx.user_data["results"] = results.to_dict("records")
+    col = "Nomi (UZ)" if language == "uz" else "Nomi (RU)"
+    buttons = []
+    for i, (_, row) in enumerate(results.head(15).iterrows()):
+        nomi = str(row.get(col,""))[:25]
+        filial = str(row.get("filial_no",""))
+        label = f"#{filial} — {nomi}" if filial not in ["","nan"] else nomi
+        buttons.append([InlineKeyboardButton(label, callback_data=f"sel_{i}")])
+    await q.message.reply_text(T[language]["found_many"].format(n=len(results)),
+                                 reply_markup=InlineKeyboardMarkup(buttons), parse_mode="Markdown")
+    return SELECT_RESULT
 
 def main():
     app = Application.builder().token(TOKEN).build()
