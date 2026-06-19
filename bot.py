@@ -16,7 +16,7 @@ load_dotenv()
 TOKEN = os.getenv("TOKEN", "8837024109:AAGFZP5akA2nPo0RugVCCbEl2wgoe9N5_Uo")
 EXCEL_FILE = "dorixonalar.xlsx"
 FILIALLAR_FILE = "filiallar.xlsx"
-SHEETS_ID = os.getenv("SHEETS_ID", "1dRreoidX51dlzebECDJ59prx35mweC9Nl00aNtgHa1o")
+SHEETS_ID = os.getenv("SHEETS_ID", "1CfuogH-yY--y5kiBK0qXsl5AFi_Hmzj_onWcA-Qyvco")
 
 TELEGRAM_CHAT_LINK = "https://t.me/+gDbA_KTD5fdjOGE6"
 TELEGRAM_CHANNEL_LINK = "https://t.me/Vaksina_med_axborot"
