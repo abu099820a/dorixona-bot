@@ -16,6 +16,7 @@ load_dotenv()
 TOKEN = os.getenv("TOKEN", "8837024109:AAGFZP5akA2nPo0RugVCCbEl2wgoe9N5_Uo")
 EXCEL_FILE = "dorixonalar.xlsx"
 FILIALLAR_FILE = "filiallar.xlsx"
+SHEETS_ID = os.getenv("SHEETS_ID", "1dRreoidX51dlzebECDJ59prx35mweC9Nl00aNtgHa1o")
 
 TELEGRAM_CHAT_LINK = "https://t.me/+gDbA_KTD5fdjOGE6"
 TELEGRAM_CHANNEL_LINK = "https://t.me/Vaksina_med_axborot"
@@ -155,14 +156,29 @@ def get_lang(ctx): return ctx.user_data.get("lang", "uz")
 
 def load_df():
     try:
-        df = pd.read_excel(EXCEL_FILE).fillna("")
+        # Google Sheets dan o'qish
+        url = f"https://docs.google.com/spreadsheets/d/{SHEETS_ID}/export?format=xlsx"
+        import urllib.request
+        with urllib.request.urlopen(url) as response:
+            data = response.read()
+        import io as _io
+        df = pd.read_excel(_io.BytesIO(data)).fillna("")
         df["filial_no"] = df["Filial №"].astype(str).str.strip().str.replace(r"\.0$","",regex=True)
         df["_sort"] = pd.to_numeric(df["filial_no"], errors="coerce").fillna(9999)
         df = df.sort_values("_sort").reset_index(drop=True)
+        print(f"Google Sheets dan {len(df)} ta filial yuklandi")
         return df
     except Exception as e:
-        print(f"Excel xato: {e}")
-        return pd.DataFrame()
+        print(f"Google Sheets xato: {e}, local fayldan o'qilmoqda...")
+        try:
+            df = pd.read_excel(EXCEL_FILE).fillna("")
+            df["filial_no"] = df["Filial №"].astype(str).str.strip().str.replace(r"\.0$","",regex=True)
+            df["_sort"] = pd.to_numeric(df["filial_no"], errors="coerce").fillna(9999)
+            df = df.sort_values("_sort").reset_index(drop=True)
+            return df
+        except Exception as e2:
+            print(f"Local fayl xato: {e2}")
+            return pd.DataFrame()
 
 def clean_number(text):
     text = str(text).strip()
@@ -185,6 +201,10 @@ def format_card(row, language):
     hours = row.get(f"Ish vaqti ({lg_up})", "") or row.get("Ish vaqti (RU)", "")
     phone = row.get("Telefon", "")
 
+    koordinator_ismi = row.get("Koordinator ismi", "")
+    koordinator_tel = row.get("Koordinator tel", "")
+    mudiri_tel = row.get("Dorixona mudiri tel", "")
+
     lines = [f"🏥 *{nomi}*"]
     if filial and filial not in ["nan", ""]:
         lines.append(f"🔢 Filial: #{filial}")
@@ -196,6 +216,17 @@ def format_card(row, language):
     if phone:
         clean_phone = str(phone).replace(" ","").replace("-","").replace("(","").replace(")","")
         lines.append(f"📞 [{phone}](tel:{clean_phone})")
+    if koordinator_ismi and str(koordinator_ismi) not in ["", "nan"]:
+        if koordinator_tel and str(koordinator_tel) not in ["", "nan"]:
+            digits_k = re.sub(r"\D", "", str(koordinator_tel))
+            tg_k = f"https://t.me/+{digits_k}"
+            lines.append(f"👤 Koordinator: [{koordinator_ismi}]({tg_k})")
+        else:
+            lines.append(f"👤 Koordinator: {koordinator_ismi}")
+    if mudiri_tel and str(mudiri_tel) not in ["", "nan"]:
+        digits_m = re.sub(r"\D", "", str(mudiri_tel))
+        tg_m = f"https://t.me/+{digits_m}"
+        lines.append(f"💊 Dorixona mudiri: [{mudiri_tel}]({tg_m})")
     return "\n".join(str(l) for l in lines)
 
 def phone_to_tg(phone):
