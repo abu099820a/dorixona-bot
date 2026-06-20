@@ -16,7 +16,7 @@ load_dotenv()
 TOKEN = os.getenv("TOKEN", "8837024109:AAGFZP5akA2nPo0RugVCCbEl2wgoe9N5_Uo")
 EXCEL_FILE = "dorixonalar.xlsx"
 FILIALLAR_FILE = "filiallar.xlsx"
-SHEETS_ID = os.getenv("SHEETS_ID", "1CfuogH-yY--y5kiBK0qXsl5AFi_Hmzj_onWcA-Qyvco")
+SHEETS_ID = os.getenv("SHEETS_ID", "1dRreoidX51dlzebECDJ59prx35mweC9Nl00aNtgHa1o")
 
 TELEGRAM_CHAT_LINK = "https://t.me/+gDbA_KTD5fdjOGE6"
 TELEGRAM_CHANNEL_LINK = "https://t.me/Vaksina_med_axborot"
@@ -391,17 +391,30 @@ async def search_menu_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return SEARCH_MENU
 
     elif txt == T[language]["excel_btn"]:
-        base_dir = os.path.dirname(os.path.abspath(__file__))
-        filiallar_path = os.path.join(base_dir, FILIALLAR_FILE)
         try:
-            with open(filiallar_path, "rb") as f:
-                await update.message.reply_document(
-                    f,
-                    filename="filiallar.xlsx",
-                    caption=T[language]["excel_cap"]
-                )
-        except FileNotFoundError:
-            await update.message.reply_text("❌ Fayl topilmadi!" if language == "uz" else "❌ Файл не найден!")
+            import urllib.request as _ur
+            import io as _io
+            url = f"https://docs.google.com/spreadsheets/d/{SHEETS_ID}/export?format=xlsx"
+            data = _ur.urlopen(url).read()
+            df_all = pd.read_excel(_io.BytesIO(data)).fillna("")
+            # Faqat kerakli ustunlar
+            cols = ["Filial №", "Nomi (RU)", "Manzil (RU)", "Telefon"]
+            cols_exist = [c for c in cols if c in df_all.columns]
+            df_excel = df_all[cols_exist].copy()
+            df_excel["Filial №"] = df_excel["Filial №"].astype(str).str.replace(r"\.0$","",regex=True)
+            # Excel faylga yozish
+            output = _io.BytesIO()
+            with pd.ExcelWriter(output, engine="openpyxl") as writer:
+                df_excel.to_excel(writer, index=False, sheet_name="Filiallar")
+            output.seek(0)
+            await update.message.reply_document(
+                output,
+                filename="filiallar.xlsx",
+                caption=T[language]["excel_cap"]
+            )
+        except Exception as e:
+            print(f"Excel xato: {e}")
+            await update.message.reply_text("❌ Xatolik yuz berdi!" if language == "uz" else "❌ Произошла ошибка!")
         return SEARCH_MENU
 
     return SEARCH_MENU
