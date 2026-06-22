@@ -92,6 +92,7 @@ T = {
         "nearest": "📍 Eng yaqin filial",
         "office_loc": "🏢 Ofis/sklad lokatsiyasi",
         "excel_btn": "📊 Excel olish",
+        "map_btn": "🗺 Barcha filiallar kartada",
         "back": "⬅️ Orqaga",
         "enter_number": "🔢 Filial raqamini kiriting:\n_(masalan: 1, 5, 23)_",
         "enter_name": "🔤 Dorixona nomini kiriting:",
@@ -128,6 +129,7 @@ T = {
         "nearest": "📍 Ближайший филиал",
         "office_loc": "🏢 Офис/склад локация",
         "excel_btn": "📊 Скачать Excel",
+        "map_btn": "🗺 Все филиалы на карте",
         "back": "⬅️ Назад",
         "enter_number": "🔢 Введите номер филиала:\n_(например: 1, 5, 23)_",
         "enter_name": "🔤 Введите название аптеки:",
@@ -279,6 +281,7 @@ def search_keyboard(language):
         [T[language]["by_number"], T[language]["by_name"]],
         [T[language]["by_region"], T[language]["nearest"]],
         [T[language]["office_loc"], T[language]["excel_btn"]],
+        [T[language]["map_btn"]],
         [T[language]["back"]],
     ], resize_keyboard=True)
 
@@ -383,6 +386,16 @@ async def search_menu_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         prompt = T[language]["enter_number"] if ctx.user_data["stype"] == "number" else T[language]["enter_name"]
         await update.message.reply_text(prompt, reply_markup=back_keyboard(language), parse_mode="Markdown")
         return SEARCH_INPUT
+
+    elif txt == T[language]["map_btn"]:
+        kb = InlineKeyboardMarkup([[
+            InlineKeyboardButton("🗺 Google My Maps", url=MY_MAPS_URL)
+        ]])
+        await update.message.reply_text(
+            "🗺 Barcha filiallarni kartada ko'rish:" if language == "uz" else "🗺 Все филиалы на карте:",
+            reply_markup=kb
+        )
+        return SEARCH_MENU
 
     elif txt == T[language]["office_loc"]:
         kb = get_map_buttons(str(OFFICE_LAT), str(OFFICE_LON), language)
