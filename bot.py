@@ -486,7 +486,10 @@ async def search_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Ma'lumotlar bazasi topilmadi!")
         return SEARCH_MENU
 
+    # Avtomatik aniqlash: raqam yoki nom
     stype = ctx.user_data.get("stype","name")
+    if txt.strip().isdigit():
+        stype = "number"
 
     if stype == "number":
         query_no = clean_number(txt)
@@ -514,8 +517,11 @@ async def search_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     if len(results) == 1:
         await send_card(update.message, results.iloc[0].to_dict(), language)
-        await update.message.reply_text(T[language]["search_menu"], reply_markup=search_keyboard(language), parse_mode="Markdown")
-        return SEARCH_MENU
+        await update.message.reply_text(
+            "🔍 Keyingi qidiruv uchun yozing:" if language == "uz" else "🔍 Введите следующий запрос:",
+            reply_markup=back_keyboard(language)
+        )
+        return SEARCH_INPUT
 
     ctx.user_data["results"] = results.to_dict("records")
     col = "Nomi (UZ)" if language == "uz" else "Nomi (RU)"
@@ -537,8 +543,11 @@ async def select_result(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     results = ctx.user_data.get("results",[])
     if idx < len(results):
         await send_card(q.message, results[idx], language)
-    await q.message.reply_text(T[language]["search_menu"], reply_markup=search_keyboard(language), parse_mode="Markdown")
-    return SEARCH_MENU
+    await q.message.reply_text(
+        "🔍 Keyingi qidiruv uchun yozing:" if language == "uz" else "🔍 Введите следующий запрос:",
+        reply_markup=back_keyboard(language)
+    )
+    return SEARCH_INPUT
 
 async def location_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     language = get_lang(ctx)
