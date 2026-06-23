@@ -385,6 +385,141 @@ def save_userid_to_sheet(user_id: int, phone: str):
         print(f"[ATT] UserID saqlash xato: {e}")
         return False
 
+
+
+def init_month_sheet(sh=None):
+    """
+    Oy boshida chaqiriladi.
+    1. Yangi oy listi yaratadi
+    2. Farmatsevtlar ro'yxatini A-B ustunlarga yozadi
+    3. Oxirgi ustunda "Jami soat" sarlavhasi qo'shadi
+    """
+    import calendar
+    now = datetime.now(UZ_TZ)
+
+    if sh is None:
+        client = get_sheets_client()
+        sh = client.open_by_key(ATTENDANCE_SHEET_ID)
+
+    # Listni yaratish (yoki mavjudini olish)
+    ws = _get_or_create_month_sheet(sh)
+
+    days_in_month = calendar.monthrange(now.year, now.month)[1]
+    total_cols = 2 + days_in_month * 2
+
+    # Farmatsevtlar ro'yxatini olish
+    ph_client = get_sheets_client()
+    ph_sh = ph_client.open_by_key(PHARMACY_SHEET_ID)
+    ph_ws = ph_sh.sheet1
+    records = ph_ws.get_all_records()
+
+    # A-B ustunlarga farmatsevtlarni yozish (3-qatordan)
+    updates = []
+    for i, row in enumerate(records):
+        ismi = str(row.get("Ismi", "")).strip()
+        filial = str(row.get("Filial", "")).strip()
+        if ismi:
+            row_num = i + 3  # 1-sarlavha, 2-Keldi/Ketdi, 3-dan boshlanadi
+            updates.append({
+                "range": f"A{row_num}:B{row_num}",
+                "values": [[ismi, filial]]
+            })
+
+    if updates:
+        ws.batch_update(updates)
+
+    # "Jami soat" sarlavhasi — oxirgi 2 ustundan keyin
+    jami_col = col_letter(total_cols + 1)
+    ws.update(f"{jami_col}1", [["Jami soat"]])
+    ws.format(f"{jami_col}1:{jami_col}2", {
+        "backgroundColor": {"red": 0.2, "green": 0.6, "blue": 0.2},
+        "textFormat": {"bold": True, "foregroundColor": {"red":1,"green":1,"blue":1}},
+        "horizontalAlignment": "CENTER",
+    })
+
+    # Jami soat ustuni kenglik
+    sh.batch_update({"requests": [
+        {"updateDimensionProperties": {
+            "range": {
+                "sheetId": ws.id,
+                "dimension": "COLUMNS",
+                "startIndex": total_cols,
+                "endIndex": total_cols + 1
+            },
+            "properties": {"pixelSize": 110},
+            "fields": "pixelSize"
+        }}
+    ]})
+
+    print(f"[ATT] {len(records)} ta farmatsevt yozildi")
+    return ws
+
+
+def calculate_monthly_hours():
+    """
+    Joriy oy uchun har bir farmatsevtning ish soatini hisoblaydi.
+    Keldi va Ketdi vaqtlari farqidan hisoblanadi.
+    Oxirgi ustunda ko'rsatiladi.
+    """
+    import calendar
+    now = datetime.now(UZ_TZ)
+
+    client = get_sheets_client()
+    sh = client.open_by_key(ATTENDANCE_SHEET_ID)
+    ws = _get_or_create_month_sheet(sh)
+
+    days_in_month = calendar.monthrange(now.year, now.month)[1]
+    total_cols = 2 + days_in_month * 2
+    jami_col_num = total_cols + 1
+    jami_col = col_letter(jami_col_num)
+
+    all_values = ws.get_all_values()
+    updates = []
+
+    for i, row in enumerate(all_values):
+        if i < 2: continue  # sarlavhalar
+        if not row or not row[0]: continue
+
+        total_minutes = 0
+        for d in range(1, days_in_month + 1):
+            keldi_idx = date_to_col(d) - 1      # 0-indexed
+            ketdi_idx = date_to_col(d)           # 0-indexed
+
+            keldi_val = row[keldi_idx] if len(row) > keldi_idx else ""
+            ketdi_val = row[ketdi_idx] if len(row) > ketdi_idx else ""
+
+            if keldi_val and ketdi_val:
+                try:
+                    # HH:MM formatida
+                    kh, km = map(int, keldi_val.split(":"))
+                    th, tm = map(int, ketdi_val.split(":"))
+                    diff = (th * 60 + tm) - (kh * 60 + km)
+                    if diff > 0:
+                        total_minutes += diff
+                except Exception:
+                    pass
+
+        if total_minutes > 0:
+            soat = total_minutes / 60
+            row_num = i + 1
+            updates.append({
+                "range": f"{jami_col}{row_num}",
+                "values": [[f"{soat:.1f} soat"]]
+            })
+
+    if updates:
+        ws.batch_update(updates)
+        # Yashil rang
+        for upd in updates:
+            ws.format(upd["range"], {
+                "backgroundColor": {"red": 0.7, "green": 0.93, "blue": 0.7},
+                "textFormat": {"bold": True},
+                "horizontalAlignment": "CENTER",
+            })
+
+    print(f"[ATT] Ish soatlari hisoblandi: {len(updates)} ta")
+    return len(updates)
+
 def get_filiallar_list():
     try:
         client = get_sheets_client()

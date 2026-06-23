@@ -206,6 +206,9 @@ async def att_menu_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 # ─── 4. Lokatsiya tekshiruvi ──────────────────────────────────────────────────
 
 async def att_location_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    from datetime import datetime, timezone, timedelta
+    UZ_TZ = timezone(timedelta(hours=5))
+
     if update.message.text == "⬅️ Orqaga":
         return await _show_att_menu(update, ctx)
 
@@ -213,8 +216,20 @@ async def att_location_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Iltimos, lokatsiya tugmasini bosing.")
         return ATT_LOCATION
 
-    ulat = update.message.location.latitude
-    ulon = update.message.location.longitude
+    # 🔴 Jonli lokatsiya tekshiruvi
+    loc = update.message.location
+    if not loc.live_period:
+        await update.message.reply_text(
+            "❌ Faqat *jonli lokatsiya* qabul qilinadi!\n\n"
+            "📍 Lokatsiya yuborish tugmasini bosing → "
+            "*Jonli lokatsiya ulashish* tanlang.",
+            parse_mode="Markdown",
+            reply_markup=location_keyboard(),
+        )
+        return ATT_LOCATION
+
+    ulat = loc.latitude
+    ulon = loc.longitude
 
     farmatsevt = ctx.user_data.get("att_farmatsevt", {})
     dist = haversine_m(ulat, ulon, farmatsevt.get("lat", 0), farmatsevt.get("lon", 0))
@@ -229,15 +244,69 @@ async def att_location_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return ATT_LOCATION
 
     action = ctx.user_data.get("att_action", "keldi")
+    now = datetime.now(UZ_TZ)
+    now_str = now.strftime("%H:%M")
+    now_ts = now.timestamp()
+
+    # ⏰ Vaqt cheklovi tekshiruvi
+    last_keldi = ctx.user_data.get("last_keldi_ts")
+    last_ketdi = ctx.user_data.get("last_ketdi_ts")
+
+    if action == "keldi":
+        # Ketdidan keyin 7 soat o'tganmi?
+        if last_ketdi and (now_ts - last_ketdi) < 7 * 3600:
+            qolgan_min = int((7 * 3600 - (now_ts - last_ketdi)) / 60)
+            soat = qolgan_min // 60
+            daqiqa = qolgan_min % 60
+            await update.message.reply_text(
+                f"⏳ Ketdidan keyin *7 soat* kutish kerak.\n"
+                f"Qolgan vaqt: *{soat} soat {daqiqa} daqiqa*",
+                parse_mode="Markdown",
+                reply_markup=att_main_keyboard(),
+            )
+            return ATT_MENU
+        # Ketdi bosilmay yana keldi bosyaptimi?
+        if last_keldi and not last_ketdi:
+            await update.message.reply_text(
+                f"❌ Avval *Ketdi* ni bosing!\n"
+                f"Keldi vaqti: *{ctx.user_data.get('last_keldi_str', '')}*",
+                parse_mode="Markdown",
+                reply_markup=att_main_keyboard(),
+            )
+            return ATT_MENU
+        if last_keldi and last_ketdi and last_keldi > last_ketdi:
+            await update.message.reply_text(
+                f"❌ Avval *Ketdi* ni bosing!",
+                parse_mode="Markdown",
+                reply_markup=att_main_keyboard(),
+            )
+            return ATT_MENU
+
+    elif action == "ketdi":
+        # Keldi bosilmay ketdi bosyaptimi?
+        if not last_keldi:
+            await update.message.reply_text(
+                "❌ Avval *Keldi* ni bosing!",
+                parse_mode="Markdown",
+                reply_markup=att_main_keyboard(),
+            )
+            return ATT_MENU
+
     ok = write_attendance(farmatsevt, action, zamena=False)
-    now_str = __import__("datetime").datetime.now().strftime("%H:%M")
-    emoji = "✅" if action == "keldi" else "🚪"
 
     if ok:
+        # Vaqtni saqlash
+        if action == "keldi":
+            ctx.user_data["last_keldi_ts"] = now_ts
+            ctx.user_data["last_keldi_str"] = now_str
+        else:
+            ctx.user_data["last_ketdi_ts"] = now_ts
+
+        emoji = "✅" if action == "keldi" else "🚪"
         await update.message.reply_text(
             f"{emoji} *{farmatsevt['ismi']}* — {action}!\n"
             f"🕐 Vaqt: {now_str}\n"
-            f"🏪 Filial: #{farmatsevt['filial']}\n"
+            f"🏪 Filial: {farmatsevt['filial']}\n"
             f"📏 Masofa: {dist:.0f} m",
             parse_mode="Markdown",
             reply_markup=att_main_keyboard(),
@@ -281,6 +350,16 @@ async def att_zamena_location_handler(update: Update, ctx: ContextTypes.DEFAULT_
 
     if not update.message.location:
         await update.message.reply_text("❌ Iltimos, lokatsiya tugmasini bosing.")
+        return ATT_ZAMENA_LOCATION
+
+    # Jonli lokatsiya tekshiruvi
+    if not update.message.location.live_period:
+        await update.message.reply_text(
+            "❌ Faqat *jonli lokatsiya* qabul qilinadi!\n\n"
+            "📍 Lokatsiya → *Jonli lokatsiya ulashish* tanlang.",
+            parse_mode="Markdown",
+            reply_markup=location_keyboard("📍 Zamena lokatsiyamni yuborish"),
+        )
         return ATT_ZAMENA_LOCATION
 
     ulat = update.message.location.latitude
@@ -344,3 +423,34 @@ def get_att_states():
             MessageHandler(filters.TEXT & ~filters.COMMAND, att_zamena_location_handler),
         ],
     }
+
+
+# ─── Admin buyruqlari ─────────────────────────────────────────────────────────
+
+# Admin Telegram ID larini shu yerga qo'shing
+ADMIN_IDS = [709544046]  # Admin: Abdulaziz
+
+async def cmd_init_month(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Oy boshida farmatsevtlarni Sheet ga yozadi. /init_month"""
+    if update.effective_user.id not in ADMIN_IDS:
+        await update.message.reply_text("❌ Ruxsat yo'q.")
+        return
+    await update.message.reply_text("⏳ Oy listi tayyorlanmoqda...")
+    try:
+        init_month_sheet()
+        await update.message.reply_text("✅ Farmatsevtlar ro'yxati Sheet ga yozildi!")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Xato: {e}")
+
+
+async def cmd_calc_hours(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Oy oxirida ish soatlarini hisoblaydi. /calc_hours"""
+    if update.effective_user.id not in ADMIN_IDS:
+        await update.message.reply_text("❌ Ruxsat yo'q.")
+        return
+    await update.message.reply_text("⏳ Ish soatlari hisoblanmoqda...")
+    try:
+        count = calculate_monthly_hours()
+        await update.message.reply_text(f"✅ {count} ta farmatsevt ish soati hisoblandi!")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Xato: {e}")

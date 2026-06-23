@@ -4,6 +4,7 @@ from attendance_handlers import (
     att_enter, get_att_states,
     ATT_PHONE, ATT_MENU, ATT_LOCATION,
     ATT_ZAMENA_FILIAL, ATT_ZAMENA_LOCATION,
+    cmd_init_month, cmd_calc_hours,
 )
 from thefuzz import process as fuzz_process
 from telegram import (
@@ -694,6 +695,9 @@ def main():
     )
     app.add_handler(conv)
     print("✅ Vaksin Med bot ishga tushdi!")
+    from telegram.ext import CommandHandler as CmdHandler
+    app.add_handler(CmdHandler("init_month", cmd_init_month))
+    app.add_handler(CmdHandler("calc_hours", cmd_calc_hours))
     app.run_polling()
 
 if __name__ == "__main__":
