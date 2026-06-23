@@ -106,11 +106,11 @@ def date_to_col(day: int) -> int:
 def _get_or_create_month_sheet(sh):
     """
     Joriy oy uchun list topadi yoki yaratadi.
-    Struktura:
-      Qator 1: Ismi | Filial | 01.MM | | 02.MM | | ...  (merged sanalar)
-      Qator 2: Ismi | Filial | Keldi | Ketdi | Keldi | Ketdi | ...
-      Qator 3+: farmatsevtlar
+    Qator 1: Ismi | Filial | 01.06 (merged 2 ustun) | 02.06 | ...
+    Qator 2:       |        | Keldi | Ketdi | Keldi | Ketdi | ...
+    Qator 3+: farmatsevtlar
     """
+    import calendar
     now = datetime.now(UZ_TZ)
     sheet_name = f"{OY_NOMLARI[now.month]} {now.year}"
     existing = [ws.title for ws in sh.worksheets()]
@@ -118,71 +118,53 @@ def _get_or_create_month_sheet(sh):
     if sheet_name in existing:
         return sh.worksheet(sheet_name)
 
-    # Oyning kunlar soni
-    import calendar
     days_in_month = calendar.monthrange(now.year, now.month)[1]
-    total_cols = 2 + days_in_month * 2  # Ismi + Filial + (Keldi+Ketdi)*kunlar
+    total_cols = 2 + days_in_month * 2
 
     ws = sh.add_worksheet(title=sheet_name, rows=400, cols=total_cols)
 
-    # ── 1-qator: Ismi, Filial, sanalar (merged) ──
+    # 1-qator: Ismi, Filial, sanalar
     row1 = ["Ismi", "Filial"]
     for d in range(1, days_in_month + 1):
-        sana = f"{d:02d}.{now.month:02d}.{now.year}"
-        row1.append(sana)
-        row1.append("")   # merge uchun bo'sh
-    ws.append_row(row1, value_input_option="USER_ENTERED")
+        row1.append(f"{d:02d}.{now.month:02d}")
+        row1.append("")
+    ws.update("A1", [row1])
 
-    # ── 2-qator: Keldi / Ketdi ustunlari ──
+    # 2-qator: Keldi/Ketdi
     row2 = ["", ""]
     for _ in range(days_in_month):
-        row2.append("Keldi")
-        row2.append("Ketdi")
-    ws.append_row(row2, value_input_option="USER_ENTERED")
+        row2.extend(["Keldi", "Ketdi"])
+    ws.update("A2", [row2])
 
-    # ── Sanalarni merge qilish ──
+    # Merge so'rovlari
     requests = []
-    for d in range(1, days_in_month + 1):
-        col_start = date_to_col(d) - 1   # 0-indexed
-        col_end   = col_start + 1
-        requests.append({
-            "mergeCells": {
-                "range": {
-                    "sheetId": ws.id,
-                    "startRowIndex": 0, "endRowIndex": 1,
-                    "startColumnIndex": col_start,
-                    "endColumnIndex": col_end + 1,
-                },
-                "mergeType": "MERGE_ALL"
-            }
-        })
 
-    # ── A1:B2 merge (Ismi va Filial sarlavhasi) ──
-    requests.append({
-        "mergeCells": {
-            "range": {
-                "sheetId": ws.id,
-                "startRowIndex": 0, "endRowIndex": 2,
-                "startColumnIndex": 0, "endColumnIndex": 1,
-            },
-            "mergeType": "MERGE_ALL"
-        }
-    })
-    requests.append({
-        "mergeCells": {
-            "range": {
-                "sheetId": ws.id,
-                "startRowIndex": 0, "endRowIndex": 2,
-                "startColumnIndex": 1, "endColumnIndex": 2,
-            },
-            "mergeType": "MERGE_ALL"
-        }
-    })
+    # A1:A2 merge (Ismi)
+    requests.append({"mergeCells": {"range": {
+        "sheetId": ws.id,
+        "startRowIndex": 0, "endRowIndex": 2,
+        "startColumnIndex": 0, "endColumnIndex": 1
+    }, "mergeType": "MERGE_ALL"}})
 
-    if requests:
-        sh.batch_update({"requests": requests})
+    # B1:B2 merge (Filial)
+    requests.append({"mergeCells": {"range": {
+        "sheetId": ws.id,
+        "startRowIndex": 0, "endRowIndex": 2,
+        "startColumnIndex": 1, "endColumnIndex": 2
+    }, "mergeType": "MERGE_ALL"}})
 
-    # ── Sarlavha formati ──
+    # Har kun uchun merge
+    for d in range(days_in_month):
+        col_start = 2 + d * 2
+        requests.append({"mergeCells": {"range": {
+            "sheetId": ws.id,
+            "startRowIndex": 0, "endRowIndex": 1,
+            "startColumnIndex": col_start, "endColumnIndex": col_start + 2
+        }, "mergeType": "MERGE_ALL"}})
+
+    sh.batch_update({"requests": requests})
+
+    # Format
     last_col = col_letter(total_cols)
     ws.format("A1:B2", {
         "backgroundColor": COLOR_HEADER,
@@ -201,20 +183,19 @@ def _get_or_create_month_sheet(sh):
         "horizontalAlignment": "CENTER",
     })
 
-    # ── A va B ustunlari kenglik ──
+    # Ustun kengligi
     sh.batch_update({"requests": [
         {"updateDimensionProperties": {
             "range": {"sheetId": ws.id, "dimension": "COLUMNS", "startIndex": 0, "endIndex": 1},
-            "properties": {"pixelSize": 160}, "fields": "pixelSize"
+            "properties": {"pixelSize": 180}, "fields": "pixelSize"
         }},
         {"updateDimensionProperties": {
             "range": {"sheetId": ws.id, "dimension": "COLUMNS", "startIndex": 1, "endIndex": 2},
-            "properties": {"pixelSize": 120}, "fields": "pixelSize"
+            "properties": {"pixelSize": 130}, "fields": "pixelSize"
         }},
     ]})
 
     return ws
-
 
 def _get_farmatsevt_row(ws, ismi: str) -> int:
     """
