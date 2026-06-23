@@ -1,5 +1,10 @@
 import math, io, re
 import pandas as pd
+from attendance_handlers import (
+    att_enter, get_att_states,
+    ATT_PHONE, ATT_MENU, ATT_LOCATION,
+    ATT_ZAMENA_FILIAL, ATT_ZAMENA_LOCATION,
+)
 from thefuzz import process as fuzz_process
 from telegram import (
     Update, ReplyKeyboardMarkup, KeyboardButton,
@@ -94,6 +99,7 @@ T = {
         "office_loc": "🏢 Ofis/sklad lokatsiyasi",
         "excel_btn": "📊 Excel olish",
         "map_btn": "🗺 Barcha filiallar kartada",
+        "attendance_btn": "📋 Davomot",
         "back": "⬅️ Orqaga",
         "enter_number": "🔢 Filial raqamini kiriting:\n_(masalan: 1, 5, 23)_",
         "enter_name": "🔤 Dorixona nomini kiriting:",
@@ -131,6 +137,7 @@ T = {
         "office_loc": "🏢 Офис/склад локация",
         "excel_btn": "📊 Скачать Excel",
         "map_btn": "🗺 Все филиалы на карте",
+        "attendance_btn": "📋 Явка",
         "back": "⬅️ Назад",
         "enter_number": "🔢 Введите номер филиала:\n_(например: 1, 5, 23)_",
         "enter_name": "🔤 Введите название аптеки:",
@@ -273,6 +280,7 @@ def haversine(lat1, lon1, lat2, lon2):
 def main_keyboard(language):
     return ReplyKeyboardMarkup([
         [T[language]["search_btn"]],
+        [T[language]["attendance_btn"]],
         [T[language]["chat_btn"], T[language]["channel_btn"]],
         [T[language]["lang_btn"]],
     ], resize_keyboard=True)
@@ -340,6 +348,9 @@ async def menu_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(T[language]["search_menu"],
                                          reply_markup=search_keyboard(language), parse_mode="Markdown")
         return SEARCH_MENU
+
+    elif txt == T[language]["attendance_btn"]:
+        return await att_enter(update, ctx)
 
     elif txt == T[language]["chat_btn"]:
         kb = InlineKeyboardMarkup([[InlineKeyboardButton("💬 Chat", url=TELEGRAM_CHAT_LINK)]])
@@ -677,6 +688,7 @@ def main():
                 MessageHandler(filters.LOCATION, location_handler),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, location_handler),
             ],
+            **get_att_states(),
         },
         fallbacks=[CommandHandler("start", start)],
     )
