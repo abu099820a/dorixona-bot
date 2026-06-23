@@ -8,7 +8,8 @@ import math
 import re
 import os
 import json
-from datetime import datetime, date
+from datetime import datetime, date, timezone, timedelta
+UZ_TZ = timezone(timedelta(hours=5))
 import gspread
 from google.oauth2.service_account import Credentials
 
@@ -110,7 +111,7 @@ def _get_or_create_month_sheet(sh):
       Qator 2: Ismi | Filial | Keldi | Ketdi | Keldi | Ketdi | ...
       Qator 3+: farmatsevtlar
     """
-    now = datetime.now()
+    now = datetime.now(UZ_TZ)
     sheet_name = f"{OY_NOMLARI[now.month]} {now.year}"
     existing = [ws.title for ws in sh.worksheets()]
 
@@ -270,7 +271,7 @@ def write_attendance(farmatsevt: dict, action: str, zamena: bool = False):
         sh = client.open_by_key(ATTENDANCE_SHEET_ID)
         ws = _get_or_create_month_sheet(sh)
 
-        now = datetime.now()
+        now = datetime.now(UZ_TZ)
         day = now.day
         time_str = now.strftime("%H:%M")
 
@@ -331,7 +332,7 @@ def mark_absent_today():
         sh = client.open_by_key(ATTENDANCE_SHEET_ID)
         ws = _get_or_create_month_sheet(sh)
 
-        now = datetime.now()
+        now = datetime.now(UZ_TZ)
         day = now.day
         keldi_col_num = date_to_col(day)
         ketdi_col_num = date_to_col(day) + 1
@@ -353,6 +354,55 @@ def mark_absent_today():
     except Exception as e:
         print(f"[ATT] Kelmagan belgilash xato: {e}")
 
+
+
+
+def get_farmatsevt_by_userid(user_id: int):
+    """Telegram user_id bo'yicha farmatsevtni topadi"""
+    try:
+        client = get_sheets_client()
+        sh = client.open_by_key(PHARMACY_SHEET_ID)
+        ws = sh.sheet1
+        records = ws.get_all_records()
+        uid = str(user_id)
+        for i, row in enumerate(records):
+            if str(row.get("TelegramID", "")).strip() == uid:
+                return {
+                    "ismi":   str(row.get("Ismi", "")).strip(),
+                    "filial": str(row.get("Filial", "")).strip(),
+                    "lat":    float(str(row.get("Lat", 0)).replace(",", ".")),
+                    "lon":    float(str(row.get("Lon", 0)).replace(",", ".")),
+                }
+        return None
+    except Exception as e:
+        print(f"[ATT] UserID qidirish xato: {e}")
+        return None
+
+
+def save_userid_to_sheet(user_id: int, phone: str):
+    """Farmatsevtning TelegramID sini saqlaydi"""
+    try:
+        client = get_sheets_client()
+        sh = client.open_by_key(PHARMACY_SHEET_ID)
+        ws = sh.sheet1
+        records = ws.get_all_records()
+        norm = normalize_phone(phone)
+
+        for i, row in enumerate(records):
+            tel_raw = row.get("Telefon", "")
+            if isinstance(tel_raw, float):
+                tel_raw = str(int(tel_raw))
+            else:
+                tel_raw = str(tel_raw)
+            if normalize_phone(tel_raw) == norm:
+                row_num = i + 2  # 1-indexed + sarlavha
+                # TelegramID ustuni F (6-ustun) bo'lsin
+                ws.update_cell(row_num, 6, str(user_id))
+                return True
+        return False
+    except Exception as e:
+        print(f"[ATT] UserID saqlash xato: {e}")
+        return False
 
 def get_filiallar_list():
     try:

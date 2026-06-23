@@ -13,7 +13,8 @@ from telegram.ext import (
 from attendance import (
     ATT_PHONE, ATT_MENU, ATT_FILIAL_SELECT,
     ATT_LOCATION, ATT_ZAMENA_FILIAL, ATT_ZAMENA_LOCATION,
-    get_farmatsevt, write_attendance, get_filiallar_list,
+    get_farmatsevt, get_farmatsevt_by_userid, save_userid_to_sheet,
+    write_attendance, get_filiallar_list,
     haversine_m, MAX_DISTANCE_KM, normalize_phone,
 )
 
@@ -57,9 +58,19 @@ def back_to_main_keyboard(language="uz"):
 
 async def att_enter(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Asosiy menyudan 'Davomot' bosilganda — parol so'raydi"""
+    user_id = update.effective_user.id
+
+    # Avval user_id bo'yicha tekshirish (oldin kirgan bo'lsa)
+    if not ctx.user_data.get("att_farmatsevt"):
+        farmatsevt = get_farmatsevt_by_userid(user_id)
+        if farmatsevt:
+            ctx.user_data["att_auth"] = True
+            ctx.user_data["att_farmatsevt"] = farmatsevt
+            ctx.user_data["att_phone"] = "saved"
+
     # Agar parol allaqachon tasdiqlangan bo'lsa
     if ctx.user_data.get("att_auth"):
-        if ctx.user_data.get("att_phone"):
+        if ctx.user_data.get("att_farmatsevt"):
             return await _show_att_menu(update, ctx)
         return await _ask_phone(update, ctx)
 
@@ -131,6 +142,10 @@ async def att_phone_received(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     ctx.user_data["att_phone"] = phone
     ctx.user_data["att_farmatsevt"] = farmatsevt
+
+    # TelegramID ni saqlash — keyingi safar telefon so'ralmaydi
+    user_id = update.effective_user.id
+    save_userid_to_sheet(user_id, phone)
 
     await update.message.reply_text(
         f"✅ Xush kelibsiz, *{farmatsevt['ismi']}*!\n"
