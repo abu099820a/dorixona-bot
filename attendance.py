@@ -242,7 +242,12 @@ def get_farmatsevt(phone: str):
         records = ws.get_all_records()
         norm = normalize_phone(phone)
         for row in records:
-            if normalize_phone(str(row.get("Telefon", ""))) == norm:
+            tel_raw = row.get("Telefon", "")
+            if isinstance(tel_raw, float):
+                tel_raw = str(int(tel_raw))
+            else:
+                tel_raw = str(tel_raw)
+            if normalize_phone(tel_raw) == norm:
                 return {
                     "ismi":   str(row.get("Ismi", "")).strip(),
                     "filial": str(row.get("Filial", "")).strip(),
