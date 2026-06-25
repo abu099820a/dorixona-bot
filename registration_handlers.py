@@ -107,10 +107,8 @@ def is_already_registered(phone: str, user_id: int) -> bool:
 def save_registration(user_id: int, ismi: str, phone: str, filial: str, lavozim: str) -> bool:
     """
     Farmatsevtni Sheet'ga saqlaydi.
-    - Filial qatorini topadi
-    - Agar filial qatorining B ustuni bosh bo'lsa - shu qatorga yozadi
-    - Agar to'lgan bo'lsa - keyingi filial oldiga yangi qator qo'shadi
-    - Bu bilan bir filialda ko'p xodim bo'lishi mumkin
+    Birinchi xodim - filial qatoriga yoziladi.
+    Keyingi xodimlar - filial nomini A ustuniga takrorlab yangi qator qo'shiladi.
     """
     try:
         client = get_client()
@@ -138,29 +136,29 @@ def save_registration(user_id: int, ismi: str, phone: str, filial: str, lavozim:
         b_val = str(filial_row_data[1]).strip() if len(filial_row_data) > 1 else ""
 
         if not b_val:
-            # Bo'sh - shu qatorga yozamiz
+            # Bo'sh — shu qatorga yozamiz
             ws.update_cell(filial_row, 2, ismi)
             ws.update_cell(filial_row, 3, normalize_phone(phone))
             ws.update_cell(filial_row, 4, str(user_id))
             ws.update_cell(filial_row, 5, lavozim)
         else:
-            # To'lgan - keyingi filial qatorini topamiz va oldiga qo'shamiz
-            insert_row = len(all_values) + 1  # default: oxiriga
-
+            # To'lgan — oxirgi shu filial qatoridan keyin yangi qator qo'shamiz
+            # Shu filialning oxirgi qatorini topamiz
+            last_filial_row = filial_row
             for i in range(filial_row, len(all_values)):
                 row = all_values[i]
                 a_val = str(row[0]).strip() if row else ""
-                b_val_i = str(row[1]).strip() if len(row) > 1 else ""
+                if a_val == filial:
+                    last_filial_row = i + 1
 
-                # Keyingi filial: A ustunda qiymat bor, B ustuni bo'sh
-                if i > filial_row - 1 and a_val and not b_val_i:
-                    insert_row = i + 1  # bu qatordan oldin
-                    break
-
-            ws.insert_rows(insert_row)
-            ws.update(f"A{insert_row}:E{insert_row}", [[
-                filial, ismi, normalize_phone(phone), str(user_id), lavozim
-            ]])
+            # Oxirgi filial qatoridan keyin yangi qator
+            next_row = last_filial_row + 1
+            ws.insert_rows(next_row)
+            ws.update_cell(next_row, 1, filial)
+            ws.update_cell(next_row, 2, ismi)
+            ws.update_cell(next_row, 3, normalize_phone(phone))
+            ws.update_cell(next_row, 4, str(user_id))
+            ws.update_cell(next_row, 5, lavozim)
 
         return True
     except Exception as e:
