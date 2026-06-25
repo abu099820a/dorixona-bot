@@ -50,31 +50,38 @@ def normalize_phone(phone) -> str:
 
 
 def get_filiallar():
-    """Farmatsevtlar Sheet A ustunidan filiallar ro'yxatini oladi"""
+    """
+    Farmatsevtlar Sheet A ustunidan filiallar ro yxatini oladi.
+    Faqat noyob filial nomlarini qaytaradi.
+    """
     try:
+        import re
         client = get_client()
         sh = client.open_by_key(PHARMACY_SHEET_ID)
         ws = sh.sheet1
         all_values = ws.get_all_values()
         filiallar = {}
-        import re
+        seen = set()
+
         for i, row in enumerate(all_values):
             if i == 0:
-                continue  # sarlavha
+                continue
             a_val = str(row[0]).strip() if row else ""
             if not a_val:
                 continue
-            # Filial qatori: B ustuni bosh (chodim emas)
-            b_val = str(row[1]).strip() if len(row) > 1 else ""
-            if not b_val:
-                # Raqamni olish: "1 — ТАШМИ-1" -> no="1", nom="ТАШМИ-1"
-                match = re.match(r'^(\d+)\s*[—-]\s*(.+)$', a_val)
-                if match:
-                    no = match.group(1)
-                    nom = match.group(2).strip()
-                    filiallar[no] = {"nom": nom, "full": a_val.replace(" — ", " - ")}
-                elif a_val.startswith("Asosiy"):
-                    filiallar["0"] = {"nom": a_val, "full": a_val.replace(" — ", " - ")}
+
+            match = re.match(r"^(\d+)\s*[-\u2014]\s*(.+)$", a_val)
+            if match:
+                no = match.group(1)
+                nom = match.group(2).strip()
+                full = f"{no} - {nom}"
+                if no not in seen:
+                    seen.add(no)
+                    filiallar[no] = {"nom": nom, "full": full}
+            elif a_val.startswith("Asosiy") and "0" not in seen:
+                seen.add("0")
+                filiallar["0"] = {"nom": a_val, "full": a_val}
+
         return filiallar
     except Exception as e:
         print(f"[REG] Filiallar xato: {e}")
@@ -131,9 +138,12 @@ def save_registration(user_id: int, ismi: str, phone: str, filial: str, lavozim:
             ws.append_row([filial, ismi, normalize_phone(phone), str(user_id), lavozim])
             return True
 
+        print(f"[REG] Filial topildi: {filial} -> qator {filial_row}")
+
         # Filial qatorining B ustuni bo'shmi?
         filial_row_data = all_values[filial_row - 1]
         b_val = str(filial_row_data[1]).strip() if len(filial_row_data) > 1 else ""
+        print(f"[REG] B ustun qiymati: '{b_val}'")
 
         if not b_val:
             # Bo'sh — shu qatorga yozamiz
@@ -141,24 +151,11 @@ def save_registration(user_id: int, ismi: str, phone: str, filial: str, lavozim:
             ws.update_cell(filial_row, 3, normalize_phone(phone))
             ws.update_cell(filial_row, 4, str(user_id))
             ws.update_cell(filial_row, 5, lavozim)
+            print(f"[REG] {filial_row}-qatorga yozildi")
         else:
-            # To'lgan — oxirgi shu filial qatoridan keyin yangi qator qo'shamiz
-            # Shu filialning oxirgi qatorini topamiz
-            last_filial_row = filial_row
-            for i in range(filial_row, len(all_values)):
-                row = all_values[i]
-                a_val = str(row[0]).strip() if row else ""
-                if a_val == filial:
-                    last_filial_row = i + 1
-
-            # Oxirgi filial qatoridan keyin yangi qator
-            next_row = last_filial_row + 1
-            ws.insert_rows(next_row)
-            ws.update_cell(next_row, 1, filial)
-            ws.update_cell(next_row, 2, ismi)
-            ws.update_cell(next_row, 3, normalize_phone(phone))
-            ws.update_cell(next_row, 4, str(user_id))
-            ws.update_cell(next_row, 5, lavozim)
+            # To'lgan — append_row bilan filial nomi bilan yangi qator
+            ws.append_row([filial, ismi, normalize_phone(phone), str(user_id), lavozim])
+            print(f"[REG] Yangi qator qo'shildi: {filial} - {ismi}")
 
         return True
     except Exception as e:
