@@ -48,23 +48,31 @@ def normalize_phone(phone: str) -> str:
 
 
 def get_filiallar():
-    """Filiallar varag'idan ro'yxat oladi"""
+    """Farmatsevtlar Sheet A ustunidan filiallar ro'yxatini oladi"""
     try:
         client = get_client()
         sh = client.open_by_key(PHARMACY_SHEET_ID)
-        try:
-            ws = sh.worksheet("Filiallar")
-        except:
-            return {}
-        records = ws.get_all_records()
+        ws = sh.sheet1
+        all_values = ws.get_all_values()
         filiallar = {}
-        for row in records:
-            no = str(row.get("No", "")).strip()
-            nom = str(row.get("Nom", "")).strip()
-            lat = str(row.get("Lat", "")).strip()
-            lon = str(row.get("Lon", "")).strip()
-            if no and nom:
-                filiallar[no] = {"nom": nom, "lat": lat, "lon": lon}
+        import re
+        for i, row in enumerate(all_values):
+            if i == 0:
+                continue  # sarlavha
+            a_val = str(row[0]).strip() if row else ""
+            if not a_val:
+                continue
+            # Filial qatori: B ustuni bosh (chodim emas)
+            b_val = str(row[1]).strip() if len(row) > 1 else ""
+            if not b_val:
+                # Raqamni olish: "1 — ТАШМИ-1" -> no="1", nom="ТАШМИ-1"
+                match = re.match(r'^(\d+)\s*[—-]\s*(.+)$', a_val)
+                if match:
+                    no = match.group(1)
+                    nom = match.group(2).strip()
+                    filiallar[no] = {"nom": nom, "full": a_val}
+                elif a_val.startswith("Asosiy"):
+                    filiallar["0"] = {"nom": a_val, "full": a_val}
         return filiallar
     except Exception as e:
         print(f"[REG] Filiallar xato: {e}")
@@ -288,7 +296,7 @@ async def reg_filial_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return REG_CONFIRM
 
     filial_info = filiallar[filial_no]
-    filial_text = f"{filial_no} — {filial_info['nom']}"
+    filial_text = filial_info.get("full", f"{filial_no} — {filial_info['nom']}")
     ctx.user_data["reg_filial"] = filial_text
 
     await update.message.reply_text(
