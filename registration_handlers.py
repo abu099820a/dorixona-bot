@@ -70,9 +70,9 @@ def get_filiallar():
                 if match:
                     no = match.group(1)
                     nom = match.group(2).strip()
-                    filiallar[no] = {"nom": nom, "full": a_val}
+                    filiallar[no] = {"nom": nom, "full": a_val.replace(" — ", " - ")}
                 elif a_val.startswith("Asosiy"):
-                    filiallar["0"] = {"nom": a_val, "full": a_val}
+                    filiallar["0"] = {"nom": a_val, "full": a_val.replace(" — ", " - ")}
         return filiallar
     except Exception as e:
         print(f"[REG] Filiallar xato: {e}")
@@ -296,7 +296,7 @@ async def reg_filial_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return REG_CONFIRM
 
     filial_info = filiallar[filial_no]
-    filial_text = filial_info.get("full", f"{filial_no} — {filial_info['nom']}")
+    filial_text = filial_info.get("full", f"{filial_no} - {filial_info['nom']}")
     ctx.user_data["reg_filial"] = filial_text
 
     await update.message.reply_text(
