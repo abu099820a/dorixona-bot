@@ -39,8 +39,10 @@ def get_client():
     return gspread.authorize(creds)
 
 
-def normalize_phone(phone: str) -> str:
-    digits = re.sub(r'[^\d]', '', str(phone))
+def normalize_phone(phone) -> str:
+    if phone is None: return ""
+    digits = re.sub(r'[^0-9]', '', str(phone))
+    if not digits: return ""
     if digits.startswith("998"): return "+" + digits
     if digits.startswith("0"): return "+998" + digits[1:]
     if len(digits) == 9: return "+998" + digits
@@ -124,12 +126,11 @@ def save_registration(user_id: int, ismi: str, phone: str, filial: str, lavozim:
             a_val = str(row[0]).strip() if row else ""
             if a_val == filial:
                 filial_row = i + 1  # 1-indexed
-            elif filial_row and a_val and not row[1]:
+            elif filial_row and a_val and not str(row[1]).strip():
                 # Keyingi filial qatori (B ustuni bosh = filial sarlavhasi)
-                # Lekin tekshiramiz: agar A da filial nomi bo'lsa va B bo'sh bo'lsa
                 is_next_filial = True
                 for j in range(1, len(row)):
-                    if row[j]:
+                    if str(row[j]).strip():
                         is_next_filial = False
                         break
                 if is_next_filial:
@@ -153,10 +154,9 @@ def save_registration(user_id: int, ismi: str, phone: str, filial: str, lavozim:
 
             # Keyingi filial boshlandimi?
             if i > filial_row and a_val and not b_val:
-                # Bu keyingi filial qatori
-                insert_row = i + 1  # shu qatordan oldin
+                insert_row = i + 1
                 break
-            insert_row = i + 2  # oxirgi chodim qatoridan keyin
+            insert_row = i + 2
 
         # Qator qo'shish
         ws.insert_rows(insert_row)
