@@ -113,9 +113,9 @@ def is_already_registered(phone: str, user_id: int) -> bool:
 
 def save_registration(user_id: int, ismi: str, phone: str, filial: str, lavozim: str) -> bool:
     """
-    Farmatsevtni Sheet'ga saqlaydi.
+    Farmatsevtni Sheet ga saqlaydi.
     Birinchi xodim - filial qatoriga yoziladi.
-    Keyingi xodimlar - filial nomini A ustuniga takrorlab yangi qator qo'shiladi.
+    Keyingi xodimlar - filial qatoridan keyin insert_rows bilan qoshiladi.
     """
     try:
         client = get_client()
@@ -123,7 +123,10 @@ def save_registration(user_id: int, ismi: str, phone: str, filial: str, lavozim:
         ws = sh.sheet1
         all_values = ws.get_all_values()
 
-        # Filial qatorini topish
+        uid = str(user_id)
+        tel = normalize_phone(phone)
+
+        # Filial qatorini topish (birinchi uchraganini)
         filial_row = None
         for i, row in enumerate(all_values):
             if i == 0:
@@ -134,33 +137,50 @@ def save_registration(user_id: int, ismi: str, phone: str, filial: str, lavozim:
                 break
 
         if not filial_row:
-            print(f"[REG] Filial topilmadi: {filial}")
-            ws.append_row([filial, ismi, normalize_phone(phone), str(user_id), lavozim])
+            print(f"[REG] Filial topilmadi: {filial}, oxiriga qoshiladi")
+            ws.append_row([filial, ismi, tel, uid, lavozim])
             return True
 
-        print(f"[REG] Filial topildi: {filial} -> qator {filial_row}")
+        print(f"[REG] Filial: {filial} -> qator {filial_row}")
 
-        # Filial qatorining B ustuni bo'shmi?
-        filial_row_data = all_values[filial_row - 1]
-        b_val = str(filial_row_data[1]).strip() if len(filial_row_data) > 1 else ""
-        print(f"[REG] B ustun qiymati: '{b_val}'")
+        # B ustuni boshmi?
+        row_data = all_values[filial_row - 1]
+        b_val = str(row_data[1]).strip() if len(row_data) > 1 else ""
 
         if not b_val:
-            # Bo'sh — shu qatorga yozamiz
+            # Bosh - shu qatorga yozamiz
             ws.update_cell(filial_row, 2, ismi)
-            ws.update_cell(filial_row, 3, normalize_phone(phone))
-            ws.update_cell(filial_row, 4, str(user_id))
+            ws.update_cell(filial_row, 3, tel)
+            ws.update_cell(filial_row, 4, uid)
             ws.update_cell(filial_row, 5, lavozim)
             print(f"[REG] {filial_row}-qatorga yozildi")
         else:
-            # To'lgan — append_row bilan filial nomi bilan yangi qator
-            ws.append_row([filial, ismi, normalize_phone(phone), str(user_id), lavozim])
-            print(f"[REG] Yangi qator qo'shildi: {filial} - {ismi}")
+            # Tolgan - shu filialning oxirgi qatorini topib, keyin qoshamiz
+            last_row = filial_row
+            for i in range(filial_row, len(all_values)):
+                row = all_values[i]
+                a_val = str(row[0]).strip() if row else ""
+                if a_val == filial:
+                    last_row = i + 1
+                elif i > filial_row - 1 and a_val and a_val != filial:
+                    # Boshqa filial boshlandi
+                    break
+
+            # last_row dan keyin insert
+            insert_at = last_row + 1
+            print(f"[REG] {insert_at}-qatorga insert qilinadi")
+            ws.insert_rows(insert_at)
+            ws.update_cell(insert_at, 1, filial)
+            ws.update_cell(insert_at, 2, ismi)
+            ws.update_cell(insert_at, 3, tel)
+            ws.update_cell(insert_at, 4, uid)
+            ws.update_cell(insert_at, 5, lavozim)
 
         return True
     except Exception as e:
         print(f"[REG] Saqlash xato: {e}")
         return False
+
 
 # ─── Klaviaturalar ─────────────────────────────────────────────────────────────
 
