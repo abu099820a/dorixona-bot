@@ -107,8 +107,7 @@ def is_already_registered(phone: str, user_id: int) -> bool:
 def save_registration(user_id: int, ismi: str, phone: str, filial: str, lavozim: str) -> bool:
     """
     Farmatsevtni Sheet'ga saqlaydi.
-    Filial qatori topiladi va uning tagiga yangi qator qo'shiladi.
-    Filiallar tartibi o'zgarmaydi.
+    Filial A ustunida topiladi, B ustuniga ismi yoziladi.
     """
     try:
         client = get_client()
@@ -118,51 +117,25 @@ def save_registration(user_id: int, ismi: str, phone: str, filial: str, lavozim:
 
         # Filial qatorini topish
         filial_row = None
-        next_filial_row = None
-
         for i, row in enumerate(all_values):
             if i == 0:
-                continue  # sarlavha
+                continue
             a_val = str(row[0]).strip() if row else ""
             if a_val == filial:
                 filial_row = i + 1  # 1-indexed
-            elif filial_row and a_val and not str(row[1]).strip():
-                # Keyingi filial qatori (B ustuni bosh = filial sarlavhasi)
-                is_next_filial = True
-                for j in range(1, len(row)):
-                    if str(row[j]).strip():
-                        is_next_filial = False
-                        break
-                if is_next_filial:
-                    next_filial_row = i + 1
-                    break
+                break
 
         if not filial_row:
-            # Topilmasa oxiriga qo'shish
-            ws.append_row([filial, ismi, normalize_phone(phone), str(user_id), lavozim, "", ""])
+            print(f"[REG] Filial topilmadi: {filial}")
+            # Oxiriga qo'shish
+            ws.append_row([filial, ismi, normalize_phone(phone), str(user_id), lavozim])
             return True
 
-        # Filial qatoridan keyingi bo'sh qatorni topish
-        # yoki keyingi filial oldiga qo'shish
-        insert_row = filial_row + 1
-
-        # Filial qatoridan keyin chodimlar bor — ularning oxiriga qo'shamiz
-        for i in range(filial_row, len(all_values)):
-            row = all_values[i]
-            a_val = str(row[0]).strip() if row else ""
-            b_val = str(row[1]).strip() if len(row) > 1 else ""
-
-            # Keyingi filial boshlandimi?
-            if i > filial_row and a_val and not b_val:
-                insert_row = i + 1
-                break
-            insert_row = i + 2
-
-        # Qator qo'shish
-        ws.insert_rows(insert_row)
-        ws.update(f"A{insert_row}:G{insert_row}", [[
-            filial, ismi, normalize_phone(phone), str(user_id), lavozim, "", ""
-        ]])
+        # Filial qatoriga B-E ustunlariga yozish
+        ws.update_cell(filial_row, 2, ismi)
+        ws.update_cell(filial_row, 3, normalize_phone(phone))
+        ws.update_cell(filial_row, 4, str(user_id))
+        ws.update_cell(filial_row, 5, lavozim)
 
         return True
     except Exception as e:
