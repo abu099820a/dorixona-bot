@@ -107,7 +107,10 @@ def is_already_registered(phone: str, user_id: int) -> bool:
 def save_registration(user_id: int, ismi: str, phone: str, filial: str, lavozim: str) -> bool:
     """
     Farmatsevtni Sheet'ga saqlaydi.
-    Filial A ustunida topiladi, B ustuniga ismi yoziladi.
+    - Filial qatorini topadi
+    - Agar filial qatorining B ustuni bosh bo'lsa - shu qatorga yozadi
+    - Agar to'lgan bo'lsa - keyingi filial oldiga yangi qator qo'shadi
+    - Bu bilan bir filialda ko'p xodim bo'lishi mumkin
     """
     try:
         client = get_client()
@@ -127,15 +130,37 @@ def save_registration(user_id: int, ismi: str, phone: str, filial: str, lavozim:
 
         if not filial_row:
             print(f"[REG] Filial topilmadi: {filial}")
-            # Oxiriga qo'shish
             ws.append_row([filial, ismi, normalize_phone(phone), str(user_id), lavozim])
             return True
 
-        # Filial qatoriga B-E ustunlariga yozish
-        ws.update_cell(filial_row, 2, ismi)
-        ws.update_cell(filial_row, 3, normalize_phone(phone))
-        ws.update_cell(filial_row, 4, str(user_id))
-        ws.update_cell(filial_row, 5, lavozim)
+        # Filial qatorining B ustuni bo'shmi?
+        filial_row_data = all_values[filial_row - 1]
+        b_val = str(filial_row_data[1]).strip() if len(filial_row_data) > 1 else ""
+
+        if not b_val:
+            # Bo'sh - shu qatorga yozamiz
+            ws.update_cell(filial_row, 2, ismi)
+            ws.update_cell(filial_row, 3, normalize_phone(phone))
+            ws.update_cell(filial_row, 4, str(user_id))
+            ws.update_cell(filial_row, 5, lavozim)
+        else:
+            # To'lgan - keyingi filial qatorini topamiz va oldiga qo'shamiz
+            insert_row = len(all_values) + 1  # default: oxiriga
+
+            for i in range(filial_row, len(all_values)):
+                row = all_values[i]
+                a_val = str(row[0]).strip() if row else ""
+                b_val_i = str(row[1]).strip() if len(row) > 1 else ""
+
+                # Keyingi filial: A ustunda qiymat bor, B ustuni bo'sh
+                if i > filial_row - 1 and a_val and not b_val_i:
+                    insert_row = i + 1  # bu qatordan oldin
+                    break
+
+            ws.insert_rows(insert_row)
+            ws.update(f"A{insert_row}:E{insert_row}", [[
+                filial, ismi, normalize_phone(phone), str(user_id), lavozim
+            ]])
 
         return True
     except Exception as e:
