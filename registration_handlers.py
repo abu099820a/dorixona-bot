@@ -169,12 +169,11 @@ def save_registration(user_id: int, ismi: str, phone: str, filial: str, lavozim:
             # last_row dan keyin insert
             insert_at = last_row + 1
             print(f"[REG] {insert_at}-qatorga insert qilinadi")
-            ws.insert_rows(insert_at)
-            ws.update_cell(insert_at, 1, filial)
-            ws.update_cell(insert_at, 2, ismi)
-            ws.update_cell(insert_at, 3, tel)
-            ws.update_cell(insert_at, 4, uid)
-            ws.update_cell(insert_at, 5, lavozim)
+            # gspread insert_rows: values = list of lists
+            ws.insert_rows(
+                [[filial, ismi, tel, uid, lavozim]],
+                row=insert_at
+            )
 
         return True
     except Exception as e:
