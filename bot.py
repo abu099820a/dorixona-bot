@@ -708,7 +708,7 @@ def main():
     from telegram.ext import CommandHandler as CmdHandler
     app.add_handler(CmdHandler("init_month", cmd_init_month))
     app.add_handler(CmdHandler("calc_hours", cmd_calc_hours))
-    app.run_polling()
+    app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
     main()
