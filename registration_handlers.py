@@ -294,8 +294,16 @@ async def reg_filial_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return REG_FILIAL
 
     filial_no = update.message.text.strip()
-    if not filial_no.isdigit():
-        await update.message.reply_text("❌ Faqat raqam kiriting (masalan: 5):")
+
+    # "Asosiy" yozsa -> 0
+    if filial_no.lower() in ("asosiy", "асосий"):
+        filial_no = "0"
+    elif not filial_no.isdigit():
+        await update.message.reply_text(
+            "❌ Filial raqamini kiriting (masalan: *5*)\n"
+            "yoki asosiy filial uchun *Asosiy* yozing:",
+            parse_mode="Markdown",
+        )
         return REG_CONFIRM
 
     filiallar = get_filiallar()
