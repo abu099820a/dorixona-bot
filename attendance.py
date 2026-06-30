@@ -2,22 +2,14 @@
 attendance.py — Davomiylik moduli (HR uslubi)
 Har oy yangi lист, har sana uchun 2 ustun (Keldi / Ketdi)
 Sana birlashtirilgan (merged) katakda
-
-YANGILIKLAR:
-- sync_pharmacists(): Farmatsevtlar Sheets da o'zgarganda davomat jadvali ham yangilanadi
-- Farmatsevt yo'q bo'lsa qatori o'chirilib yashiriladi (delete emas, hide)
-- Yangi farmatsevt qo'shilsa joriy oy jadvaliga ham qo'shiladi
 """
 
 import math
 import re
 import os
 import json
-import calendar
 from datetime import datetime, date, timezone, timedelta
-
 UZ_TZ = timezone(timedelta(hours=5))
-
 import gspread
 from google.oauth2.service_account import Credentials
 
@@ -28,10 +20,10 @@ SCOPES = [
     "https://www.googleapis.com/auth/drive",
 ]
 
-ATTENDANCE_SHEET_ID = os.getenv("ATTENDANCE_SHEET_ID", "BU_YERGA_DAVOMAT_SHEET_ID")
+ATTENDANCE_SHEET_ID = os.getenv("ATTENDANCE_SHEET_ID", "BU_YERGA_DAVOMАТ_SHEET_ID")
 PHARMACY_SHEET_ID   = os.getenv("PHARMACY_SHEET_ID",   "BU_YERGA_FARMATSEVTLAR_SHEET_ID")
 
-MAX_DISTANCE_KM = 0.1   # 100 metr
+MAX_DISTANCE_KM = 0.1
 
 OY_NOMLARI = {
     1: "Январь", 2: "Февраль", 3: "Март", 4: "Апрель",
@@ -46,7 +38,6 @@ COLOR_YELLOW = {"red": 1.0,  "green": 0.95, "blue": 0.0}   # zamena
 COLOR_RED    = {"red": 0.95, "green": 0.6,  "blue": 0.6}   # kelmagan
 COLOR_HEADER = {"red": 0.27, "green": 0.51, "blue": 0.71}  # sarlavha (ko'k)
 COLOR_DATE   = {"red": 0.18, "green": 0.33, "blue": 0.55}  # sana satri
-COLOR_HIDDEN = {"red": 0.85, "green": 0.85, "blue": 0.85}  # o'chirilgan farmatsevt
 
 # ─── ConversationHandler holatlari ───────────────────────────────────────────
 
@@ -104,6 +95,8 @@ def date_to_col(day: int) -> int:
     1-kun → 3-ustun (C), chunki A=Ismi, B=Filial
     Har kun 2 ustun: keldi va ketdi
     1-kun keldi → ustun 3, ketdi → 4
+    2-kun keldi → 5, ketdi → 6
+    ...
     """
     return 3 + (day - 1) * 2
 
@@ -117,6 +110,7 @@ def _get_or_create_month_sheet(sh):
     Qator 2:       |        | Keldi | Ketdi | Keldi | Ketdi | ...
     Qator 3+: farmatsevtlar
     """
+    import calendar
     now = datetime.now(UZ_TZ)
     sheet_name = f"{OY_NOMLARI[now.month]} {now.year}"
     existing = [ws.title for ws in sh.worksheets()]
@@ -127,7 +121,7 @@ def _get_or_create_month_sheet(sh):
     days_in_month = calendar.monthrange(now.year, now.month)[1]
     total_cols = 2 + days_in_month * 2
 
-    ws = sh.add_worksheet(title=sheet_name, rows=400, cols=total_cols + 2)
+    ws = sh.add_worksheet(title=sheet_name, rows=400, cols=total_cols)
 
     # 1-qator: Ismi, Filial, sanalar
     row1 = ["Ismi", "Filial"]
@@ -203,7 +197,6 @@ def _get_or_create_month_sheet(sh):
 
     return ws
 
-
 def _get_farmatsevt_row(ws, ismi: str) -> int:
     """
     Farmatsevtning qator raqamini topadi.
@@ -224,7 +217,6 @@ def _get_farmatsevt_row(ws, ismi: str) -> int:
 # ─── Asosiy funksiyalar ───────────────────────────────────────────────────────
 
 def get_farmatsevt(phone: str):
-    """Telefon raqami bo'yicha farmatsevtni topadi."""
     try:
         client = get_sheets_client()
         sh = client.open_by_key(PHARMACY_SHEET_ID)
@@ -250,59 +242,6 @@ def get_farmatsevt(phone: str):
         return None
 
 
-def get_farmatsevt_by_userid(user_id: int):
-    """Telegram user_id bo'yicha farmatsevtni topadi."""
-    try:
-        client = get_sheets_client()
-        sh = client.open_by_key(PHARMACY_SHEET_ID)
-        ws = sh.sheet1
-        records = ws.get_all_records()
-        uid = str(user_id)
-        for row in records:
-            if str(row.get("TelegramID", "")).strip() == uid:
-                return {
-                    "ismi":   str(row.get("Ismi", "")).strip(),
-                    "filial": str(row.get("Filial", "")).strip(),
-                    "lat":    float(str(row.get("Lat", 0)).replace(",", ".")),
-                    "lon":    float(str(row.get("Lon", 0)).replace(",", ".")),
-                }
-        return None
-    except Exception as e:
-        print(f"[ATT] UserID qidirish xato: {e}")
-        return None
-
-
-def save_userid_to_sheet(user_id: int, phone: str):
-    """Farmatsevtning TelegramID sini saqlaydi (D ustun = 4)."""
-    try:
-        client = get_sheets_client()
-        sh = client.open_by_key(PHARMACY_SHEET_ID)
-        ws = sh.sheet1
-        records = ws.get_all_records()
-        norm = normalize_phone(phone)
-
-        headers = ws.row_values(1)
-        try:
-            tid_col = headers.index("TelegramID") + 1  # 1-indexed
-        except ValueError:
-            tid_col = 4  # fallback: D ustun
-
-        for i, row in enumerate(records):
-            tel_raw = row.get("Telefon", "")
-            if isinstance(tel_raw, float):
-                tel_raw = str(int(tel_raw))
-            else:
-                tel_raw = str(tel_raw)
-            if normalize_phone(tel_raw) == norm:
-                row_num = i + 2  # 1-indexed + sarlavha
-                ws.update_cell(row_num, tid_col, str(user_id))
-                return True
-        return False
-    except Exception as e:
-        print(f"[ATT] UserID saqlash xato: {e}")
-        return False
-
-
 def write_attendance(farmatsevt: dict, action: str, zamena: bool = False):
     """
     Joriy oy listiga, farmatsevt qatoriga, bugungi ustunga vaqt yozadi.
@@ -319,15 +258,16 @@ def write_attendance(farmatsevt: dict, action: str, zamena: bool = False):
 
         # Ustun raqami
         if action == "keldi":
-            col_num = date_to_col(day)
+            col_num = date_to_col(day)        # juft: keldi
         else:
-            col_num = date_to_col(day) + 1
+            col_num = date_to_col(day) + 1    # toq: ketdi
 
         col_ltr = col_letter(col_num)
 
-        # Farmatsevt qatorini topish yoki yangi qo'shish
+        # Farmatsevt qatorini topish
         row_num = _get_farmatsevt_row(ws, farmatsevt["ismi"])
 
+        # Agar yangi qator bo'lsa — ismi va filialini yozish
         existing = ws.cell(row_num, 1).value
         if not existing:
             ws.update_cell(row_num, 1, farmatsevt["ismi"])
@@ -340,19 +280,22 @@ def write_attendance(farmatsevt: dict, action: str, zamena: bool = False):
         cell_range = f"{col_ltr}{row_num}"
         if zamena:
             color = COLOR_YELLOW
-            ws.format(cell_range, {"backgroundColor": color})
         else:
+            # Keldi va ketdi ikkalasi to'lganmi?
             keldi_col = col_letter(date_to_col(day))
             ketdi_col = col_letter(date_to_col(day) + 1)
             keldi_val = ws.acell(f"{keldi_col}{row_num}").value
             ketdi_val = ws.acell(f"{ketdi_col}{row_num}").value
 
             if keldi_val and ketdi_val:
+                # Ikkalasi to'liq — ikkalasini ham yashil qilish
                 ws.format(f"{keldi_col}{row_num}:{ketdi_col}{row_num}",
                           {"backgroundColor": COLOR_GREEN})
+                return True
             else:
-                ws.format(cell_range, {"backgroundColor": COLOR_ORANGE})
+                color = COLOR_ORANGE   # Faqat keldi
 
+        ws.format(cell_range, {"backgroundColor": color})
         return True
 
     except Exception as e:
@@ -363,7 +306,7 @@ def write_attendance(farmatsevt: dict, action: str, zamena: bool = False):
 def mark_absent_today():
     """
     Bugun kelmagan farmatsevtlarni qizil rang bilan belgilaydi.
-    Har kun kechqurun (21:00) ishga tushirilishi kerak.
+    Bu funksiya har kun kechqurun (21:00) ishga tushirilishi kerak.
     """
     try:
         client = get_sheets_client()
@@ -393,8 +336,191 @@ def mark_absent_today():
         print(f"[ATT] Kelmagan belgilash xato: {e}")
 
 
+
+
+def get_farmatsevt_by_userid(user_id: int):
+    """Telegram user_id bo'yicha farmatsevtni topadi"""
+    try:
+        client = get_sheets_client()
+        sh = client.open_by_key(PHARMACY_SHEET_ID)
+        ws = sh.sheet1
+        records = ws.get_all_records()
+        uid = str(user_id)
+        for i, row in enumerate(records):
+            if str(row.get("TelegramID", "")).strip() == uid:
+                return {
+                    "ismi":   str(row.get("Ismi", "")).strip(),
+                    "filial": str(row.get("Filial", "")).strip(),
+                    "lat":    float(str(row.get("Lat", 0)).replace(",", ".")),
+                    "lon":    float(str(row.get("Lon", 0)).replace(",", ".")),
+                }
+        return None
+    except Exception as e:
+        print(f"[ATT] UserID qidirish xato: {e}")
+        return None
+
+
+def save_userid_to_sheet(user_id: int, phone: str):
+    """Farmatsevtning TelegramID sini saqlaydi"""
+    try:
+        client = get_sheets_client()
+        sh = client.open_by_key(PHARMACY_SHEET_ID)
+        ws = sh.sheet1
+        records = ws.get_all_records()
+        norm = normalize_phone(phone)
+
+        for i, row in enumerate(records):
+            tel_raw = row.get("Telefon", "")
+            if isinstance(tel_raw, float):
+                tel_raw = str(int(tel_raw))
+            else:
+                tel_raw = str(tel_raw)
+            if normalize_phone(tel_raw) == norm:
+                row_num = i + 2  # 1-indexed + sarlavha
+                # TelegramID ustuni F (6-ustun) bo'lsin
+                ws.update_cell(row_num, 6, str(user_id))
+                return True
+        return False
+    except Exception as e:
+        print(f"[ATT] UserID saqlash xato: {e}")
+        return False
+
+
+
+def init_month_sheet(sh=None):
+    """
+    Oy boshida chaqiriladi.
+    1. Yangi oy listi yaratadi
+    2. Farmatsevtlar ro'yxatini A-B ustunlarga yozadi
+    3. Oxirgi ustunda "Jami soat" sarlavhasi qo'shadi
+    """
+    import calendar
+    now = datetime.now(UZ_TZ)
+
+    if sh is None:
+        client = get_sheets_client()
+        sh = client.open_by_key(ATTENDANCE_SHEET_ID)
+
+    # Listni yaratish (yoki mavjudini olish)
+    ws = _get_or_create_month_sheet(sh)
+
+    days_in_month = calendar.monthrange(now.year, now.month)[1]
+    total_cols = 2 + days_in_month * 2
+
+    # Farmatsevtlar ro'yxatini olish
+    ph_client = get_sheets_client()
+    ph_sh = ph_client.open_by_key(PHARMACY_SHEET_ID)
+    ph_ws = ph_sh.sheet1
+    records = ph_ws.get_all_records()
+
+    # A-B ustunlarga farmatsevtlarni yozish (3-qatordan)
+    updates = []
+    for i, row in enumerate(records):
+        ismi = str(row.get("Ismi", "")).strip()
+        filial = str(row.get("Filial", "")).strip()
+        if ismi:
+            row_num = i + 3  # 1-sarlavha, 2-Keldi/Ketdi, 3-dan boshlanadi
+            updates.append({
+                "range": f"A{row_num}:B{row_num}",
+                "values": [[ismi, filial]]
+            })
+
+    if updates:
+        ws.batch_update(updates)
+
+    # "Jami soat" sarlavhasi — oxirgi 2 ustundan keyin
+    jami_col = col_letter(total_cols + 1)
+    ws.update(f"{jami_col}1", [["Jami soat"]])
+    ws.format(f"{jami_col}1:{jami_col}2", {
+        "backgroundColor": {"red": 0.2, "green": 0.6, "blue": 0.2},
+        "textFormat": {"bold": True, "foregroundColor": {"red":1,"green":1,"blue":1}},
+        "horizontalAlignment": "CENTER",
+    })
+
+    # Jami soat ustuni kenglik
+    sh.batch_update({"requests": [
+        {"updateDimensionProperties": {
+            "range": {
+                "sheetId": ws.id,
+                "dimension": "COLUMNS",
+                "startIndex": total_cols,
+                "endIndex": total_cols + 1
+            },
+            "properties": {"pixelSize": 110},
+            "fields": "pixelSize"
+        }}
+    ]})
+
+    print(f"[ATT] {len(records)} ta farmatsevt yozildi")
+    return ws
+
+
+def calculate_monthly_hours():
+    """
+    Joriy oy uchun har bir farmatsevtning ish soatini hisoblaydi.
+    Keldi va Ketdi vaqtlari farqidan hisoblanadi.
+    Oxirgi ustunda ko'rsatiladi.
+    """
+    import calendar
+    now = datetime.now(UZ_TZ)
+
+    client = get_sheets_client()
+    sh = client.open_by_key(ATTENDANCE_SHEET_ID)
+    ws = _get_or_create_month_sheet(sh)
+
+    days_in_month = calendar.monthrange(now.year, now.month)[1]
+    total_cols = 2 + days_in_month * 2
+    jami_col_num = total_cols + 1
+    jami_col = col_letter(jami_col_num)
+
+    all_values = ws.get_all_values()
+    updates = []
+
+    for i, row in enumerate(all_values):
+        if i < 2: continue  # sarlavhalar
+        if not row or not row[0]: continue
+
+        total_minutes = 0
+        for d in range(1, days_in_month + 1):
+            keldi_idx = date_to_col(d) - 1      # 0-indexed
+            ketdi_idx = date_to_col(d)           # 0-indexed
+
+            keldi_val = row[keldi_idx] if len(row) > keldi_idx else ""
+            ketdi_val = row[ketdi_idx] if len(row) > ketdi_idx else ""
+
+            if keldi_val and ketdi_val:
+                try:
+                    # HH:MM formatida
+                    kh, km = map(int, keldi_val.split(":"))
+                    th, tm = map(int, ketdi_val.split(":"))
+                    diff = (th * 60 + tm) - (kh * 60 + km)
+                    if diff > 0:
+                        total_minutes += diff
+                except Exception:
+                    pass
+
+        if total_minutes > 0:
+            soat = total_minutes / 60
+            row_num = i + 1
+            updates.append({
+                "range": f"{jami_col}{row_num}",
+                "values": [[f"{soat:.1f} soat"]]
+            })
+
+    if updates:
+        ws.batch_update(updates)
+        # Yashil rang
+        for upd in updates:
+            ws.format(upd["range"], {
+                "backgroundColor": {"red": 0.7, "green": 0.93, "blue": 0.7},
+                "textFormat": {"bold": True},
+                "horizontalAlignment": "CENTER",
+            })
+
+    print(f"[ATT] Ish soatlari hisoblandi: {len(updates)} ta")
+    return len(updates)
+
 def get_filiallar_list():
-    """Barcha filiallar ro'yxatini qaytaradi (zamena uchun)."""
     try:
         client = get_sheets_client()
         sh = client.open_by_key(PHARMACY_SHEET_ID)
@@ -416,412 +542,3 @@ def get_filiallar_list():
     except Exception as e:
         print(f"[ATT] Filiallar xato: {e}")
         return []
-
-
-# ─── OY LISTI TAYYORLASH ─────────────────────────────────────────────────────
-
-def init_month_sheet(sh=None):
-    """
-    Oy boshida chaqiriladi.
-    1. Yangi oy listi yaratadi
-    2. Farmatsevtlar ro'yxatini A-B ustunlarga yozadi
-    3. Oxirgi ustunda "Jami soat" sarlavhasi qo'shadi
-    """
-    now = datetime.now(UZ_TZ)
-
-    if sh is None:
-        client = get_sheets_client()
-        sh = client.open_by_key(ATTENDANCE_SHEET_ID)
-
-    ws = _get_or_create_month_sheet(sh)
-
-    days_in_month = calendar.monthrange(now.year, now.month)[1]
-    total_cols = 2 + days_in_month * 2
-
-    # Farmatsevtlar ro'yxatini olish
-    ph_client = get_sheets_client()
-    ph_sh = ph_client.open_by_key(PHARMACY_SHEET_ID)
-    ph_ws = ph_sh.sheet1
-    records = ph_ws.get_all_records()
-
-    # A-B ustunlarga farmatsevtlarni yozish (3-qatordan)
-    updates = []
-    for i, row in enumerate(records):
-        ismi = str(row.get("Ismi", "")).strip()
-        filial = str(row.get("Filial", "")).strip()
-        if ismi:
-            row_num = i + 3
-            updates.append({
-                "range": f"A{row_num}:B{row_num}",
-                "values": [[ismi, filial]]
-            })
-
-    if updates:
-        ws.batch_update(updates)
-
-    # "Jami soat" sarlavhasi
-    jami_col = col_letter(total_cols + 1)
-    ws.update(f"{jami_col}1", [["Jami soat"]])
-    ws.format(f"{jami_col}1:{jami_col}2", {
-        "backgroundColor": {"red": 0.2, "green": 0.6, "blue": 0.2},
-        "textFormat": {"bold": True, "foregroundColor": {"red":1,"green":1,"blue":1}},
-        "horizontalAlignment": "CENTER",
-    })
-
-    sh.batch_update({"requests": [
-        {"updateDimensionProperties": {
-            "range": {
-                "sheetId": ws.id,
-                "dimension": "COLUMNS",
-                "startIndex": total_cols,
-                "endIndex": total_cols + 1
-            },
-            "properties": {"pixelSize": 110},
-            "fields": "pixelSize"
-        }}
-    ]})
-
-    print(f"[ATT] {len(records)} ta farmatsevt yozildi")
-    return ws
-
-
-# ─── FARMATSEVTLAR SINXRONIZATSIYASI ─────────────────────────────────────────
-
-def sync_pharmacists():
-    """
-    Google Sheets dagi Farmatsevtlar jadvalini o'qib,
-    joriy oy davomot jadvalini yangilaydi:
-
-    1. Yangi farmatsevt qo'shilgan → davomat jadvaliga ham qo'shiladi
-    2. Farmatsevt ismi/filiali o'zgargan → davomat jadvalida ham yangilanadi
-    3. Farmatsevt o'chirilgan → davomat jadvalida kulrang rangga bo'yaladi
-       (ma'lumotlar saqlanadi, faqat vizual belgi)
-
-    Bu funksiya /sync_pharmacists buyrug'i bilan chaqiriladi.
-    Yoki har kuni avtomatik ishga tushirilishi mumkin.
-    """
-    results = {
-        "added": [],      # yangi qo'shilganlar
-        "updated": [],    # o'zgarganlar
-        "removed": [],    # o'chirilganlar (kulrang)
-        "unchanged": 0,   # o'zgarmaganlar
-    }
-
-    try:
-        client = get_sheets_client()
-
-        # 1. Farmatsevtlar ro'yxatini olish
-        ph_sh = client.open_by_key(PHARMACY_SHEET_ID)
-        ph_ws = ph_sh.sheet1
-        ph_records = ph_ws.get_all_records()
-
-        # Farmatsevtlar dict: ismi → filial
-        ph_dict = {}
-        for row in ph_records:
-            ismi = str(row.get("Ismi", "")).strip()
-            filial = str(row.get("Filial", "")).strip()
-            if ismi:
-                ph_dict[ismi] = filial
-
-        # 2. Davomat jadvalini olish
-        att_sh = client.open_by_key(ATTENDANCE_SHEET_ID)
-        ws = _get_or_create_month_sheet(att_sh)
-        all_values = ws.get_all_values()
-
-        # Davomat jadvalidagi farmatsevtlar (3-qatordan): row_index → {ismi, filial}
-        att_dict = {}  # ismi → row_num (1-indexed)
-        for i, row in enumerate(all_values):
-            if i < 2: continue
-            if not row or not row[0]: continue
-            ismi = row[0].strip()
-            filial = row[1].strip() if len(row) > 1 else ""
-            att_dict[ismi] = {"row_num": i + 1, "filial": filial}
-
-        batch_requests = []
-
-        # 3. Farmatsevtlar Sheets da bor, davomat da yo'q → YANGI QO'SHISH
-        for ismi, filial in ph_dict.items():
-            if ismi not in att_dict:
-                next_row = len(all_values) + 1 + len(results["added"])
-                ws.update_cell(next_row, 1, ismi)
-                ws.update_cell(next_row, 2, filial)
-                results["added"].append(ismi)
-                print(f"[SYNC] Yangi qo'shildi: {ismi} (filial #{filial})")
-
-        # 4. Davomat da bor, Farmatsevtlar da yo'q → KULRANG (O'CHIRILGAN)
-        for ismi, info in att_dict.items():
-            if ismi not in ph_dict:
-                row_num = info["row_num"]
-                # A va B ustunni kulrang qilish
-                batch_requests.append({
-                    "repeatCell": {
-                        "range": {
-                            "sheetId": ws.id,
-                            "startRowIndex": row_num - 1,
-                            "endRowIndex": row_num,
-                            "startColumnIndex": 0,
-                            "endColumnIndex": 2,
-                        },
-                        "cell": {
-                            "userEnteredFormat": {
-                                "backgroundColor": COLOR_HIDDEN,
-                                "textFormat": {
-                                    "strikethrough": True,
-                                    "foregroundColor": {"red": 0.5, "green": 0.5, "blue": 0.5}
-                                }
-                            }
-                        },
-                        "fields": "userEnteredFormat(backgroundColor,textFormat)",
-                    }
-                })
-                results["removed"].append(ismi)
-                print(f"[SYNC] O'chirilgan (kulrang): {ismi}")
-
-        # 5. Filiali o'zgargan → B ustunni yangilash
-        for ismi, new_filial in ph_dict.items():
-            if ismi in att_dict and att_dict[ismi]["filial"] != new_filial:
-                row_num = att_dict[ismi]["row_num"]
-                ws.update_cell(row_num, 2, new_filial)
-                results["updated"].append(f"{ismi}: {att_dict[ismi]['filial']} → {new_filial}")
-                print(f"[SYNC] Filial o'zgardi: {ismi}: #{att_dict[ismi]['filial']} → #{new_filial}")
-            elif ismi in att_dict:
-                results["unchanged"] += 1
-
-        # Batch ranglar
-        if batch_requests:
-            att_sh.batch_update({"requests": batch_requests})
-
-        print(f"[SYNC] Tugadi: +{len(results['added'])} yangi, "
-              f"~{len(results['updated'])} o'zgardi, "
-              f"-{len(results['removed'])} o'chirildi, "
-              f"{results['unchanged']} o'zgarishsiz")
-
-    except Exception as e:
-        print(f"[SYNC] Xato: {e}")
-        results["error"] = str(e)
-
-    return results
-
-
-# ─── OY SOAT HISOBI ──────────────────────────────────────────────────────────
-
-def calculate_monthly_hours():
-    """
-    Joriy oy uchun har bir farmatsevtning ish soatini hisoblaydi.
-    Keldi va Ketdi vaqtlari farqidan hisoblanadi.
-    Oxirgi ustunda ko'rsatiladi.
-    """
-    now = datetime.now(UZ_TZ)
-
-    client = get_sheets_client()
-    sh = client.open_by_key(ATTENDANCE_SHEET_ID)
-    ws = _get_or_create_month_sheet(sh)
-
-    days_in_month = calendar.monthrange(now.year, now.month)[1]
-    total_cols = 2 + days_in_month * 2
-    jami_col_num = total_cols + 1
-    jami_col = col_letter(jami_col_num)
-
-    all_values = ws.get_all_values()
-    updates = []
-
-    for i, row in enumerate(all_values):
-        if i < 2: continue
-        if not row or not row[0]: continue
-
-        total_minutes = 0
-        for d in range(1, days_in_month + 1):
-            keldi_idx = date_to_col(d) - 1      # 0-indexed
-            ketdi_idx = date_to_col(d)           # 0-indexed
-
-            keldi_val = row[keldi_idx] if len(row) > keldi_idx else ""
-            ketdi_val = row[ketdi_idx] if len(row) > ketdi_idx else ""
-
-            if keldi_val and ketdi_val:
-                try:
-                    kh, km = map(int, keldi_val.split(":"))
-                    th, tm = map(int, ketdi_val.split(":"))
-                    diff = (th * 60 + tm) - (kh * 60 + km)
-                    if diff > 0:
-                        total_minutes += diff
-                except Exception:
-                    pass
-
-        if total_minutes > 0:
-            soat = total_minutes / 60
-            row_num = i + 1
-            updates.append({
-                "range": f"{jami_col}{row_num}",
-                "values": [[f"{soat:.1f} soat"]]
-            })
-
-    if updates:
-        ws.batch_update(updates)
-        for upd in updates:
-            ws.format(upd["range"], {
-                "backgroundColor": {"red": 0.7, "green": 0.93, "blue": 0.7},
-                "textFormat": {"bold": True},
-                "horizontalAlignment": "CENTER",
-            })
-
-    print(f"[ATT] Ish soatlari hisoblandi: {len(updates)} ta")
-    return len(updates)
-
-
-# ─── FILIAL KODI TIZIMI ───────────────────────────────────────────────────────
-
-def generate_code(filial: str, phone: str = "") -> str:
-    """
-    Kod = faqat filial boshidagi raqam.
-    "1 - ТАШМИ-1" → "1"
-    "6 - ЮНУСАБАД 7" → "6"
-    "0 - АСКИЯ" → "0"
-    """
-    m = re.match(r"^(\d+)", str(filial).strip())
-    return m.group(1) if m else re.sub(r"\D", "", str(filial))[:3]
-
-
-def get_farmatsevt_by_code(code: str):
-    """
-    Filial raqami bo'yicha O'SHA filialdagi BARCHA farmatsevtlarni qaytaradi.
-    Kod = filial boshidagi raqam (masalan: "6" → "6 - ЮНУСАБАД 7")
-    Bir filialdа bir nechta farmatsevt bo'lishi mumkin → ro'yxat qaytaradi.
-    """
-    try:
-        client = get_sheets_client()
-        sh = client.open_by_key(PHARMACY_SHEET_ID)
-        ws = sh.sheet1
-        records = ws.get_all_records()
-        code_stripped = code.strip()
-
-        results = []
-        for row in records:
-            filial = str(row.get("Filial", "")).strip()
-            filial_kod = generate_code(filial)
-            if filial_kod == code_stripped:
-                results.append({
-                    "ismi":   str(row.get("Ismi", "")).strip(),
-                    "filial": filial,
-                    "lat":    float(str(row.get("Lat", 0)).replace(",", ".")),
-                    "lon":    float(str(row.get("Lon", 0)).replace(",", ".")),
-                    "telefon": str(row.get("Telefon", "")).strip(),
-                    "lavozim": str(row.get("Lavozim", "")).strip(),
-                })
-        return results  # bo'sh ro'yxat = topilmadi
-    except Exception as e:
-        print(f"[ATT] Kod qidirish xato: {e}")
-        return []
-
-
-def fill_codes_in_sheet():
-    """
-    Admin buyrug'i: Farmatsevtlar Sheets dagi barcha qatorlarga
-    avtomatik kod yaratib 'Kod' ustuniga yozadi.
-    Sheets da 'Kod' sarlavhali ustun yo'q bo'lsa — oxiriga qo'shadi.
-    Rasmga ko'ra: A=Filial, B=Ismi, C=Telefon, D=TelegramID, E=Lavozim, F=Lat, G=Lon
-    Kod → H ustun (8-chi)
-    """
-    try:
-        client = get_sheets_client()
-        sh = client.open_by_key(PHARMACY_SHEET_ID)
-        ws = sh.sheet1
-
-        # Sarlavhalarni olish va Kod ustunini topish
-        headers = ws.row_values(1)
-        if "Kod" in headers:
-            kod_col_num = headers.index("Kod") + 1
-            kod_col = col_letter(kod_col_num)
-        else:
-            # Yangi ustun qo'shish (H = 8)
-            kod_col_num = len(headers) + 1
-            kod_col = col_letter(kod_col_num)
-            ws.update_cell(1, kod_col_num, "Kod")
-            ws.format(f"{kod_col}1", {
-                "backgroundColor": {"red": 0.27, "green": 0.51, "blue": 0.71},
-                "textFormat": {"bold": True, "foregroundColor": {"red":1,"green":1,"blue":1}},
-                "horizontalAlignment": "CENTER",
-            })
-
-        records = ws.get_all_records()
-        updates = []
-        codes_written = []
-
-        for i, row in enumerate(records):
-            ismi = str(row.get("Ismi", "")).strip()
-            filial = str(row.get("Filial", "")).strip()
-            tel_raw = row.get("Telefon", "")
-            if isinstance(tel_raw, float):
-                tel_raw = str(int(tel_raw))
-            else:
-                tel_raw = str(tel_raw)
-
-            if not ismi or not filial or not tel_raw:
-                continue
-
-            existing_code = str(row.get("Kod", "")).strip()
-            if existing_code:
-                continue  # allaqachon kod bor
-
-            code = generate_code(filial, tel_raw)
-            row_num = i + 2  # 1-indexed + sarlavha
-            updates.append({"range": f"{kod_col}{row_num}", "values": [[code]]})
-            codes_written.append(f"{ismi} (#{filial}) → {code}")
-
-        if updates:
-            ws.batch_update(updates)
-
-        print(f"[ATT] {len(codes_written)} ta kod yozildi → {kod_col} ustun")
-        return codes_written
-
-    except Exception as e:
-        print(f"[ATT] Kod yozish xato: {e}")
-        return []
-
-
-def save_userid_by_code(user_id: int, code: str, telefon: str = ""):
-    """
-    Farmatsevtning TelegramID sini D ustuniga saqlaydi.
-    Telefon raqami berilsa — u orqali aniq qatorni topadi.
-    Aks holda filial kodi bo'yicha birinchi moslikni saqlaydi.
-    """
-    try:
-        client = get_sheets_client()
-        sh = client.open_by_key(PHARMACY_SHEET_ID)
-        ws = sh.sheet1
-        records = ws.get_all_records()
-
-        headers = ws.row_values(1)
-        try:
-            tid_col = headers.index("TelegramID") + 1
-        except ValueError:
-            tid_col = 4  # D ustun fallback
-
-        norm_tel = normalize_phone(telefon) if telefon else ""
-
-        for i, row in enumerate(records):
-            tel_raw = row.get("Telefon", "")
-            if isinstance(tel_raw, float):
-                tel_raw = str(int(tel_raw))
-            else:
-                tel_raw = str(tel_raw)
-
-            # Telefon berilgan bo'lsa — telefon bo'yicha aniq moslik
-            if norm_tel and normalize_phone(tel_raw) == norm_tel:
-                row_num = i + 2
-                ws.update_cell(row_num, tid_col, str(user_id))
-                print(f"[ATT] TelegramID saqlandi: {row.get('Ismi','')} → {user_id}")
-                return True
-
-        # Telefon yo'q bo'lsa — filial kodi bo'yicha birinchi mos qator
-        code_stripped = code.strip()
-        for i, row in enumerate(records):
-            filial = str(row.get("Filial", "")).strip()
-            if generate_code(filial) == code_stripped:
-                row_num = i + 2
-                ws.update_cell(row_num, tid_col, str(user_id))
-                return True
-
-        return False
-    except Exception as e:
-        print(f"[ATT] UserID saqlash xato: {e}")
-        return False

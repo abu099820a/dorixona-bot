@@ -4,7 +4,7 @@ from attendance_handlers import (
     att_enter, get_att_states,
     ATT_PHONE, ATT_MENU, ATT_LOCATION,
     ATT_ZAMENA_FILIAL, ATT_ZAMENA_LOCATION,
-    cmd_init_month, cmd_calc_hours, cmd_sync_pharmacists, cmd_fill_codes,
+    cmd_init_month, cmd_calc_hours,
 )
 from thefuzz import process as fuzz_process
 from telegram import (
@@ -100,7 +100,7 @@ T = {
         "office_loc": "🏢 Ofis/sklad lokatsiyasi",
         "excel_btn": "📊 Excel olish",
         "map_btn": "🗺 Barcha filiallar kartada",
-        "attendance_btn": "📋 Davomat",
+        "attendance_btn": "📋 Alfa",
         "back": "⬅️ Orqaga",
         "enter_number": "🔢 Filial raqamini kiriting:\n_(masalan: 1, 5, 23)_",
         "enter_name": "🔤 Dorixona nomini kiriting:",
@@ -138,7 +138,7 @@ T = {
         "office_loc": "🏢 Офис/склад локация",
         "excel_btn": "📊 Скачать Excel",
         "map_btn": "🗺 Все филиалы на карте",
-        "attendance_btn": "📋 Davomat",
+        "attendance_btn": "📋 Alfa",
         "back": "⬅️ Назад",
         "enter_number": "🔢 Введите номер филиала:\n_(например: 1, 5, 23)_",
         "enter_name": "🔤 Введите название аптеки:",
@@ -698,8 +698,6 @@ def main():
     from telegram.ext import CommandHandler as CmdHandler
     app.add_handler(CmdHandler("init_month", cmd_init_month))
     app.add_handler(CmdHandler("calc_hours", cmd_calc_hours))
-    app.add_handler(CmdHandler("sync_pharmacists", cmd_sync_pharmacists))
-    app.add_handler(CmdHandler("fill_codes", cmd_fill_codes))
     app.run_polling()
 
 if __name__ == "__main__":
