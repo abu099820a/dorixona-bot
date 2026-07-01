@@ -121,7 +121,7 @@ def _get_or_create_month_sheet(sh):
     days_in_month = calendar.monthrange(now.year, now.month)[1]
     total_cols = 2 + days_in_month * 2
 
-    ws = sh.add_worksheet(title=sheet_name, rows=400, cols=total_cols)
+    ws = sh.add_worksheet(title=sheet_name, rows=400, cols=total_cols + 2)  # +2: Jami soat va zaxira
 
     # 1-qator: Ismi, Filial, sanalar
     row1 = ["Ismi", "Filial"]
@@ -390,9 +390,10 @@ def save_userid_to_sheet(user_id: int, phone: str):
 def init_month_sheet(sh=None):
     """
     Oy boshida chaqiriladi.
-    1. Yangi oy listi yaratadi
-    2. Farmatsevtlar ro'yxatini A-B ustunlarga yozadi
-    3. Oxirgi ustunda "Jami soat" sarlavhasi qo'shadi
+    1. Yangi oy listi yaratadi (yoki mavjudini tozalab qayta to'ldiradi)
+    2. A=Filial, B=Ismi tartibida yozadi
+    3. Har filial uchun sarlavha qatori (faqat filial nomi, ko'k rang)
+    4. Xodimi yo'q filiallar ham sarlavha qatori sifatida yoziladi
     """
     import calendar
     now = datetime.now(UZ_TZ)
@@ -401,57 +402,84 @@ def init_month_sheet(sh=None):
         client = get_sheets_client()
         sh = client.open_by_key(ATTENDANCE_SHEET_ID)
 
-    # Listni yaratish (yoki mavjudini olish)
     ws = _get_or_create_month_sheet(sh)
 
-    days_in_month = calendar.monthrange(now.year, now.month)[1]
-    total_cols = 2 + days_in_month * 2
-
-    # Farmatsevtlar ro'yxatini olish
+    # Farmatsevtlar Sheets dan ma'lumot olish
     ph_client = get_sheets_client()
-    ph_sh = ph_client.open_by_key(PHARMACY_SHEET_ID)
-    ph_ws = ph_sh.sheet1
-    records = ph_ws.get_all_records()
+    ph_ws = ph_client.open_by_key(PHARMACY_SHEET_ID).sheet1
+    all_ph = ph_ws.get_all_values()
 
-    # A-B ustunlarga farmatsevtlarni yozish (3-qatordan)
-    updates = []
-    for i, row in enumerate(records):
-        ismi = str(row.get("Ismi", "")).strip()
-        filial = str(row.get("Filial", "")).strip()
+    # Barcha filiallar va ularning xodimlari — tartibli lug'at
+    # {filial_nomi: [ismi1, ismi2, ...]}
+    from collections import OrderedDict
+    filial_dict = OrderedDict()
+
+    for i, row in enumerate(all_ph):
+        if i == 0:
+            continue  # sarlavha
+        if not row or not row[0]:
+            continue
+        filial = str(row[0]).strip()
+        ismi   = str(row[1]).strip() if len(row) > 1 else ""
+        if filial not in filial_dict:
+            filial_dict[filial] = []
         if ismi:
-            row_num = i + 3  # 1-sarlavha, 2-Keldi/Ketdi, 3-dan boshlanadi
-            updates.append({
-                "range": f"A{row_num}:B{row_num}",
-                "values": [[ismi, filial]]
-            })
+            filial_dict[ismi] = filial_dict.get(ismi, None)  # placeholder
+            filial_dict[filial].append(ismi)
+
+    # Qatorlarni tuzish: filial sarlavhasi + xodimlar
+    rows_to_write = []   # [(filial, ismi), ...]
+    for filial, xodimlar in filial_dict.items():
+        rows_to_write.append((filial, ""))  # filial sarlavha qatori
+        for ismi in xodimlar:
+            rows_to_write.append((filial, ismi))
+
+    # Jadvalga yozish (3-qatordan boshlanadi)
+    updates = []
+    filial_header_rows = []  # rang berish uchun
+
+    for idx, (filial, ismi) in enumerate(rows_to_write):
+        row_num = idx + 3  # 1=sarlavha, 2=Keldi/Ketdi
+        updates.append({
+            "range": f"A{row_num}:B{row_num}",
+            "values": [[filial, ismi]]
+        })
+        if ismi == "":
+            filial_header_rows.append(row_num)
 
     if updates:
         ws.batch_update(updates)
 
-    # "Jami soat" sarlavhasi — oxirgi 2 ustundan keyin
-    jami_col = col_letter(total_cols + 1)
-    ws.update(f"{jami_col}1", [["Jami soat"]])
-    ws.format(f"{jami_col}1:{jami_col}2", {
-        "backgroundColor": {"red": 0.2, "green": 0.6, "blue": 0.2},
-        "textFormat": {"bold": True, "foregroundColor": {"red":1,"green":1,"blue":1}},
-        "horizontalAlignment": "CENTER",
-    })
+    # Filial sarlavha qatorlariga rang berish (to'q ko'k)
+    batch_requests = []
+    for row_num in filial_header_rows:
+        batch_requests.append({
+            "repeatCell": {
+                "range": {
+                    "sheetId": ws.id,
+                    "startRowIndex": row_num - 1,
+                    "endRowIndex": row_num,
+                    "startColumnIndex": 0,
+                    "endColumnIndex": 2,
+                },
+                "cell": {
+                    "userEnteredFormat": {
+                        "backgroundColor": COLOR_HEADER,
+                        "textFormat": {
+                            "bold": True,
+                            "foregroundColor": {"red": 1, "green": 1, "blue": 1}
+                        },
+                        "horizontalAlignment": "CENTER",
+                    }
+                },
+                "fields": "userEnteredFormat(backgroundColor,textFormat,horizontalAlignment)",
+            }
+        })
 
-    # Jami soat ustuni kenglik
-    sh.batch_update({"requests": [
-        {"updateDimensionProperties": {
-            "range": {
-                "sheetId": ws.id,
-                "dimension": "COLUMNS",
-                "startIndex": total_cols,
-                "endIndex": total_cols + 1
-            },
-            "properties": {"pixelSize": 110},
-            "fields": "pixelSize"
-        }}
-    ]})
+    if batch_requests:
+        sh.batch_update({"requests": batch_requests})
 
-    print(f"[ATT] {len(records)} ta farmatsevt yozildi")
+    print(f"[ATT] {len(rows_to_write)} ta qator yozildi ({len(filial_header_rows)} ta filial)")
     return ws
 
 
