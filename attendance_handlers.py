@@ -556,6 +556,60 @@ def get_att_states():
 # Admin Telegram ID larini shu yerga qo'shing
 ADMIN_IDS = [709544046]  # Admin: Abdulaziz
 
+
+
+async def cmd_sync_pharmacists(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """/sync_pharmacists — Farmatsevtlar ro'yxatini davomat jadvali bilan sinxronlashtiradi."""
+    if update.effective_user.id not in ADMIN_IDS:
+        await update.message.reply_text("❌ Ruxsat yo'q.")
+        return
+    msg = await update.message.reply_text("⏳ Sinxronizatsiya boshlanmoqda...")
+    try:
+        from attendance import sync_pharmacists
+        results = sync_pharmacists()
+        if "error" in results:
+            await msg.edit_text(f"❌ Xato: {results['error']}")
+            return
+        lines = ["✅ *Sinxronizatsiya tugadi!*\n"]
+        if results.get("added"):
+            lines.append(f"🆕 *Yangi ({len(results['added'])} ta):*")
+            for name in results["added"]:
+                lines.append(f"  • {name}")
+        if results.get("updated"):
+            lines.append(f"\n✏️ *O'zgardi ({len(results['updated'])} ta):*")
+            for info in results["updated"]:
+                lines.append(f"  • {info}")
+        if results.get("removed"):
+            lines.append(f"\n🚫 *O'chirildi ({len(results['removed'])} ta):*")
+            for name in results["removed"]:
+                lines.append(f"  • {name}")
+        lines.append(f"\n⚪ O'zgarishsiz: {results.get('unchanged', 0)} ta")
+        await msg.edit_text("\n".join(lines), parse_mode="Markdown")
+    except Exception as e:
+        await msg.edit_text(f"❌ Xato: {e}")
+
+
+async def cmd_fill_codes(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """/fill_codes — Farmatsevtlar Sheets ga kod yozadi."""
+    if update.effective_user.id not in ADMIN_IDS:
+        await update.message.reply_text("❌ Ruxsat yo'q.")
+        return
+    msg = await update.message.reply_text("⏳ Kodlar yaratilmoqda...")
+    try:
+        from attendance import fill_codes_in_sheet
+        codes = fill_codes_in_sheet()
+        if not codes:
+            await msg.edit_text("ℹ️ Barcha farmatsevtlarda kod allaqachon bor.")
+            return
+        lines = [f"✅ *{len(codes)} ta farmatsevtga kod yozildi:*\n"]
+        for c in codes[:30]:
+            lines.append(f"  • {c}")
+        if len(codes) > 30:
+            lines.append(f"  ... va yana {len(codes)-30} ta")
+        await msg.edit_text("\n".join(lines), parse_mode="Markdown")
+    except Exception as e:
+        await msg.edit_text(f"❌ Xato: {e}")
+
 async def cmd_init_month(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Oy boshida farmatsevtlarni Sheet ga yozadi. /init_month"""
     if update.effective_user.id not in ADMIN_IDS:
