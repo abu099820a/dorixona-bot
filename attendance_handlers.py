@@ -1,3 +1,4 @@
+import os
 """
 attendance_handlers.py — Davomot uchun Telegram handlerlar
 """
@@ -396,6 +397,131 @@ async def att_zamena_location_handler(update: Update, ctx: ContextTypes.DEFAULT_
         await update.message.reply_text("⚠️ Xatolik.", reply_markup=att_main_keyboard())
 
     return ATT_MENU
+
+
+
+async def cmd_fix_latlon(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """
+    /fix_latlon — Farmatsevtlar Sheets dagi Lat/Lon bo'sh qatorlarni
+    Filiallar Sheets dan avtomatik to'ldiradi.
+    """
+    if update.effective_user.id not in ADMIN_IDS:
+        await update.message.reply_text("❌ Ruxsat yo'q.")
+        return
+
+    msg = await update.message.reply_text("⏳ Lat/Lon to'ldirilmoqda...")
+
+    try:
+        import json, re
+        from google.oauth2.service_account import Credentials
+        import gspread
+
+        SCOPES = [
+            "https://www.googleapis.com/auth/spreadsheets",
+            "https://www.googleapis.com/auth/drive",
+        ]
+        PHARMACY_SHEET_ID  = os.getenv("PHARMACY_SHEET_ID", "")
+        FILIALLAR_SHEET_ID = os.getenv("FILIALLAR_SHEET_ID", "")
+
+        creds_json = os.getenv("GOOGLE_CREDENTIALS")
+        if creds_json:
+            info = json.loads(creds_json)
+            creds = Credentials.from_service_account_info(info, scopes=SCOPES)
+        else:
+            creds = Credentials.from_service_account_file("credentials.json", scopes=SCOPES)
+        client = gspread.authorize(creds)
+
+        # 1. Filiallar Sheets dan barcha koordinatalarni olish
+        fil_ws = client.open_by_key(FILIALLAR_SHEET_ID).sheet1
+        fil_values = fil_ws.get_all_values()
+
+        # Sarlavhadan indekslar
+        headers = [h.strip() for h in fil_values[0]] if fil_values else []
+        try:
+            fil_no_idx = headers.index("Filial №")
+        except ValueError:
+            fil_no_idx = 0
+        try:
+            lat_idx = headers.index("Latitude")
+        except ValueError:
+            lat_idx = 12
+        try:
+            lon_idx = headers.index("Longitude")
+        except ValueError:
+            lon_idx = 13
+
+        # Filial raqami → {lat, lon} lug'at
+        filial_coords = {}
+        for row in fil_values[1:]:
+            if not row or not row[fil_no_idx]:
+                continue
+            fil_no = str(row[fil_no_idx]).strip()
+            if fil_no.lower() in ("асосий", "asosiy"):
+                fil_no = "0"
+            lat = str(row[lat_idx]).strip() if len(row) > lat_idx else ""
+            lon = str(row[lon_idx]).strip() if len(row) > lon_idx else ""
+            if lat and lon and lat not in ("0", "nan") and lon not in ("0", "nan"):
+                filial_coords[fil_no] = {"lat": lat, "lon": lon}
+
+        # 2. Farmatsevtlar Sheets ni olish
+        ph_ws = client.open_by_key(PHARMACY_SHEET_ID).sheet1
+        ph_values = ph_ws.get_all_values()
+
+        updated = 0
+        not_found = 0
+        already_has = 0
+
+        updates = []
+        for i, row in enumerate(ph_values):
+            if i == 0:
+                continue  # sarlavha
+            if not row or not row[0]:
+                continue
+
+            # Lat/Lon tekshirish (F=5, G=6, 0-indexed)
+            lat_val = str(row[5]).strip() if len(row) > 5 else ""
+            lon_val = str(row[6]).strip() if len(row) > 6 else ""
+
+            if lat_val and lon_val and lat_val not in ("", "0", "nan"):
+                already_has += 1
+                continue  # allaqachon bor
+
+            # Filial raqamini ajratish
+            filial_cell = str(row[0]).strip()
+            m = re.match(r"^(\d+)", filial_cell)
+            fil_no = m.group(1) if m else ""
+
+            if not fil_no or fil_no not in filial_coords:
+                not_found += 1
+                continue
+
+            # Yangilash
+            row_num = i + 1  # 1-indexed
+            coords = filial_coords[fil_no]
+            updates.append({
+                "row": row_num,
+                "lat": coords["lat"],
+                "lon": coords["lon"],
+                "ismi": str(row[1]).strip() if len(row) > 1 else f"qator {row_num}",
+            })
+
+        # Batch yangilash
+        for upd in updates:
+            ph_ws.update_cell(upd["row"], 6, upd["lat"])  # F ustun
+            ph_ws.update_cell(upd["row"], 7, upd["lon"])  # G ustun
+            updated += 1
+            print(f"[FIX] {upd['ismi']} → Lat={upd['lat']}, Lon={upd['lon']}")
+
+        lines = [
+            f"✅ *Lat/Lon yangilandi!*\n",
+            f"✅ To'ldirildi: *{updated}* ta",
+            f"⚪ Allaqachon bor: *{already_has}* ta",
+            f"❌ Filial topilmadi: *{not_found}* ta",
+        ]
+        await msg.edit_text("\n".join(lines), parse_mode="Markdown")
+
+    except Exception as e:
+        await msg.edit_text(f"❌ Xato: {e}")
 
 # ─── Handler ro'yxati ─────────────────────────────────────────────────────────
 
