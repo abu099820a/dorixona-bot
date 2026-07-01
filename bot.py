@@ -1,4 +1,5 @@
 import math, io, re
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 import pandas as pd
 from register_handlers import register_enter, get_reg_states
 from attendance_handlers import (
@@ -673,6 +674,23 @@ async def select_district(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await q.message.reply_text(T[language]["found_many"].format(n=len(results)),
                                  reply_markup=InlineKeyboardMarkup(buttons), parse_mode="Markdown")
     return SELECT_RESULT
+
+
+async def auto_sync_job():
+    """Har kuni soat 00:00 da farmatsevtlarni sinxronlashtiradi."""
+    from datetime import datetime, timezone, timedelta
+    UZ_TZ = timezone(timedelta(hours=5))
+    now = datetime.now(UZ_TZ)
+    print(f"[AUTO SYNC] Boshlandi: {now.strftime('%d.%m.%Y %H:%M')}")
+    try:
+        from attendance import sync_pharmacists
+        results = sync_pharmacists()
+        added = len(results.get('added', []))
+        updated = len(results.get('updated', []))
+        removed = len(results.get('removed', []))
+        print(f"[AUTO SYNC] +{added} yangi, ~{updated} o'zgardi, -{removed} o'chirildi")
+    except Exception as e:
+        print(f"[AUTO SYNC] Xato: {e}")
 
 def main():
     app = Application.builder().token(TOKEN).build()

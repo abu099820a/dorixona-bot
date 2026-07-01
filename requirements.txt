@@ -7,3 +7,4 @@ python-levenshtein==0.25.1
 python-dotenv
 gspread
 google-auth
+apscheduler
