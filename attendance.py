@@ -424,7 +424,6 @@ def init_month_sheet(sh=None):
         if filial not in filial_dict:
             filial_dict[filial] = []
         if ismi:
-            filial_dict[ismi] = filial_dict.get(ismi, None)  # placeholder
             filial_dict[filial].append(ismi)
 
     # Qatorlarni tuzish: filial sarlavhasi + xodimlar
