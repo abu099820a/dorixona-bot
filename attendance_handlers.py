@@ -17,6 +17,8 @@ from attendance import (
     get_farmatsevt, get_farmatsevt_by_userid, save_userid_to_sheet,
     write_attendance, get_filiallar_list,
     haversine_m, MAX_DISTANCE_KM, normalize_phone,
+    init_month_sheet, calculate_monthly_hours,
+    sync_pharmacists, fill_codes_in_sheet,
 )
 
 ATT_PASSWORD = 106   # Parol kutish state
@@ -573,7 +575,6 @@ async def cmd_sync_pharmacists(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
     msg = await update.message.reply_text("⏳ Sinxronizatsiya boshlanmoqda...")
     try:
-        from attendance import sync_pharmacists
         results = sync_pharmacists()
         if "error" in results:
             await msg.edit_text(f"❌ Xato: {results['error']}")
@@ -604,7 +605,6 @@ async def cmd_fill_codes(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
     msg = await update.message.reply_text("⏳ Kodlar yaratilmoqda...")
     try:
-        from attendance import fill_codes_in_sheet
         codes = fill_codes_in_sheet()
         if not codes:
             await msg.edit_text("ℹ️ Barcha farmatsevtlarda kod allaqachon bor.")
