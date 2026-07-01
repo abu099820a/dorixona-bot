@@ -542,3 +542,139 @@ def get_filiallar_list():
     except Exception as e:
         print(f"[ATT] Filiallar xato: {e}")
         return []
+
+
+def generate_code(filial: str, phone: str = "") -> str:
+    """Filial nomidan raqamni ajratadi: '6 - ЮНУСАБАД 7' → '6'"""
+    m = re.match(r"^(\d+)", str(filial).strip())
+    return m.group(1) if m else re.sub(r"\D", "", str(filial))[:3]
+
+
+def fill_codes_in_sheet():
+    """Farmatsevtlar Sheets ga kod yozadi."""
+    try:
+        client = get_sheets_client()
+        sh = client.open_by_key(PHARMACY_SHEET_ID)
+        ws = sh.sheet1
+        headers = ws.row_values(1)
+        if "Kod" in headers:
+            kod_col_num = headers.index("Kod") + 1
+            kod_col = col_letter(kod_col_num)
+        else:
+            kod_col_num = len(headers) + 1
+            kod_col = col_letter(kod_col_num)
+            ws.update_cell(1, kod_col_num, "Kod")
+
+        records = ws.get_all_records()
+        updates = []
+        codes_written = []
+
+        for i, row in enumerate(records):
+            ismi = str(row.get("Ismi", "")).strip()
+            filial = str(row.get("Filial", "")).strip()
+            tel_raw = row.get("Telefon", "")
+            if isinstance(tel_raw, float):
+                tel_raw = str(int(tel_raw))
+            else:
+                tel_raw = str(tel_raw)
+            if not ismi or not filial:
+                continue
+            existing_code = str(row.get("Kod", "")).strip()
+            if existing_code:
+                continue
+            code = generate_code(filial)
+            row_num = i + 2
+            updates.append({"range": f"{kod_col}{row_num}", "values": [[code]]})
+            codes_written.append(f"{ismi} (#{filial}) → {code}")
+
+        if updates:
+            ws.batch_update(updates)
+        return codes_written
+    except Exception as e:
+        print(f"[ATT] fill_codes xato: {e}")
+        return []
+
+
+def sync_pharmacists():
+    """Farmatsevtlar ro'yxatini davomat jadvali bilan sinxronlashtiradi."""
+    results = {"added": [], "updated": [], "removed": [], "unchanged": 0}
+    try:
+        client = get_sheets_client()
+
+        ph_sh = client.open_by_key(PHARMACY_SHEET_ID)
+        ph_ws = ph_sh.sheet1
+        ph_records = ph_ws.get_all_records()
+
+        ph_dict = {}
+        for row in ph_records:
+            ismi = str(row.get("Ismi", "")).strip()
+            filial = str(row.get("Filial", "")).strip()
+            if ismi:
+                ph_dict[ismi] = filial
+
+        att_sh = client.open_by_key(ATTENDANCE_SHEET_ID)
+        ws = _get_or_create_month_sheet(att_sh)
+        all_values = ws.get_all_values()
+
+        att_dict = {}
+        for i, row in enumerate(all_values):
+            if i < 2:
+                continue
+            if not row or not row[0]:
+                continue
+            ismi = row[0].strip()
+            filial = row[1].strip() if len(row) > 1 else ""
+            att_dict[ismi] = {"row_num": i + 1, "filial": filial}
+
+        batch_requests = []
+
+        for ismi, filial in ph_dict.items():
+            if ismi not in att_dict:
+                next_row = len(all_values) + 1 + len(results["added"])
+                ws.update_cell(next_row, 1, ismi)
+                ws.update_cell(next_row, 2, filial)
+                results["added"].append(ismi)
+
+        COLOR_HIDDEN = {"red": 0.85, "green": 0.85, "blue": 0.85}
+        for ismi, info in att_dict.items():
+            if ismi not in ph_dict:
+                row_num = info["row_num"]
+                batch_requests.append({
+                    "repeatCell": {
+                        "range": {
+                            "sheetId": ws.id,
+                            "startRowIndex": row_num - 1,
+                            "endRowIndex": row_num,
+                            "startColumnIndex": 0,
+                            "endColumnIndex": 2,
+                        },
+                        "cell": {
+                            "userEnteredFormat": {
+                                "backgroundColor": COLOR_HIDDEN,
+                                "textFormat": {
+                                    "strikethrough": True,
+                                    "foregroundColor": {"red": 0.5, "green": 0.5, "blue": 0.5}
+                                }
+                            }
+                        },
+                        "fields": "userEnteredFormat(backgroundColor,textFormat)",
+                    }
+                })
+                results["removed"].append(ismi)
+            else:
+                new_filial = ph_dict[ismi]
+                if att_dict[ismi]["filial"] != new_filial:
+                    row_num = att_dict[ismi]["row_num"]
+                    ws.update_cell(row_num, 2, new_filial)
+                    results["updated"].append(f"{ismi}: {att_dict[ismi]['filial']} → {new_filial}")
+                else:
+                    results["unchanged"] += 1
+
+        if batch_requests:
+            att_sh.batch_update({"requests": batch_requests})
+
+    except Exception as e:
+        print(f"[SYNC] Xato: {e}")
+        results["error"] = str(e)
+
+    return results
