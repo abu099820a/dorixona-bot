@@ -505,12 +505,20 @@ async def cmd_fix_latlon(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 "ismi": str(row[1]).strip() if len(row) > 1 else f"qator {row_num}",
             })
 
-        # Batch yangilash
-        for upd in updates:
-            ph_ws.update_cell(upd["row"], 6, upd["lat"])  # F ustun
-            ph_ws.update_cell(upd["row"], 7, upd["lon"])  # G ustun
-            updated += 1
-            print(f"[FIX] {upd['ismi']} → Lat={upd['lat']}, Lon={upd['lon']}")
+        # Batch yangilash — bir so'rovda hammasi
+        if updates:
+            batch_data = []
+            for upd in updates:
+                # F ustun (Lat)
+                from gspread.utils import rowcol_to_a1
+                batch_data.append({
+                    "range": f"F{upd['row']}:G{upd['row']}",
+                    "values": [[upd["lat"], upd["lon"]]]
+                })
+                updated += 1
+                print(f"[FIX] {upd['ismi']} → Lat={upd['lat']}, Lon={upd['lon']}")
+
+            ph_ws.batch_update(batch_data, value_input_option="USER_ENTERED")
 
         lines = [
             f"✅ *Lat/Lon yangilandi!*\n",
