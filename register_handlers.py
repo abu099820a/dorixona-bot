@@ -34,11 +34,13 @@ SCOPES = [
 ]
 PHARMACY_SHEET_ID   = os.getenv("PHARMACY_SHEET_ID", "")
 ATTENDANCE_SHEET_ID = os.getenv("ATTENDANCE_SHEET_ID", "")
+FILIALLAR_SHEET_ID  = os.getenv("FILIALLAR_SHEET_ID", "")
 
 # Conversation states
 REG_PHONE   = 400
 REG_NAME    = 401
 REG_FILIAL  = 402
+REG_LAVOZIM = 403
 
 # Ustun raqamlari (1-indexed)
 COL_FILIAL    = 1  # A
@@ -119,39 +121,98 @@ def save_telegram_id(row_num: int, user_id: int) -> bool:
 
 def get_filial_info(filial_kod: str) -> dict | None:
     """
-    Filial kodiga mos birinchi xodimning Lat, Lon, Filial nomini qaytaradi.
-    Shu filialning oxirgi qator raqamini ham qaytaradi (yangi xodimni keyin qo'shish uchun).
+    1. Filiallar Sheets dan (FILIALLAR_SHEET_ID) Lat/Lon oladi
+       A=Filial №, M=Latitude, N=Longitude
+    2. Farmatsevtlar Sheets dan filial nomini va oxirgi qatorni topadi
     """
     try:
         client = _get_client()
-        ws = client.open_by_key(PHARMACY_SHEET_ID).sheet1
-        all_values = ws.get_all_values()
 
-        filial_nomi = None
+        # ── 1. Filiallar Sheets dan Lat/Lon olish ──
         lat = ""
         lon = ""
-        last_row = 1  # sarlavha
+        filial_nomi_from_ph = None
+
+        if FILIALLAR_SHEET_ID:
+            try:
+                fil_ws = client.open_by_key(FILIALLAR_SHEET_ID).sheet1
+                fil_values = fil_ws.get_all_values()
+
+                # Sarlavhadan ustun indekslarini topish
+                if fil_values:
+                    headers = [h.strip() for h in fil_values[0]]
+                    # Filial № ustuni
+                    try:
+                        fil_no_idx = headers.index("Filial №")
+                    except ValueError:
+                        fil_no_idx = 0  # A ustun
+                    # Latitude ustuni
+                    try:
+                        lat_idx = headers.index("Latitude")
+                    except ValueError:
+                        lat_idx = 12  # M ustun (0-indexed)
+                    # Longitude ustuni
+                    try:
+                        lon_idx = headers.index("Longitude")
+                    except ValueError:
+                        lon_idx = 13  # N ustun (0-indexed)
+
+                    for row in fil_values[1:]:
+                        if not row or not row[fil_no_idx]:
+                            continue
+                        fil_no = str(row[fil_no_idx]).strip()
+                        # "асосий" → "0", raqamli → raqam
+                        if fil_no.lower() in ("асосий", "asosiy"):
+                            fil_no = "0"
+                        if fil_no == filial_kod.strip():
+                            if len(row) > lat_idx:
+                                v = str(row[lat_idx]).strip()
+                                if v and v not in ("", "0", "nan"):
+                                    lat = v
+                            if len(row) > lon_idx:
+                                v = str(row[lon_idx]).strip()
+                                if v and v not in ("", "0", "nan"):
+                                    lon = v
+                            break
+            except Exception as e:
+                print(f"[REG] Filiallar Sheets xato: {e}")
+
+        # ── 2. Farmatsevtlar Sheets dan filial nomi va last_row topish ──
+        ph_ws = client.open_by_key(PHARMACY_SHEET_ID).sheet1
+        all_values = ph_ws.get_all_values()
+
+        filial_nomi = None
+        last_row = 1
 
         for i, row in enumerate(all_values):
             if i == 0:
-                continue  # sarlavha
-            filial_cell = str(row[0]).strip() if len(row) > 0 else ""
+                continue
+            if not row or not row[0]:
+                continue
+            filial_cell = str(row[0]).strip()
             if _filial_kod(filial_cell) == filial_kod.strip():
                 filial_nomi = filial_cell
-                if not lat and len(row) > 5 and row[5]:
-                    lat = row[5]
-                if not lon and len(row) > 6 and row[6]:
-                    lon = row[6]
-                last_row = i + 1  # 1-indexed (sarlavha hisobga olingan)
+                last_row = i + 1  # 1-indexed
+                # Agar Filiallar Sheets da Lat/Lon topilmagan bo'lsa
+                # — Farmatsevtlar Sheets dan ham qidiramiz
+                if not lat and len(row) > 5:
+                    v = str(row[5]).strip()
+                    if v and v not in ("", "0", "nan"):
+                        lat = v
+                if not lon and len(row) > 6:
+                    v = str(row[6]).strip()
+                    if v and v not in ("", "0", "nan"):
+                        lon = v
 
         if filial_nomi is None:
             return None
 
+        print(f"[REG] Filial: {filial_nomi} | Lat={lat} | Lon={lon} | last_row={last_row}")
         return {
             "filial_nomi": filial_nomi,
             "lat":         lat,
             "lon":         lon,
-            "last_row":    last_row,  # shu filialning oxirgi qatori
+            "last_row":    last_row,
         }
     except Exception as e:
         print(f"[REG] Filial info xato: {e}")
@@ -257,6 +318,15 @@ def _phone_kb():
 
 def _back_kb():
     return ReplyKeyboardMarkup([["⬅️ Orqaga"]], resize_keyboard=True)
+
+
+def _lavozim_kb():
+    return ReplyKeyboardMarkup([
+        ["👔 Farmatsevt"],
+        ["👔 Dorixona mudiri"],
+        ["👔 Stajyor"],
+        ["⬅️ Orqaga"],
+    ], resize_keyboard=True)
 
 
 # ─── Handlerlar ───────────────────────────────────────────────────────────────
@@ -410,15 +480,58 @@ async def reg_filial_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     phone  = ctx.user_data.get("reg_phone", "")
     user_id = update.effective_user.id
 
-    # Yangi farmatsevtni qo'shish
+    # Filial ma'lumotlarini saqlab, lavozim so'rash
+    ctx.user_data["reg_filial_info"] = filial_info
+
+    await update.message.reply_text(
+        f"🏥 *{filial_info['filial_nomi']}*\n\n👔 Lavozimingizni tanlang:",
+        parse_mode="Markdown",
+        reply_markup=_lavozim_kb(),
+    )
+    return REG_LAVOZIM
+
+
+
+
+async def reg_lavozim_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Lavozim tanlanadi va Sheets ga yoziladi."""
+    txt = update.message.text.strip()
+
+    if txt == "⬅️ Orqaga":
+        await update.message.reply_text(
+            "🏥 Filial raqamini kiriting:\n_(masalan: 6)_",
+            parse_mode="Markdown",
+            reply_markup=_back_kb(),
+        )
+        return REG_FILIAL
+
+    lavozim_map = {
+        "👔 Farmatsevt":       "Farmatsevt",
+        "👔 Dorixona mudiri":  "Dorixona mudiri",
+        "👔 Stajyor":          "Stajyor",
+    }
+
+    if txt not in lavozim_map:
+        await update.message.reply_text(
+            "❌ Iltimos, quyidagi tugmalardan birini tanlang:",
+            reply_markup=_lavozim_kb(),
+        )
+        return REG_LAVOZIM
+
+    lavozim = lavozim_map[txt]
+    ismi        = ctx.user_data.get("reg_ismi", "")
+    phone       = ctx.user_data.get("reg_phone", "")
+    filial_info = ctx.user_data.get("reg_filial_info", {})
+    user_id     = update.effective_user.id
+
     ok = add_new_farmatsevt(
         ismi=ismi,
         telefon=phone,
-        filial_nomi=filial_info["filial_nomi"],
-        lavozim="Farmatsevt",   # Yangi xodim uchun default lavozim
-        lat=filial_info["lat"],
-        lon=filial_info["lon"],
-        after_row=filial_info["last_row"],
+        filial_nomi=filial_info.get("filial_nomi", ""),
+        lavozim=lavozim,
+        lat=filial_info.get("lat", ""),
+        lon=filial_info.get("lon", ""),
+        after_row=filial_info.get("last_row", 1),
         user_id=user_id,
     )
 
@@ -427,8 +540,8 @@ async def reg_filial_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"🎉 *Ro'yxatdan o'tdingiz!*\n\n"
             f"👤 {ismi}\n"
             f"📱 {phone}\n"
-            f"🏥 {filial_info['filial_nomi']}\n"
-            f"👔 Farmatsevt",
+            f"🏥 {filial_info.get('filial_nomi', '')}\n"
+            f"👔 {lavozim}",
             parse_mode="Markdown",
             reply_markup=ReplyKeyboardRemove(),
         )
@@ -445,7 +558,6 @@ async def reg_filial_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     )
     return MENU
 
-
 # ─── States ───────────────────────────────────────────────────────────────────
 
 def get_reg_states():
@@ -459,5 +571,8 @@ def get_reg_states():
         ],
         REG_FILIAL: [
             MessageHandler(filters.TEXT & ~filters.COMMAND, reg_filial_handler),
+        ],
+        REG_LAVOZIM: [
+            MessageHandler(filters.TEXT & ~filters.COMMAND, reg_lavozim_handler),
         ],
     }
