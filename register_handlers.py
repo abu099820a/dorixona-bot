@@ -257,6 +257,7 @@ def add_new_farmatsevt(
 def _add_to_attendance(ismi: str, filial_nomi: str):
     """
     Davomat Sheets dagi joriy oy listiga yangi farmatsevtni qo'shadi.
+    Jadval: A=Filial, B=Ismi
     Shu filialdagi oxirgi xodimdan keyin qo'shadi.
     """
     try:
@@ -264,7 +265,6 @@ def _add_to_attendance(ismi: str, filial_nomi: str):
             return
 
         from datetime import datetime, timezone, timedelta
-        import calendar
 
         UZ_TZ = timezone(timedelta(hours=5))
         now = datetime.now(UZ_TZ)
@@ -287,21 +287,24 @@ def _add_to_attendance(ismi: str, filial_nomi: str):
 
         all_values = ws.get_all_values()
         filial_kod = _filial_kod(filial_nomi)
-        last_row = 2  # sarlavhadan keyin
+        last_row = 2  # default
 
-        # Shu filialdagi oxirgi xodimni topish
+        # Jadval: A=Filial, B=Ismi
+        # Shu filialdagi OXIRGI qatorni topish (sarlavha + xodimlar ichida)
         for i, row in enumerate(all_values):
             if i < 2:
                 continue
             if not row or not row[0]:
                 continue
-            row_filial = str(row[1]).strip() if len(row) > 1 else ""
+            # A ustun = Filial
+            row_filial = str(row[0]).strip()
             if _filial_kod(row_filial) == filial_kod:
-                last_row = i + 1
+                last_row = i + 1  # 1-indexed
 
         insert_row = last_row + 1
-        ws.insert_row([ismi, filial_nomi], index=insert_row)
-        print(f"[REG] Davomat ga qo'shildi: {ismi} | {filial_nomi} | qator {insert_row}")
+        # A=Filial, B=Ismi tartibida qo'shish
+        ws.insert_row([filial_nomi, ismi], index=insert_row)
+        print(f"[REG] Davomat ga qo'shildi: {filial_nomi} | {ismi} | qator {insert_row}")
 
     except Exception as e:
         print(f"[REG] Davomat yangilash xato: {e}")
