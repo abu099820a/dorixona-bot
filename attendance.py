@@ -648,10 +648,13 @@ def sync_pharmacists():
         for i, row in enumerate(all_values):
             if i < 2:
                 continue
-            if not row or not row[0]:
+            if not row:
                 continue
-            ismi = row[0].strip()
-            filial = row[1].strip() if len(row) > 1 else ""
+            # A=Filial, B=Ismi
+            filial = str(row[0]).strip() if len(row) > 0 else ""
+            ismi   = str(row[1]).strip() if len(row) > 1 else ""
+            if not ismi:
+                continue  # Bo'sh B ustun = filial sarlavha qatori, o'tkazib yuborish
             att_dict[ismi] = {"row_num": i + 1, "filial": filial}
 
         batch_requests = []
@@ -665,9 +668,10 @@ def sync_pharmacists():
                         continue
                     if not row:
                         continue
+                    # A=Filial ustun
                     row_filial = str(row[0]).strip() if len(row) > 0 else ""
                     if row_filial == filial:
-                        filial_last_row = i + 1  # 1-indexed
+                        filial_last_row = i + 1  # 1-indexed (filial sarlavha ham, xodim ham)
 
                 # Shu filialdan keyin qo'shish
                 insert_row = filial_last_row + 1
