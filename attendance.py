@@ -197,21 +197,20 @@ def _get_or_create_month_sheet(sh):
 
     return ws
 
-def _get_farmatsevt_row(ws, ismi: str) -> int:
+def _get_farmatsevt_row(ws, ismi: str, filial: str = "") -> int:
     """
     Farmatsevtning qator raqamini topadi.
-    Topilmasa — yangi qator qo'shadi va raqamini qaytaradi.
+    Jadval: A=Filial, B=Ismi
+    Topilmasa — -1 qaytaradi (yangi qator qo'shilmaydi, init_month kerak)
     """
     all_values = ws.get_all_values()
     for i, row in enumerate(all_values):
         if i < 2:
             continue   # sarlavha qatorlari
-        if row and row[0] == ismi:
+        # B ustun (index 1) = Ismi
+        if len(row) > 1 and row[1].strip() == ismi.strip():
             return i + 1   # 1-indexed
-
-    # Yangi qator qo'shish
-    next_row = len(all_values) + 1
-    return next_row
+    return -1
 
 
 # ─── Asosiy funksiyalar ───────────────────────────────────────────────────────
@@ -264,14 +263,16 @@ def write_attendance(farmatsevt: dict, action: str, zamena: bool = False):
 
         col_ltr = col_letter(col_num)
 
-        # Farmatsevt qatorini topish
-        row_num = _get_farmatsevt_row(ws, farmatsevt["ismi"])
+        # Farmatsevt qatorini topish (B ustun = Ismi)
+        row_num = _get_farmatsevt_row(ws, farmatsevt["ismi"], farmatsevt.get("filial", ""))
 
-        # Agar yangi qator bo'lsa — ismi va filialini yozish
-        existing = ws.cell(row_num, 1).value
-        if not existing:
-            ws.update_cell(row_num, 1, farmatsevt["ismi"])
-            ws.update_cell(row_num, 2, farmatsevt["filial"])
+        if row_num == -1:
+            # Topilmadi — jadval to'liq emas, oxiriga qo'shamiz
+            all_values = ws.get_all_values()
+            row_num = len(all_values) + 1
+            # A=Filial, B=Ismi
+            ws.update_cell(row_num, 1, farmatsevt.get("filial", ""))
+            ws.update_cell(row_num, 2, farmatsevt["ismi"])
 
         # Vaqtni yozish
         ws.update_cell(row_num, col_num, time_str)
