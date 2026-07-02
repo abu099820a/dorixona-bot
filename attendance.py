@@ -658,9 +658,22 @@ def sync_pharmacists():
 
         for ismi, filial in ph_dict.items():
             if ismi not in att_dict:
-                next_row = len(all_values) + 1 + len(results["added"])
-                ws.update_cell(next_row, 1, ismi)
-                ws.update_cell(next_row, 2, filial)
+                # Shu filialdagi oxirgi qatorni topish
+                filial_last_row = 2  # default: sarlavhadan keyin
+                for i, row in enumerate(all_values):
+                    if i < 2:
+                        continue
+                    if not row:
+                        continue
+                    row_filial = str(row[0]).strip() if len(row) > 0 else ""
+                    if row_filial == filial:
+                        filial_last_row = i + 1  # 1-indexed
+
+                # Shu filialdan keyin qo'shish
+                insert_row = filial_last_row + 1
+                ws.insert_row([filial, ismi], index=insert_row)
+                # all_values ni yangilash (keyingi iteratsiya uchun)
+                all_values.insert(insert_row - 1, [filial, ismi])
                 results["added"].append(ismi)
 
         COLOR_HIDDEN = {"red": 0.85, "green": 0.85, "blue": 0.85}
