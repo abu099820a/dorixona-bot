@@ -7,7 +7,7 @@ from attendance_handlers import (
     ATT_PHONE, ATT_MENU, ATT_LOCATION,
     ATT_ZAMENA_FILIAL, ATT_ZAMENA_LOCATION,
     cmd_init_month, cmd_calc_hours,
-    cmd_sync_pharmacists, cmd_fill_codes, cmd_fix_latlon,
+    cmd_sync_pharmacists, cmd_fill_codes, cmd_fix_latlon, cmd_fill_phones,
 )
 from thefuzz import process as fuzz_process
 from telegram import (
@@ -727,6 +727,7 @@ def main():
     app.add_handler(CmdHandler("sync_pharmacists", cmd_sync_pharmacists))
     app.add_handler(CmdHandler("fill_codes", cmd_fill_codes))
     app.add_handler(CmdHandler("fix_latlon", cmd_fix_latlon))
+    app.add_handler(CmdHandler("fill_phones", cmd_fill_phones))
     app.run_polling()
 
 if __name__ == "__main__":

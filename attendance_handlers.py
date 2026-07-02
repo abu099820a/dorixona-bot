@@ -212,7 +212,7 @@ async def att_location_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     from datetime import datetime, timezone, timedelta
     UZ_TZ = timezone(timedelta(hours=5))
 
-    if update.message.text == "⬅️ Orqaga":
+    if update.message.text and update.message.text == "⬅️ Orqaga":
         return await _show_att_menu(update, ctx)
 
     if not update.message.location:
@@ -348,7 +348,7 @@ async def att_zamena_filial_handler(update: Update, ctx: ContextTypes.DEFAULT_TY
 
 
 async def att_zamena_location_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    if update.message.text == "⬅️ Orqaga":
+    if update.message.text and update.message.text == "⬅️ Orqaga":
         return await _show_att_menu(update, ctx)
 
     if not update.message.location:
@@ -615,6 +615,116 @@ async def cmd_fill_codes(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         if len(codes) > 30:
             lines.append(f"  ... va yana {len(codes)-30} ta")
         await msg.edit_text("\n".join(lines), parse_mode="Markdown")
+    except Exception as e:
+        await msg.edit_text(f"❌ Xato: {e}")
+
+
+
+async def cmd_fill_phones(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """
+    /fill_phones — Davomat jadvalidagi barcha farmatsevtlarning
+    telefon raqamlarini C ustuniga Farmatsevtlar Sheets dan olib yozadi.
+    """
+    if update.effective_user.id not in ADMIN_IDS:
+        await update.message.reply_text("❌ Ruxsat yo'q.")
+        return
+
+    msg = await update.message.reply_text("⏳ Telefon raqamlari to'ldirilmoqda...")
+
+    try:
+        import json, re
+        from google.oauth2.service_account import Credentials
+        import gspread
+
+        SCOPES = [
+            "https://www.googleapis.com/auth/spreadsheets",
+            "https://www.googleapis.com/auth/drive",
+        ]
+        PHARMACY_SHEET_ID  = os.getenv("PHARMACY_SHEET_ID", "")
+        ATTENDANCE_SHEET_ID_local = os.getenv("ATTENDANCE_SHEET_ID", "")
+
+        creds_json = os.getenv("GOOGLE_CREDENTIALS")
+        if creds_json:
+            info = json.loads(creds_json)
+            creds = Credentials.from_service_account_info(info, scopes=SCOPES)
+        else:
+            creds = Credentials.from_service_account_file("credentials.json", scopes=SCOPES)
+        client = gspread.authorize(creds)
+
+        # 1. Farmatsevtlar Sheets dan ismi → telefon lug'at
+        ph_ws = client.open_by_key(PHARMACY_SHEET_ID).sheet1
+        ph_records = ph_ws.get_all_records()
+
+        phone_dict = {}
+        for row in ph_records:
+            ismi = str(row.get("Ismi", "")).strip()
+            tel = row.get("Telefon", "")
+            if isinstance(tel, float):
+                tel = str(int(tel))
+            else:
+                tel = str(tel).strip()
+            if ismi and tel:
+                phone_dict[ismi] = tel
+
+        # 2. Davomat jadvalini olish
+        from datetime import datetime, timezone, timedelta
+        UZ_TZ = timezone(timedelta(hours=5))
+        now = datetime.now(UZ_TZ)
+        OY_NOMLARI = {
+            1: "Январь", 2: "Февраль", 3: "Март", 4: "Апрель",
+            5: "Май", 6: "Июнь", 7: "Июль", 8: "Август",
+            9: "Сентябрь", 10: "Октябрь", 11: "Ноябрь", 12: "Декабрь"
+        }
+        sheet_name = f"{OY_NOMLARI[now.month]} {now.year}"
+        att_sh = client.open_by_key(ATTENDANCE_SHEET_ID_local)
+
+        try:
+            ws = att_sh.worksheet(sheet_name)
+        except Exception:
+            await msg.edit_text(f"❌ '{sheet_name}' listi topilmadi.")
+            return
+
+        all_values = ws.get_all_values()
+
+        # 3. C ustuniga telefon yozish (batch)
+        updates = []
+        filled = 0
+        skipped = 0
+
+        for i, row in enumerate(all_values):
+            if i < 2:
+                continue
+            if not row:
+                continue
+            # B ustun = Ismi
+            ismi = str(row[1]).strip() if len(row) > 1 else ""
+            if not ismi:
+                continue  # filial sarlavha qatori
+
+            # C ustun = Telefon
+            existing_tel = str(row[2]).strip() if len(row) > 2 else ""
+            if existing_tel and existing_tel not in ("", "0"):
+                skipped += 1
+                continue  # allaqachon bor
+
+            if ismi in phone_dict:
+                row_num = i + 1
+                updates.append({
+                    "range": f"C{row_num}",
+                    "values": [[phone_dict[ismi]]]
+                })
+                filled += 1
+
+        if updates:
+            ws.batch_update(updates)
+
+        lines = [
+            f"✅ *Telefon raqamlari to'ldirildi!*\n",
+            f"📱 To'ldirildi: *{filled}* ta",
+            f"⚪ Allaqachon bor: *{skipped}* ta",
+        ]
+        await msg.edit_text("\n".join(lines), parse_mode="Markdown")
+
     except Exception as e:
         await msg.edit_text(f"❌ Xato: {e}")
 
