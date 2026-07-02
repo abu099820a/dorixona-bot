@@ -246,7 +246,7 @@ def add_new_farmatsevt(
         print(f"[REG] Yangi farmatsevt qo'shildi: {ismi} | {filial_nomi} | qator {insert_row}")
 
         # Davomat Sheets ga ham qo'shish
-        _add_to_attendance(ismi, filial_nomi)
+        _add_to_attendance(ismi, filial_nomi, telefon)
 
         return True
     except Exception as e:
@@ -254,7 +254,7 @@ def add_new_farmatsevt(
         return False
 
 
-def _add_to_attendance(ismi: str, filial_nomi: str):
+def _add_to_attendance(ismi: str, filial_nomi: str, telefon: str = ""):
     """
     Davomat Sheets dagi joriy oy listiga yangi farmatsevtni qo'shadi.
     Jadval: A=Filial, B=Ismi
@@ -302,9 +302,9 @@ def _add_to_attendance(ismi: str, filial_nomi: str):
                 last_row = i + 1  # 1-indexed
 
         insert_row = last_row + 1
-        # A=Filial, B=Ismi tartibida qo'shish
-        ws.insert_row([filial_nomi, ismi], index=insert_row)
-        print(f"[REG] Davomat ga qo'shildi: {filial_nomi} | {ismi} | qator {insert_row}")
+        # A=Filial, B=Ismi, C=Telefon tartibida qo'shish
+        ws.insert_row([filial_nomi, ismi, telefon], index=insert_row)
+        print(f"[REG] Davomat ga qo'shildi: {filial_nomi} | {ismi} | {telefon} | qator {insert_row}")
 
     except Exception as e:
         print(f"[REG] Davomat yangilash xato: {e}")

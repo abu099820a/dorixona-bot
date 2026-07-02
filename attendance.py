@@ -98,7 +98,7 @@ def date_to_col(day: int) -> int:
     2-kun keldi → 5, ketdi → 6
     ...
     """
-    return 3 + (day - 1) * 2
+    return 4 + (day - 1) * 2  # A=Filial, B=Ismi, C=Telefon, D=01 Keldi...
 
 
 # ─── Sheet tuzilishi ─────────────────────────────────────────────────────────
@@ -124,7 +124,7 @@ def _get_or_create_month_sheet(sh):
     ws = sh.add_worksheet(title=sheet_name, rows=400, cols=total_cols + 2)  # +2: Jami soat va zaxira
 
     # 1-qator: Ismi, Filial, sanalar
-    row1 = ["Ismi", "Filial"]
+    row1 = ["Filial", "Ismi", "Telefon"]
     for d in range(1, days_in_month + 1):
         row1.append(f"{d:02d}.{now.month:02d}")
         row1.append("")
@@ -139,23 +139,30 @@ def _get_or_create_month_sheet(sh):
     # Merge so'rovlari
     requests = []
 
-    # A1:A2 merge (Ismi)
+    # A1:A2 merge (Filial)
     requests.append({"mergeCells": {"range": {
         "sheetId": ws.id,
         "startRowIndex": 0, "endRowIndex": 2,
         "startColumnIndex": 0, "endColumnIndex": 1
     }, "mergeType": "MERGE_ALL"}})
 
-    # B1:B2 merge (Filial)
+    # B1:B2 merge (Ismi)
     requests.append({"mergeCells": {"range": {
         "sheetId": ws.id,
         "startRowIndex": 0, "endRowIndex": 2,
         "startColumnIndex": 1, "endColumnIndex": 2
     }, "mergeType": "MERGE_ALL"}})
 
+    # C1:C2 merge (Telefon)
+    requests.append({"mergeCells": {"range": {
+        "sheetId": ws.id,
+        "startRowIndex": 0, "endRowIndex": 2,
+        "startColumnIndex": 2, "endColumnIndex": 3
+    }, "mergeType": "MERGE_ALL"}})
+
     # Har kun uchun merge
     for d in range(days_in_month):
-        col_start = 2 + d * 2
+        col_start = 3 + d * 2  # A=Filial, B=Ismi, C=Telefon dan keyin
         requests.append({"mergeCells": {"range": {
             "sheetId": ws.id,
             "startRowIndex": 0, "endRowIndex": 1,
@@ -166,7 +173,7 @@ def _get_or_create_month_sheet(sh):
 
     # Format
     last_col = col_letter(total_cols)
-    ws.format("A1:B2", {
+    ws.format("A1:C2", {
         "backgroundColor": COLOR_HEADER,
         "textFormat": {"bold": True, "foregroundColor": {"red":1,"green":1,"blue":1}},
         "horizontalAlignment": "CENTER",
@@ -187,11 +194,15 @@ def _get_or_create_month_sheet(sh):
     sh.batch_update({"requests": [
         {"updateDimensionProperties": {
             "range": {"sheetId": ws.id, "dimension": "COLUMNS", "startIndex": 0, "endIndex": 1},
-            "properties": {"pixelSize": 180}, "fields": "pixelSize"
+            "properties": {"pixelSize": 160}, "fields": "pixelSize"
         }},
         {"updateDimensionProperties": {
             "range": {"sheetId": ws.id, "dimension": "COLUMNS", "startIndex": 1, "endIndex": 2},
-            "properties": {"pixelSize": 130}, "fields": "pixelSize"
+            "properties": {"pixelSize": 140}, "fields": "pixelSize"
+        }},
+        {"updateDimensionProperties": {
+            "range": {"sheetId": ws.id, "dimension": "COLUMNS", "startIndex": 2, "endIndex": 3},
+            "properties": {"pixelSize": 120}, "fields": "pixelSize"
         }},
     ]})
 
@@ -422,27 +433,30 @@ def init_month_sheet(sh=None):
             continue
         filial = str(row[0]).strip()
         ismi   = str(row[1]).strip() if len(row) > 1 else ""
+        tel    = str(row[2]).strip() if len(row) > 2 else ""
+        if isinstance(row[2] if len(row) > 2 else "", float):
+            tel = str(int(float(tel))) if tel else ""
         if filial not in filial_dict:
             filial_dict[filial] = []
         if ismi:
-            filial_dict[filial].append(ismi)
+            filial_dict[filial].append((ismi, tel))
 
     # Qatorlarni tuzish: filial sarlavhasi + xodimlar
     rows_to_write = []   # [(filial, ismi), ...]
     for filial, xodimlar in filial_dict.items():
-        rows_to_write.append((filial, ""))  # filial sarlavha qatori
-        for ismi in xodimlar:
-            rows_to_write.append((filial, ismi))
+        rows_to_write.append((filial, "", ""))  # filial sarlavha qatori
+        for ismi, tel in xodimlar:
+            rows_to_write.append((filial, ismi, tel))
 
     # Jadvalga yozish (3-qatordan boshlanadi)
     updates = []
     filial_header_rows = []  # rang berish uchun
 
-    for idx, (filial, ismi) in enumerate(rows_to_write):
+    for idx, (filial, ismi, tel) in enumerate(rows_to_write):
         row_num = idx + 3  # 1=sarlavha, 2=Keldi/Ketdi
         updates.append({
-            "range": f"A{row_num}:B{row_num}",
-            "values": [[filial, ismi]]
+            "range": f"A{row_num}:C{row_num}",
+            "values": [[filial, ismi, tel]]
         })
         if ismi == "":
             filial_header_rows.append(row_num)
@@ -637,8 +651,11 @@ def sync_pharmacists():
         for row in ph_records:
             ismi = str(row.get("Ismi", "")).strip()
             filial = str(row.get("Filial", "")).strip()
+            tel = str(row.get("Telefon", "")).strip()
+            if isinstance(row.get("Telefon", ""), float):
+                tel = str(int(float(tel))) if tel else ""
             if ismi:
-                ph_dict[ismi] = filial
+                ph_dict[ismi] = {"filial": filial, "tel": tel}
 
         att_sh = client.open_by_key(ATTENDANCE_SHEET_ID)
         ws = _get_or_create_month_sheet(att_sh)
@@ -659,7 +676,9 @@ def sync_pharmacists():
 
         batch_requests = []
 
-        for ismi, filial in ph_dict.items():
+        for ismi, ph_info in ph_dict.items():
+            filial = ph_info["filial"]
+            tel = ph_info.get("tel", "")
             if ismi not in att_dict:
                 # Shu filialdagi oxirgi qatorni topish
                 filial_last_row = 2  # default: sarlavhadan keyin
@@ -675,9 +694,9 @@ def sync_pharmacists():
 
                 # Shu filialdan keyin qo'shish
                 insert_row = filial_last_row + 1
-                ws.insert_row([filial, ismi], index=insert_row)
+                ws.insert_row([filial, ismi, tel], index=insert_row)
                 # all_values ni yangilash (keyingi iteratsiya uchun)
-                all_values.insert(insert_row - 1, [filial, ismi])
+                all_values.insert(insert_row - 1, [filial, ismi, tel])
                 results["added"].append(ismi)
 
         COLOR_HIDDEN = {"red": 0.85, "green": 0.85, "blue": 0.85}
@@ -707,10 +726,10 @@ def sync_pharmacists():
                 })
                 results["removed"].append(ismi)
             else:
-                new_filial = ph_dict[ismi]
+                new_filial = ph_dict[ismi]["filial"]
                 if att_dict[ismi]["filial"] != new_filial:
                     row_num = att_dict[ismi]["row_num"]
-                    ws.update_cell(row_num, 2, new_filial)
+                    ws.update_cell(row_num, 1, new_filial)
                     results["updated"].append(f"{ismi}: {att_dict[ismi]['filial']} → {new_filial}")
                 else:
                     results["unchanged"] += 1
