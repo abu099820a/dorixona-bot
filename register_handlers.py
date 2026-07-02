@@ -306,6 +306,35 @@ def _add_to_attendance(ismi: str, filial_nomi: str, telefon: str = ""):
         ws.insert_row([filial_nomi, ismi, telefon], index=insert_row)
         print(f"[REG] Davomat ga qo'shildi: {filial_nomi} | {ismi} | {telefon} | qator {insert_row}")
 
+        # Yangi qatorni oq rangga qaytarish (filial sarlavha rangini olmasa)
+        try:
+            att_sh_local = client.open_by_key(ATTENDANCE_SHEET_ID)
+            ws_sheet = att_sh_local.worksheet(sheet_name)
+            att_sh_local.batch_update({"requests": [{
+                "repeatCell": {
+                    "range": {
+                        "sheetId": ws_sheet.id,
+                        "startRowIndex": insert_row - 1,
+                        "endRowIndex": insert_row,
+                        "startColumnIndex": 0,
+                        "endColumnIndex": 3,
+                    },
+                    "cell": {
+                        "userEnteredFormat": {
+                            "backgroundColor": {"red": 1, "green": 1, "blue": 1},
+                            "textFormat": {
+                                "bold": False,
+                                "foregroundColor": {"red": 0, "green": 0, "blue": 0}
+                            },
+                            "horizontalAlignment": "LEFT",
+                        }
+                    },
+                    "fields": "userEnteredFormat(backgroundColor,textFormat,horizontalAlignment)",
+                }
+            }]})
+        except Exception as re:
+            print(f"[REG] Rang tuzatish xato: {re}")
+
     except Exception as e:
         print(f"[REG] Davomat yangilash xato: {e}")
 
