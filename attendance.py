@@ -418,7 +418,7 @@ def init_month_sheet(sh=None):
 
     # Farmatsevtlar Sheets dan ma'lumot olish
     ph_client = get_sheets_client()
-    ph_ws = ph_client.open_by_key(PHARMACY_SHEET_ID).sheet1
+    ph_ws = ph_client.open_by_key(PHARMACY_SHEET_ID).worksheet("Farmatsevtlar")
     all_ph = ph_ws.get_all_values()
 
     # Barcha filiallar va ularning xodimlari — tartibli lug'at
@@ -644,7 +644,7 @@ def sync_pharmacists():
         client = get_sheets_client()
 
         ph_sh = client.open_by_key(PHARMACY_SHEET_ID)
-        ph_ws = ph_sh.sheet1
+        ph_ws = ph_sh.worksheet("Farmatsevtlar")
         ph_records = ph_ws.get_all_records()
 
         ph_dict = {}
@@ -742,3 +742,34 @@ def sync_pharmacists():
         results["error"] = str(e)
 
     return results
+
+
+def check_today_keldi(ismi: str) -> bool:
+    """
+    Bugun farmatsevtning keldi vaqti jadvalda yozilganmi tekshiradi.
+    Bot qayta ishga tushganda sessiya yo'qolsa — jadvaldan tekshiradi.
+    """
+    try:
+        client = get_sheets_client()
+        sh = client.open_by_key(ATTENDANCE_SHEET_ID)
+        ws = _get_or_create_month_sheet(sh)
+
+        now = datetime.now(UZ_TZ)
+        day = now.day
+        keldi_col_num = date_to_col(day)
+
+        all_values = ws.get_all_values()
+        for i, row in enumerate(all_values):
+            if i < 2:
+                continue
+            if not row or len(row) < 2:
+                continue
+            # B ustun = Ismi
+            row_ismi = str(row[1]).strip()
+            if row_ismi == ismi.strip():
+                keldi_val = row[keldi_col_num - 1] if len(row) >= keldi_col_num else ""
+                return bool(keldi_val and keldi_val.strip())
+        return False
+    except Exception as e:
+        print(f"[ATT] check_today_keldi xato: {e}")
+        return True  # Xato bo'lsa — ruxsat berish (bloklamaslik)
