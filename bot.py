@@ -172,13 +172,13 @@ def get_lang(ctx): return ctx.user_data.get("lang", "uz")
 
 def load_df():
     try:
-        # Google Sheets dan o'qish
-        url = f"https://docs.google.com/spreadsheets/d/{SHEETS_ID}/export?format=xlsx"
-        import urllib.request
-        with urllib.request.urlopen(url) as response:
-            data = response.read()
+        # Google Sheets dan o'qish (requests bilan)
+        url = f"https://docs.google.com/spreadsheets/d/{SHEETS_ID}/export?format=xlsx&sheet=Sheet1"
+        import requests as req_lib
+        resp = req_lib.get(url, timeout=30)
+        resp.raise_for_status()
         import io as _io
-        df = pd.read_excel(_io.BytesIO(data)).fillna("")
+        df = pd.read_excel(_io.BytesIO(resp.content)).fillna("")
         df["filial_no"] = df["Filial №"].astype(str).str.strip().str.replace(r"\.0$","",regex=True)
         df["_sort"] = pd.to_numeric(df["filial_no"], errors="coerce").fillna(9999)
         df = df.sort_values("_sort").reset_index(drop=True)
@@ -191,6 +191,7 @@ def load_df():
             df["filial_no"] = df["Filial №"].astype(str).str.strip().str.replace(r"\.0$","",regex=True)
             df["_sort"] = pd.to_numeric(df["filial_no"], errors="coerce").fillna(9999)
             df = df.sort_values("_sort").reset_index(drop=True)
+            print(f"Local fayldan {len(df)} ta filial yuklandi")
             return df
         except Exception as e2:
             print(f"Local fayl xato: {e2}")
