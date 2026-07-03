@@ -83,7 +83,7 @@ def find_by_phone(phone: str) -> dict | None:
     """Telefon raqami bo'yicha farmatsevtni topadi."""
     try:
         client = _get_client()
-        ws = client.open_by_key(PHARMACY_SHEET_ID).sheet1
+        ws = client.open_by_key(PHARMACY_SHEET_ID).worksheet("Farmatsevtlar")
         records = ws.get_all_records()
         norm = normalize_phone(phone)
         for i, row in enumerate(records):
@@ -111,7 +111,7 @@ def save_telegram_id(row_num: int, user_id: int) -> bool:
     """Mavjud xodimning TelegramID sini D ustuniga saqlaydi."""
     try:
         client = _get_client()
-        ws = client.open_by_key(PHARMACY_SHEET_ID).sheet1
+        ws = client.open_by_key(PHARMACY_SHEET_ID).worksheet("Farmatsevtlar")
         ws.update_cell(row_num, COL_TELEGRAMID, str(user_id))
         return True
     except Exception as e:
@@ -178,7 +178,7 @@ def get_filial_info(filial_kod: str) -> dict | None:
                 print(f"[REG] Filiallar Sheets xato: {e}")
 
         # ── 2. Farmatsevtlar Sheets dan filial nomi va last_row topish ──
-        ph_ws = client.open_by_key(PHARMACY_SHEET_ID).sheet1
+        ph_ws = client.open_by_key(PHARMACY_SHEET_ID).worksheet("Farmatsevtlar")
         all_values = ph_ws.get_all_values()
 
         filial_nomi = None
@@ -231,7 +231,7 @@ def add_new_farmatsevt(
     """
     try:
         client = _get_client()
-        ws = client.open_by_key(PHARMACY_SHEET_ID).sheet1
+        ws = client.open_by_key(PHARMACY_SHEET_ID).worksheet("Farmatsevtlar")
 
         # Qatorni after_row dan keyin qo'shish
         insert_row = after_row + 1
