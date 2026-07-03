@@ -230,7 +230,7 @@ def get_farmatsevt(phone: str):
     try:
         client = get_sheets_client()
         sh = client.open_by_key(PHARMACY_SHEET_ID)
-        ws = sh.sheet1
+        ws = sh.worksheet("Farmatsevtlar")
         records = ws.get_all_records()
         norm = normalize_phone(phone)
         for row in records:
@@ -355,7 +355,7 @@ def get_farmatsevt_by_userid(user_id: int):
     try:
         client = get_sheets_client()
         sh = client.open_by_key(PHARMACY_SHEET_ID)
-        ws = sh.sheet1
+        ws = sh.worksheet("Farmatsevtlar")
         records = ws.get_all_records()
         uid = str(user_id)
         for i, row in enumerate(records):
@@ -377,7 +377,7 @@ def save_userid_to_sheet(user_id: int, phone: str):
     try:
         client = get_sheets_client()
         sh = client.open_by_key(PHARMACY_SHEET_ID)
-        ws = sh.sheet1
+        ws = sh.worksheet("Farmatsevtlar")
         records = ws.get_all_records()
         norm = normalize_phone(phone)
 
@@ -566,7 +566,7 @@ def get_filiallar_list():
     try:
         client = get_sheets_client()
         sh = client.open_by_key(PHARMACY_SHEET_ID)
-        ws = sh.sheet1
+        ws = sh.worksheet("Farmatsevtlar")
         records = ws.get_all_records()
         seen = {}
         for row in records:
@@ -597,7 +597,7 @@ def fill_codes_in_sheet():
     try:
         client = get_sheets_client()
         sh = client.open_by_key(PHARMACY_SHEET_ID)
-        ws = sh.sheet1
+        ws = sh.worksheet("Farmatsevtlar")
         headers = ws.row_values(1)
         if "Kod" in headers:
             kod_col_num = headers.index("Kod") + 1
