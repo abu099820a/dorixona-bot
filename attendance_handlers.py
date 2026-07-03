@@ -60,28 +60,32 @@ def back_to_main_keyboard(language="uz"):
 # ─── 1. Davomot kirish — avval parol ─────────────────────────────────────────
 
 async def att_enter(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """Asosiy menyudan 'Davomot' bosilganda — parol so'raydi"""
+    """
+    Asosiy menyudan 'Davomot' bosilganda:
+    - TelegramID saqlangan bo'lsa → to'g'ri menyuga
+    - Saqlangan bo'lmasa → Ro'yxatdan o'tishga yo'naltiradi
+    """
     user_id = update.effective_user.id
 
-    # Avval user_id bo'yicha tekshirish (oldin kirgan bo'lsa)
+    # TelegramID bo'yicha tekshirish
     if not ctx.user_data.get("att_farmatsevt"):
         farmatsevt = get_farmatsevt_by_userid(user_id)
         if farmatsevt:
             ctx.user_data["att_auth"] = True
             ctx.user_data["att_farmatsevt"] = farmatsevt
-            ctx.user_data["att_phone"] = "saved"
 
-    # Agar parol allaqachon tasdiqlangan bo'lsa
-    if ctx.user_data.get("att_auth"):
-        if ctx.user_data.get("att_farmatsevt"):
-            return await _show_att_menu(update, ctx)
-        return await _ask_phone(update, ctx)
+    if ctx.user_data.get("att_auth") and ctx.user_data.get("att_farmatsevt"):
+        return await _show_att_menu(update, ctx)
 
+    # Ro'yxatdan o'tmagan — yo'naltirish
+    from bot import main_keyboard, get_lang, MENU
     await update.message.reply_text(
-        "🔐 Davomot tizimi\n\nParolni kiriting:",
-        reply_markup=ReplyKeyboardMarkup([["⬅️ Orqaga"]], resize_keyboard=True),
+        "❌ Siz hali ro'yxatdan o'tmagansiz!\n\n"
+        "📝 Iltimos, avval *Ro'yxatdan o'tish* tugmasini bosing.",
+        parse_mode="Markdown",
+        reply_markup=main_keyboard(get_lang(ctx)),
     )
-    return ATT_PASSWORD
+    return MENU
 
 
 async def att_password_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
