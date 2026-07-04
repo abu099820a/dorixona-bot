@@ -105,6 +105,8 @@ T = {
         "map_btn": "🗺 Barcha filiallar kartada",
         "attendance_btn": "📋 Davomat",
         "register_btn": "📝 Ro'yxatdan o'tish",
+        "reports_btn": "📊 Hisobotlar va to'lovlar",
+        "appeal_btn": "📩 Murojaat",
         "back": "⬅️ Orqaga",
         "enter_number": "🔢 Filial raqamini kiriting:\n_(masalan: 1, 5, 23)_",
         "enter_name": "🔤 Dorixona nomini kiriting:",
@@ -144,6 +146,8 @@ T = {
         "map_btn": "🗺 Все филиалы на карте",
         "attendance_btn": "📋 Davomat",
         "register_btn": "📝 Регистрация",
+        "reports_btn": "📊 Отчёты и оплаты",
+        "appeal_btn": "📩 Обращение",
         "back": "⬅️ Назад",
         "enter_number": "🔢 Введите номер филиала:\n_(например: 1, 5, 23)_",
         "enter_name": "🔤 Введите название аптеки:",
@@ -288,6 +292,7 @@ def main_keyboard(language):
     return ReplyKeyboardMarkup([
         [T[language]["search_btn"]],
         [T[language]["attendance_btn"], T[language]["register_btn"]],
+        [T[language]["reports_btn"], T[language]["appeal_btn"]],
         [T[language]["chat_btn"], T[language]["channel_btn"]],
         [T[language]["lang_btn"]],
     ], resize_keyboard=True)
@@ -361,6 +366,20 @@ async def menu_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     elif txt == T[language]["register_btn"]:
         return await register_enter(update, ctx)
+
+    elif txt == T[language]["reports_btn"]:
+        await update.message.reply_text(
+            "📊 *Hisobotlar va to'lovlar*\n\n🔧 Tez orada...",
+            parse_mode="Markdown",
+        )
+        return MENU
+
+    elif txt == T[language]["appeal_btn"]:
+        await update.message.reply_text(
+            "📩 *Murojaat*\n\n🔧 Tez orada...",
+            parse_mode="Markdown",
+        )
+        return MENU
 
     elif txt == T[language]["chat_btn"]:
         kb = InlineKeyboardMarkup([[InlineKeyboardButton("💬 Chat", url=TELEGRAM_CHAT_LINK)]])

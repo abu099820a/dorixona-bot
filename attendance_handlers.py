@@ -30,6 +30,7 @@ def att_main_keyboard():
     return ReplyKeyboardMarkup([
         ["✅ Keldi", "🚪 Ketdi"],
         ["🔄 Zamena"],
+        ["🏥 Filial/Lavozim o'zgartirish"],
         ["⬅️ Orqaga"],
     ], resize_keyboard=True)
 
@@ -193,6 +194,14 @@ async def att_menu_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             parse_mode="Markdown",
         )
         return ATT_LOCATION
+
+    elif txt == "🏥 Filial/Lavozim o'zgartirish":
+        await update.message.reply_text(
+            "🏥 *Filial/Lavozim o'zgartirish*\n\n🔧 Tez orada...",
+            parse_mode="Markdown",
+            reply_markup=att_main_keyboard(),
+        )
+        return ATT_MENU
 
     elif txt == "🔄 Zamena":
         ctx.user_data["att_zamena"] = True
