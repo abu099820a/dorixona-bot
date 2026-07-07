@@ -252,7 +252,7 @@ def get_farmatsevt(phone: str):
         return None
 
 
-def write_attendance(farmatsevt: dict, action: str, zamena: bool = False):
+def write_attendance(farmatsevt: dict, action: str, zamena: bool = False, write_time=None):
     """
     Joriy oy listiga, farmatsevt qatoriga, bugungi ustunga vaqt yozadi.
     action: 'keldi' | 'ketdi'
@@ -263,7 +263,10 @@ def write_attendance(farmatsevt: dict, action: str, zamena: bool = False):
         ws = _get_or_create_month_sheet(sh)
 
         now = datetime.now(UZ_TZ)
-        day = now.day
+        if write_time is not None:
+            day = write_time.day
+        else:
+            day = now.day
         time_str = now.strftime("%H:%M")
 
         # Ustun raqami
@@ -286,7 +289,16 @@ def write_attendance(farmatsevt: dict, action: str, zamena: bool = False):
             ws.update_cell(row_num, 2, farmatsevt["ismi"])
 
         # Vaqtni yozish
-        ws.update_cell(row_num, col_num, time_str)
+        if zamena and farmatsevt.get("zamena_filial"):
+            # Zamena: "09:00 (6)" formatida
+            fil = farmatsevt["zamena_filial"]
+            import re
+            fil_no = re.match(r"^(\d+)", str(fil).strip())
+            fil_label = fil_no.group(1) if fil_no else fil
+            write_val = f"{time_str} ({fil_label})"
+        else:
+            write_val = time_str
+        ws.update_cell(row_num, col_num, write_val)
 
         # Rang belgilash
         cell_range = f"{col_ltr}{row_num}"
@@ -773,3 +785,65 @@ def check_today_keldi(ismi: str) -> bool:
     except Exception as e:
         print(f"[ATT] check_today_keldi xato: {e}")
         return True  # Xato bo'lsa — ruxsat berish (bloklamaslik)
+
+
+def check_today_ketdi(ismi: str, now=None) -> bool:
+    """
+    Bugun farmatsevtning ketdi vaqti jadvalda yozilganmi tekshiradi.
+    """
+    try:
+        if now is None:
+            now = datetime.now(UZ_TZ)
+        client = get_sheets_client()
+        sh = client.open_by_key(ATTENDANCE_SHEET_ID)
+        ws = _get_or_create_month_sheet(sh)
+
+        day = now.day
+        ketdi_col_num = date_to_col(day) + 1  # Ketdi = Keldi + 1
+
+        all_values = ws.get_all_values()
+        for i, row in enumerate(all_values):
+            if i < 2:
+                continue
+            if not row or len(row) < 2:
+                continue
+            row_ismi = str(row[1]).strip()
+            if row_ismi == ismi.strip():
+                ketdi_val = row[ketdi_col_num - 1] if len(row) >= ketdi_col_num else ""
+                return bool(ketdi_val and ketdi_val.strip())
+        return False
+    except Exception as e:
+        print(f"[ATT] check_today_ketdi xato: {e}")
+        return False
+
+
+def get_today_times(ismi: str, now=None) -> dict:
+    """
+    Bugungi keldi va ketdi vaqtlarini qaytaradi.
+    {"keldi": "09:15", "ketdi": "18:00"} yoki bo'sh string
+    """
+    try:
+        if now is None:
+            now = datetime.now(UZ_TZ)
+        client = get_sheets_client()
+        sh = client.open_by_key(ATTENDANCE_SHEET_ID)
+        ws = _get_or_create_month_sheet(sh)
+
+        day = now.day
+        keldi_col = date_to_col(day)
+        ketdi_col = date_to_col(day) + 1
+
+        all_values = ws.get_all_values()
+        for i, row in enumerate(all_values):
+            if i < 2:
+                continue
+            if not row or len(row) < 2:
+                continue
+            if str(row[1]).strip() == ismi.strip():
+                keldi = row[keldi_col - 1] if len(row) >= keldi_col else ""
+                ketdi = row[ketdi_col - 1] if len(row) >= ketdi_col else ""
+                return {"keldi": str(keldi).strip(), "ketdi": str(ketdi).strip()}
+        return {"keldi": "", "ketdi": ""}
+    except Exception as e:
+        print(f"[ATT] get_today_times xato: {e}")
+        return {"keldi": "", "ketdi": ""}

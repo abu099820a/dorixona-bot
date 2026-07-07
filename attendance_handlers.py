@@ -308,7 +308,13 @@ async def att_location_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             )
             return ATT_MENU
 
-    ok = write_attendance(farmatsevt, action, zamena=False)
+    # Tungi smena: 00:00-05:00 da ketdi → kechagi sana ga yozish
+    write_now = now
+    if action == "ketdi" and now.hour < 5:
+        from datetime import timedelta
+        write_now = now - timedelta(days=1)
+
+    ok = write_attendance(farmatsevt, action, zamena=False, write_time=write_now)
 
     if ok:
         # Vaqtni saqlash
@@ -393,7 +399,7 @@ async def att_zamena_location_handler(update: Update, ctx: ContextTypes.DEFAULT_
         return ATT_ZAMENA_LOCATION
 
     farmatsevt = ctx.user_data.get("att_farmatsevt", {})
-    zamena_info = {**farmatsevt, "filial": zamena_filial["filial"]}
+    zamena_info = {**farmatsevt, "filial": farmatsevt["filial"], "zamena_filial": zamena_filial["filial"]}
     ok = write_attendance(zamena_info, "keldi", zamena=True)
     now_str = __import__("datetime").datetime.now().strftime("%H:%M")
 
