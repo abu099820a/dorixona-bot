@@ -345,8 +345,14 @@ async def set_lang(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     return MENU
 
 async def menu_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    # Sessiya yo'q bo'lsa — avtomatik tiklash
+    if not ctx.user_data.get("lang"):
+        ctx.user_data["lang"] = "uz"
     language = get_lang(ctx)
     txt = update.message.text
+    if txt is None:
+        await update.message.reply_text(T[language]["menu"], reply_markup=main_keyboard(language), parse_mode="Markdown")
+        return MENU
 
     if txt == T[language]["lang_btn"]:
         kb = InlineKeyboardMarkup([[
