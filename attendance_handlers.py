@@ -234,17 +234,7 @@ async def att_location_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Iltimos, lokatsiya tugmasini bosing.")
         return ATT_LOCATION
 
-    # 🔴 Jonli lokatsiya tekshiruvi
     loc = update.message.location
-    if not loc.live_period:
-        await update.message.reply_text(
-            "❌ Faqat *jonli lokatsiya* qabul qilinadi!\n\n"
-            "📍 Lokatsiya yuborish tugmasini bosing → "
-            "*Jonli lokatsiya ulashish* tanlang.",
-            parse_mode="Markdown",
-            reply_markup=location_keyboard(),
-        )
-        return ATT_LOCATION
 
     ulat = loc.latitude
     ulon = loc.longitude
@@ -378,7 +368,8 @@ async def att_zamena_location_handler(update: Update, ctx: ContextTypes.DEFAULT_
         await update.message.reply_text("❌ Iltimos, lokatsiya tugmasini bosing.")
         return ATT_ZAMENA_LOCATION
 
-    # Jonli lokatsiya tekshiruvi
+
+
     if not update.message.location.live_period:
         await update.message.reply_text(
             "❌ Faqat *jonli lokatsiya* qabul qilinadi!\n\n"
@@ -387,7 +378,6 @@ async def att_zamena_location_handler(update: Update, ctx: ContextTypes.DEFAULT_
             reply_markup=location_keyboard("📍 Zamena lokatsiyamni yuborish"),
         )
         return ATT_ZAMENA_LOCATION
-
     ulat = update.message.location.latitude
     ulon = update.message.location.longitude
 
