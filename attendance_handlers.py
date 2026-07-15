@@ -565,6 +565,15 @@ async def cmd_fix_latlon(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 
+
+def change_lavozim_keyboard():
+    return ReplyKeyboardMarkup([
+        ["👔 Farmatsevt"],
+        ["👔 Dorixona mudiri"],
+        ["👔 Stajyor"],
+        ["⬅️ Orqaga"],
+    ], resize_keyboard=True)
+
 async def att_change_filial_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Yangi filial raqamini qabul qiladi."""
     txt = update.message.text.strip() if update.message and update.message.text else ""
@@ -575,16 +584,10 @@ async def att_change_filial_handler(update: Update, ctx: ContextTypes.DEFAULT_TY
     # Filial mavjudligini tekshirish
     from attendance import get_filiallar_list
     filiallar = get_filiallar_list()
-    # Raqam bo'yicha qidirish (to'liq nom yoki faqat raqam)
+    # Filial raqami bo'yicha qidirish: "14" → filial_no="14"
     selected = None
     for f in filiallar:
-        fil_no = str(f["filial"]).strip()
-        import re as _re
-        m = _re.match(r"^(\d+)", fil_no)
-        if m and m.group(1) == txt.strip():
-            selected = f
-            break
-        if fil_no == txt.strip():
+        if str(f["filial"]).strip() == txt.strip():
             selected = f
             break
 
