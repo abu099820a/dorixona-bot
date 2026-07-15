@@ -39,7 +39,8 @@ def filial_inline_keyboard(filiallar: list):
     buttons = []
     row = []
     for f in filiallar:
-        row.append(InlineKeyboardButton(f"#{f['filial']}", callback_data=f"att_fil_{f['filial']}"))
+        name = f.get("filial_name", f["filial"])
+        row.append(InlineKeyboardButton(f"#{f['filial']} {name}", callback_data=f"att_fil_{f['filial']}"))
         if len(row) == 3:
             buttons.append(row)
             row = []
@@ -224,6 +225,10 @@ async def att_menu_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def att_location_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     from datetime import datetime, timezone, timedelta
     UZ_TZ = timezone(timedelta(hours=5))
+
+    # update.message None bo'lishi mumkin (inline update)
+    if not update.message:
+        return ATT_LOCATION
 
     if update.message.text and update.message.text == "⬅️ Orqaga":
         return await _show_att_menu(update, ctx)

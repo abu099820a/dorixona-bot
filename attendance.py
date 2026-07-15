@@ -124,7 +124,7 @@ def _get_or_create_month_sheet(sh):
     ws = sh.add_worksheet(title=sheet_name, rows=400, cols=total_cols + 2)  # +2: Jami soat va zaxira
 
     # 1-qator: Ismi, Filial, sanalar
-    row1 = ["Filial", "Ismi", "Telefon"]
+    row1 = ["Filial", "Ismi"]
     for d in range(1, days_in_month + 1):
         row1.append(f"{d:02d}.{now.month:02d}")
         row1.append("")
@@ -153,12 +153,7 @@ def _get_or_create_month_sheet(sh):
         "startColumnIndex": 1, "endColumnIndex": 2
     }, "mergeType": "MERGE_ALL"}})
 
-    # C1:C2 merge (Telefon)
-    requests.append({"mergeCells": {"range": {
-        "sheetId": ws.id,
-        "startRowIndex": 0, "endRowIndex": 2,
-        "startColumnIndex": 2, "endColumnIndex": 3
-    }, "mergeType": "MERGE_ALL"}})
+
 
     # Har kun uchun merge
     for d in range(days_in_month):
@@ -173,7 +168,7 @@ def _get_or_create_month_sheet(sh):
 
     # Format
     last_col = col_letter(total_cols)
-    ws.format("A1:C2", {
+    ws.format("A1:B2", {
         "backgroundColor": COLOR_HEADER,
         "textFormat": {"bold": True, "foregroundColor": {"red":1,"green":1,"blue":1}},
         "horizontalAlignment": "CENTER",
@@ -200,10 +195,7 @@ def _get_or_create_month_sheet(sh):
             "range": {"sheetId": ws.id, "dimension": "COLUMNS", "startIndex": 1, "endIndex": 2},
             "properties": {"pixelSize": 140}, "fields": "pixelSize"
         }},
-        {"updateDimensionProperties": {
-            "range": {"sheetId": ws.id, "dimension": "COLUMNS", "startIndex": 2, "endIndex": 3},
-            "properties": {"pixelSize": 120}, "fields": "pixelSize"
-        }},
+
     ]})
 
     return ws
@@ -575,24 +567,77 @@ def calculate_monthly_hours():
     return len(updates)
 
 def get_filiallar_list():
+    """
+    Filiallar ro'yxatini qaytaradi.
+    Avval FILIALLAR_SHEET_ID dan, bo'lmasa Farmatsevtlar Sheets dan oladi.
+    """
     try:
         client = get_sheets_client()
-        sh = client.open_by_key(PHARMACY_SHEET_ID)
-        ws = sh.worksheet("Farmatsevtlar")
-        records = ws.get_all_records()
-        seen = {}
-        for row in records:
-            f = str(row.get("Filial", "")).strip()
-            if f and f not in seen:
+        filiallar_sheet_id = os.getenv("FILIALLAR_SHEET_ID", "")
+
+        if filiallar_sheet_id:
+            # Filiallar Sheets dan (A=Filial №, M=Latitude, N=Longitude)
+            sh = client.open_by_key(filiallar_sheet_id)
+            ws = sh.sheet1
+            all_values = ws.get_all_values()
+            if not all_values:
+                return []
+
+            headers = [h.strip() for h in all_values[0]]
+            try:
+                lat_idx = headers.index("Latitude")
+            except ValueError:
+                lat_idx = 12
+            try:
+                lon_idx = headers.index("Longitude")
+            except ValueError:
+                lon_idx = 13
+
+            result = []
+            for row in all_values[1:]:
+                if not row or not row[0]:
+                    continue
+                fil_no = str(row[0]).strip()
+                fil_name = str(row[1]).strip() if len(row) > 1 else fil_no
+                lat_val = str(row[lat_idx]).strip() if len(row) > lat_idx else ""
+                lon_val = str(row[lon_idx]).strip() if len(row) > lon_idx else ""
+
+                if not lat_val or not lon_val or lat_val in ("0", "nan", ""):
+                    continue
+
                 try:
-                    seen[f] = {
-                        "filial": f,
-                        "lat": float(str(row.get("Lat", 0)).replace(",", ".")),
-                        "lon": float(str(row.get("Lon", 0)).replace(",", ".")),
-                    }
+                    result.append({
+                        "filial": fil_no,
+                        "filial_name": fil_name,
+                        "lat": float(lat_val.replace(",", ".")),
+                        "lon": float(lon_val.replace(",", ".")),
+                    })
                 except Exception:
                     pass
-        return sorted(seen.values(), key=lambda x: int(x["filial"]) if x["filial"].isdigit() else 9999)
+
+            # Raqam bo'yicha tartiblash
+            result.sort(key=lambda x: int(x["filial"]) if str(x["filial"]).isdigit() else 9999)
+            print(f"[ATT] Filiallar Sheets dan {len(result)} ta filial yuklandi")
+            return result
+
+        else:
+            # Farmatsevtlar Sheets dan (zaxira)
+            sh = client.open_by_key(PHARMACY_SHEET_ID)
+            ws = sh.worksheet("Farmatsevtlar")
+            records = ws.get_all_records()
+            seen = {}
+            for row in records:
+                f = str(row.get("Filial", "")).strip()
+                if f and f not in seen:
+                    try:
+                        lat = float(str(row.get("Lat", 0)).replace(",", "."))
+                        lon = float(str(row.get("Lon", 0)).replace(",", "."))
+                        if lat and lon:
+                            seen[f] = {"filial": f, "filial_name": f, "lat": lat, "lon": lon}
+                    except Exception:
+                        pass
+            return sorted(seen.values(), key=lambda x: 9999)
+
     except Exception as e:
         print(f"[ATT] Filiallar xato: {e}")
         return []
