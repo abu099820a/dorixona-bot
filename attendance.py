@@ -38,6 +38,9 @@ COLOR_YELLOW = {"red": 1.0,  "green": 0.95, "blue": 0.0}   # zamena
 COLOR_RED    = {"red": 0.95, "green": 0.6,  "blue": 0.6}   # kelmagan
 COLOR_HEADER = {"red": 0.27, "green": 0.51, "blue": 0.71}  # sarlavha (ko'k)
 COLOR_DATE   = {"red": 0.18, "green": 0.33, "blue": 0.55}  # sana satri
+COLOR_TRANSFER = {"red": 0.80, "green": 0.75, "blue": 0.95} # filial almashtirish belgisi
+COLOR_DAM      = {"red": 0.75, "green": 0.87, "blue": 0.97} # dam olish kuni
+COLOR_JAVOB    = {"red": 0.98, "green": 0.85, "blue": 0.65} # javob olish kuni
 
 # ─── ConversationHandler holatlari ───────────────────────────────────────────
 
@@ -103,15 +106,17 @@ def date_to_col(day: int) -> int:
 
 # ─── Sheet tuzilishi ─────────────────────────────────────────────────────────
 
-def _get_or_create_month_sheet(sh):
+def _get_or_create_month_sheet(sh, target_date=None):
     """
-    Joriy oy uchun list topadi yoki yaratadi.
+    Berilgan sana (target_date) uchun oy listini topadi yoki yaratadi.
+    target_date berilmasa — joriy vaqt (now) ishlatiladi (avvalgi xatti-harakat).
+
     Qator 1: Ismi | Filial | 01.06 (merged 2 ustun) | 02.06 | ...
     Qator 2:       |        | Keldi | Ketdi | Keldi | Ketdi | ...
     Qator 3+: farmatsevtlar
     """
     import calendar
-    now = datetime.now(UZ_TZ)
+    now = target_date if target_date is not None else datetime.now(UZ_TZ)
     sheet_name = f"{OY_NOMLARI[now.month]} {now.year}"
     existing = [ws.title for ws in sh.worksheets()]
 
@@ -200,20 +205,75 @@ def _get_or_create_month_sheet(sh):
 
     return ws
 
+def _ensure_farmatsevt_row(ws, ismi: str, filial: str, telefon: str = "") -> int:
+    """
+    Berilgan listda xodimning qatori bor-yo'qligini tekshiradi.
+    Bor bo'lsa — qator raqamini qaytaradi.
+    Yo'q bo'lsa (masalan yangi oy listi hali xodimlar bilan to'ldirilmagan) —
+    to'g'ri filial guruhi ostiga yangi qator qo'shadi va shu qator raqamini
+    qaytaradi.
+    """
+    row_num = _get_farmatsevt_row(ws, ismi, filial)
+    if row_num != -1:
+        return row_num
+
+    all_values = ws.get_all_values()
+    last_row = len(all_values)
+    m_target = re.match(r"^(\d+)", str(filial).strip())
+
+    for i, row in enumerate(all_values):
+        if i < 2:
+            continue
+        if not row or not row[0]:
+            continue
+        m_row = re.match(r"^(\d+)", str(row[0]).strip())
+        if m_row and m_target and m_row.group(1) == m_target.group(1):
+            last_row = i + 1
+
+    insert_row = last_row + 1
+    ws.insert_row([filial, ismi, telefon], index=insert_row, value_input_option="USER_ENTERED")
+    print(f"[REST] Yangi oy listiga qator qo'shildi: {ismi} | {filial} | qator {insert_row}")
+    return insert_row
+
+
 def _get_farmatsevt_row(ws, ismi: str, filial: str = "") -> int:
     """
     Farmatsevtning qator raqamini topadi.
     Jadval: A=Filial, B=Ismi
     Topilmasa — -1 qaytaradi (yangi qator qo'shilmaydi, init_month kerak)
+
+    MUHIM: bitta xodim bir oy ichida filial almashtirsa, jadvalda uning
+    nomi bilan IKKITA qator bo'lishi mumkin — biri eski filialdagi tarix
+    (o'zgarishga qadar), ikkinchisi yangi filialdagi joriy qator. Bunday
+    holatda `filial` parametri orqali TO'G'RI (joriy) qator tanlanadi;
+    aks holda oxirgi (eng so'nggi qo'shilgan) qator qaytariladi.
     """
     all_values = ws.get_all_values()
+    matches = []
     for i, row in enumerate(all_values):
         if i < 2:
             continue   # sarlavha qatorlari
         # B ustun (index 1) = Ismi
         if len(row) > 1 and row[1].strip() == ismi.strip():
-            return i + 1   # 1-indexed
-    return -1
+            matches.append(i + 1)   # 1-indexed
+
+    if not matches:
+        return -1
+    if len(matches) == 1:
+        return matches[0]
+
+    # Bir nechta mos qator — filial kodi bo'yicha aniqlashtiramiz
+    if filial:
+        m_target = re.match(r"^(\d+)", str(filial).strip())
+        if m_target:
+            for row_num in matches:
+                row_filial = all_values[row_num - 1][0] if all_values[row_num - 1] else ""
+                m_row = re.match(r"^(\d+)", str(row_filial).strip())
+                if m_row and m_row.group(1) == m_target.group(1):
+                    return row_num
+
+    # Filial mos kelmasa (yoki berilmasa) — eng so'nggi qo'shilgan qatorni olamiz
+    return matches[-1]
 
 
 # ─── Asosiy funksiyalar ───────────────────────────────────────────────────────
@@ -955,10 +1015,19 @@ def update_farmatsevt_filial_lavozim(
         )
         print(f"[CHG] Yangi qator qo'shildi: {ismi} | {new_filial} | qator {insert_row}")
 
-        # Davomat jadvalida xodimning qatori topilib, ESKI joydan olib
-        # tashlanadi va YANGI filial guruhi ostiga ko'chiriladi (nafaqat A
-        # ustunidagi matn almashtiriladi — aks holda xodim eski filial
-        # bo'limida qolib, faqat nomi o'zgarib ko'rinadi).
+        # Davomat jadvalida xodimning qatori topiladi.
+        #
+        # MUHIM QOIDA: agar xodim OY O'RTASIDA filial almashtirsa va eski
+        # qatorda joriy oy uchun allaqachon keldi/ketdi belgilari yozilgan
+        # bo'lsa — o'sha qator TARIX sifatida eski filialda O'ZGARTIRILMASDAN
+        # qoladi, yangi filial guruhi ostiga esa BO'SH yangi qator qo'shiladi
+        # (shu kundan boshlab belgilar shu yangi qatorga yoziladi). Keyingi
+        # oyda esa (yangi list yaratilganda) xodim endi faqat yangi filial
+        # ostida, bitta qator bilan chiqadi.
+        #
+        # Agar eski qatorda hali hech qanday belgi bo'lmasa (masalan oy
+        # boshida yoki xodim hali ishlamagan bo'lsa) — bekorga bo'sh "arvoh"
+        # qator qoldirmaslik uchun eski qator shunchaki yangi joyga ko'chiriladi.
         try:
             att_sh = client.open_by_key(ATTENDANCE_SHEET_ID)
             ws_att = _get_or_create_month_sheet(att_sh)
@@ -977,30 +1046,144 @@ def update_farmatsevt_filial_lavozim(
                     break
 
             if old_att_row_num and row_data is not None:
-                # Filial ustunini (A) yangilash
-                row_data[0] = new_filial
+                # D ustunidan (index 3) boshlab kunlik keldi/ketdi ma'lumotlari.
+                # Birortasi to'ldirilgan bo'lsa — joriy oyda tarix bor demakdir.
+                has_history = any(str(c).strip() for c in row_data[3:])
 
-                # Eski qatorni o'chirish
-                ws_att.delete_rows(old_att_row_num)
-                print(f"[CHG] Davomat: eski qator o'chirildi | {ismi} | qator {old_att_row_num}")
+                if has_history:
+                    # Eski qatorni TEGMAY qoldiramiz (tarix eski filialda saqlanadi)
+                    print(f"[CHG] Davomat: tarix mavjud, eski qator saqlanadi | "
+                          f"{ismi} | eski filial qatori {old_att_row_num}")
 
-                # Yangi filial guruhining oxirgi qatorini topish (raqam bo'yicha)
-                att_values = ws_att.get_all_values()
-                new_last_row = len(att_values)
-                m_new = re.match(r"^(\d+)", new_filial)
+                    # ── Ko'chish (transfer) belgisi ──
+                    # ESKI qatorda: jadvaldagi eng oxirgi TO'LDIRILGAN kunni
+                    # topamiz (haqiqiy oxirgi ish kuni) va undan BIR KUN
+                    # KEYINGI kunga belgi qo'yamiz — bu kun endi u yerda
+                    # ishlamagani uchun kafolatlangan bo'sh bo'ladi. Faqat
+                    # katak haqiqatan ham bo'sh bo'lsa yoziladi.
+                    try:
+                        import calendar as _cal
+                        now = datetime.now(UZ_TZ)
+                        days_in_month = _cal.monthrange(now.year, now.month)[1]
 
-                for i, row in enumerate(att_values):
-                    if i < 2:
-                        continue
-                    if not row or not row[0]:
-                        continue
-                    m_row = re.match(r"^(\d+)", str(row[0]).strip())
-                    if m_row and m_new and m_row.group(1) == m_new.group(1):
-                        new_last_row = i + 1
+                        last_filled_day = 0
+                        for d in range(days_in_month, 0, -1):
+                            k_idx = date_to_col(d) - 1
+                            t_idx = date_to_col(d)
+                            k_val = row_data[k_idx] if len(row_data) > k_idx else ""
+                            t_val = row_data[t_idx] if len(row_data) > t_idx else ""
+                            if str(k_val).strip() or str(t_val).strip():
+                                last_filled_day = d
+                                break
 
-                insert_row = new_last_row + 1
-                ws_att.insert_row(row_data, index=insert_row, value_input_option="USER_ENTERED")
-                print(f"[CHG] Davomat: yangi qator qo'shildi | {ismi} | {new_filial} | qator {insert_row}")
+                        note_day = (last_filled_day + 1) if last_filled_day else max(now.day - 1, 1)
+                        if note_day <= days_in_month:
+                            note_col = date_to_col(note_day)  # Keldi ustuni
+                            old_kod_m = re.match(r"^(\d+)", str(old_filial).strip())
+                            new_kod_m = re.match(r"^(\d+)", str(new_filial).strip())
+                            old_kod = old_kod_m.group(1) if old_kod_m else old_filial
+                            new_kod = new_kod_m.group(1) if new_kod_m else new_filial
+                            note_text = f"{old_kod}→{new_kod}"
+
+                            # Eski qatorga belgi
+                            old_cell_val = row_data[note_col - 1] if len(row_data) >= note_col else ""
+                            if not str(old_cell_val).strip():
+                                ws_att.update_cell(old_att_row_num, note_col, note_text)
+                                ws_att.format(
+                                    f"{col_letter(note_col)}{old_att_row_num}",
+                                    {"backgroundColor": COLOR_TRANSFER}
+                                )
+                                print(f"[CHG] Davomat: eski qatorga transfer belgisi | {ismi} | {note_text} | kun {note_day}")
+                            else:
+                                print(f"[CHG] Davomat: eski qatordagi kun band, belgi qo'yilmadi | {ismi}")
+                    except Exception as e:
+                        print(f"[CHG] Transfer belgisi xato: {e}")
+
+                    # Yangi filial guruhi ostida bu ismga tegishli BO'SH qator
+                    # allaqachon bor-yo'qligini tekshiramiz (qayta-qayta
+                    # almashtirishda dublikat qo'shilmasligi uchun)
+                    already_has_new_row = False
+                    for i, row in enumerate(att_values):
+                        if i < 2:
+                            continue
+                        if not row or len(row) < 2:
+                            continue
+                        if str(row[1]).strip() == ismi.strip() and i + 1 != old_att_row_num:
+                            row_filial = str(row[0]).strip()
+                            m_r = re.match(r"^(\d+)", row_filial)
+                            m_n = re.match(r"^(\d+)", new_filial)
+                            if m_r and m_n and m_r.group(1) == m_n.group(1):
+                                already_has_new_row = True
+                                break
+
+                    if already_has_new_row:
+                        print(f"[CHG] Davomat: yangi filial ostida qator allaqachon bor | {ismi}")
+                    else:
+                        new_row_data = ["" for _ in row_data]
+                        new_row_data[0] = new_filial
+                        new_row_data[1] = ismi
+                        new_row_data[2] = row_data[2] if len(row_data) > 2 else ""
+
+                        # Yangi qatorga ham xuddi shu (o'tishdan bir kun oldingi)
+                        # kunga transfer belgisini qo'yamiz — bu katak yangi
+                        # qatorda hali hech qachon to'ldirilmagani uchun bo'sh.
+                        transfer_note_col = None
+                        try:
+                            now = datetime.now(UZ_TZ)
+                            note_day = now.day - 1
+                            if note_day >= 1:
+                                transfer_note_col = date_to_col(note_day)
+                                old_kod_m = re.match(r"^(\d+)", str(old_filial).strip())
+                                new_kod_m = re.match(r"^(\d+)", str(new_filial).strip())
+                                old_kod = old_kod_m.group(1) if old_kod_m else old_filial
+                                new_kod = new_kod_m.group(1) if new_kod_m else new_filial
+                                note_text = f"{old_kod}→{new_kod}"
+                                while len(new_row_data) < transfer_note_col:
+                                    new_row_data.append("")
+                                new_row_data[transfer_note_col - 1] = note_text
+                        except Exception as e:
+                            print(f"[CHG] Yangi qator transfer belgisi xato: {e}")
+
+                        new_last_row = len(att_values)
+                        m_new = re.match(r"^(\d+)", new_filial)
+                        for i, row in enumerate(att_values):
+                            if i < 2:
+                                continue
+                            if not row or not row[0]:
+                                continue
+                            m_row = re.match(r"^(\d+)", str(row[0]).strip())
+                            if m_row and m_new and m_row.group(1) == m_new.group(1):
+                                new_last_row = i + 1
+
+                        insert_row = new_last_row + 1
+                        ws_att.insert_row(new_row_data, index=insert_row, value_input_option="USER_ENTERED")
+                        if transfer_note_col:
+                            ws_att.format(
+                                f"{col_letter(transfer_note_col)}{insert_row}",
+                                {"backgroundColor": COLOR_TRANSFER}
+                            )
+                        print(f"[CHG] Davomat: yangi (bo'sh) qator qo'shildi | {ismi} | {new_filial} | qator {insert_row}")
+                else:
+                    # Tarix yo'q — eski (bo'sh) qatorni shunchaki yangi joyga ko'chiramiz
+                    row_data[0] = new_filial
+                    ws_att.delete_rows(old_att_row_num)
+                    print(f"[CHG] Davomat: tarix yo'q, qator ko'chirildi | {ismi} | qator {old_att_row_num}")
+
+                    att_values = ws_att.get_all_values()
+                    new_last_row = len(att_values)
+                    m_new = re.match(r"^(\d+)", new_filial)
+                    for i, row in enumerate(att_values):
+                        if i < 2:
+                            continue
+                        if not row or not row[0]:
+                            continue
+                        m_row = re.match(r"^(\d+)", str(row[0]).strip())
+                        if m_row and m_new and m_row.group(1) == m_new.group(1):
+                            new_last_row = i + 1
+
+                    insert_row = new_last_row + 1
+                    ws_att.insert_row(row_data, index=insert_row, value_input_option="USER_ENTERED")
+                    print(f"[CHG] Davomat: qator qo'shildi | {ismi} | {new_filial} | qator {insert_row}")
             else:
                 print(f"[CHG] Davomat: {ismi} topilmadi")
         except Exception as e:
@@ -1011,4 +1194,123 @@ def update_farmatsevt_filial_lavozim(
     except Exception as e:
         print(f"[CHG] Yangilash xato: {e}")
         return False
+
+
+def mark_rest_days(ismi: str, filial: str, start_day: int, end_day: int, kind: str) -> dict:
+    """
+    Xodimning o'zi "Dam olish kuni" yoki "Javob olish kuni" tugmasi orqali
+    belgilagan sana oralig'iga mos so'zni Davomat jadvaliga yozadi.
+
+    kind: "dam"   → Keldi/Ketdi katagiga "Dam" yoziladi, COLOR_DAM rang
+          "javob" → Keldi/Ketdi katagiga "Javob" yoziladi, COLOR_JAVOB rang
+
+    Faqat BO'SH kataklarga yoziladi — real keldi/ketdi vaqti allaqachon
+    yozilgan kunlar o'tkazib yuboriladi (real ma'lumot buzilmasligi uchun).
+
+    OYARO DIAPAZON: agar end_day < start_day bo'lsa (masalan 28 dan 3
+    gacha), bu joriy oydan KEYINGI oyga o'tish deb qabul qilinadi va ish
+    ikkiga bo'linadi: joriy oyda (start_day...oy oxiri) va keyingi oyda
+    (1...end_day). Keyingi oy listi hali mavjud bo'lmasa — avtomatik
+    yaratiladi; xodimning qatori o'sha listda hali bo'lmasa — to'g'ri
+    filial guruhi ostiga avtomatik qo'shiladi.
+
+    Qaytaradi: {"ok": bool, "marked": [...], "skipped": [...], "error": str|None}
+    "marked"/"skipped" ro'yxatidagi elementlar "kun" yoki oyaro holatda
+    "kun (oy nomi)" ko'rinishida bo'ladi.
+    """
+    import calendar as _cal
+    result = {"ok": False, "marked": [], "skipped": [], "error": None}
+
+    def _mark_range_in_sheet(ws, ismi, filial, telefon, from_day, to_day, label, color, tag=""):
+        marked, skipped = [], []
+        row_num = _ensure_farmatsevt_row(ws, ismi, filial, telefon)
+        row_values = ws.row_values(row_num)
+        for d in range(from_day, to_day + 1):
+            keldi_col = date_to_col(d)
+            ketdi_col = date_to_col(d) + 1
+            keldi_val = row_values[keldi_col - 1] if len(row_values) >= keldi_col else ""
+            ketdi_val = row_values[ketdi_col - 1] if len(row_values) >= ketdi_col else ""
+
+            label_tag = f"{d}{tag}"
+            if str(keldi_val).strip() or str(ketdi_val).strip():
+                skipped.append(label_tag)
+                continue
+
+            ws.update_cell(row_num, keldi_col, label)
+            ws.update_cell(row_num, ketdi_col, label)
+            ws.format(
+                f"{col_letter(keldi_col)}{row_num}:{col_letter(ketdi_col)}{row_num}",
+                {"backgroundColor": color}
+            )
+            marked.append(label_tag)
+        return marked, skipped
+
+    try:
+        label = "Dam" if kind == "dam" else "Javob"
+        color = COLOR_DAM if kind == "dam" else COLOR_JAVOB
+
+        client = get_sheets_client()
+        sh = client.open_by_key(ATTENDANCE_SHEET_ID)
+
+        now = datetime.now(UZ_TZ)
+        days_in_month = _cal.monthrange(now.year, now.month)[1]
+
+        if start_day < 1 or end_day < 1 or start_day > 31 or end_day > 31:
+            result["error"] = "Sana 1 dan 31 gacha bo'lishi kerak."
+            return result
+
+        if end_day >= start_day:
+            # Oddiy holat — bir oy ichida
+            if start_day > days_in_month or end_day > days_in_month:
+                result["error"] = f"Joriy oyda {days_in_month} kun bor. Sanani tekshiring."
+                return result
+
+            ws = _get_or_create_month_sheet(sh)
+            telefon = ""
+            marked, skipped = _mark_range_in_sheet(
+                ws, ismi, filial, telefon, start_day, end_day, label, color
+            )
+            result["marked"] = marked
+            result["skipped"] = skipped
+        else:
+            # Oyaro diapazon: start_day (joriy oy) ... end_day (keyingi oy)
+            if start_day > days_in_month:
+                result["error"] = f"Joriy oyda {days_in_month} kun bor. Sanani tekshiring."
+                return result
+
+            # Keyingi oy sanasi
+            if now.month == 12:
+                next_month_date = now.replace(year=now.year + 1, month=1, day=1)
+            else:
+                next_month_date = now.replace(month=now.month + 1, day=1)
+            next_days_in_month = _cal.monthrange(next_month_date.year, next_month_date.month)[1]
+
+            if end_day > next_days_in_month:
+                result["error"] = f"Keyingi oyda {next_days_in_month} kun bor. Sanani tekshiring."
+                return result
+
+            ws_cur = _get_or_create_month_sheet(sh)
+            ws_next = _get_or_create_month_sheet(sh, target_date=next_month_date)
+            telefon = ""
+
+            cur_tag = f" ({OY_NOMLARI[now.month]})"
+            next_tag = f" ({OY_NOMLARI[next_month_date.month]})"
+
+            marked1, skipped1 = _mark_range_in_sheet(
+                ws_cur, ismi, filial, telefon, start_day, days_in_month, label, color, tag=cur_tag
+            )
+            marked2, skipped2 = _mark_range_in_sheet(
+                ws_next, ismi, filial, telefon, 1, end_day, label, color, tag=next_tag
+            )
+            result["marked"] = marked1 + marked2
+            result["skipped"] = skipped1 + skipped2
+
+        result["ok"] = True
+        print(f"[REST] {ismi} | {kind} | belgilandi: {result['marked']} | o'tkazildi: {result['skipped']}")
+        return result
+
+    except Exception as e:
+        print(f"[REST] mark_rest_days xato: {e}")
+        result["error"] = str(e)
+        return result
 

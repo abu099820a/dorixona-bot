@@ -24,6 +24,8 @@ from attendance import (
 ATT_PASSWORD = 106   # Parol kutish state
 ATT_CHANGE_FILIAL = 108
 ATT_CHANGE_LAVOZIM = 109
+ATT_DAYMARK_START = 110   # Dam/Javob olish: boshlanish sanasi kutiladi
+ATT_DAYMARK_END = 111     # Dam/Javob olish: tugash sanasi kutiladi
 ATT_PAROL = "офис"  # Universal parol
 
 # ─── Klaviaturalar ────────────────────────────────────────────────────────────
@@ -32,6 +34,7 @@ def att_main_keyboard():
     return ReplyKeyboardMarkup([
         ["✅ Keldi", "🚪 Ketdi"],
         ["🔄 Zamena"],
+        ["🛌 Dam olish kuni", "📄 Javob olish kuni"],
         ["🏥 Filial/Lavozim o'zgartirish"],
         ["⬅️ Orqaga"],
     ], resize_keyboard=True)
@@ -197,6 +200,18 @@ async def att_menu_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             parse_mode="Markdown",
         )
         return ATT_LOCATION
+
+    elif txt in ["🛌 Dam olish kuni", "📄 Javob olish kuni"]:
+        kind = "dam" if txt == "🛌 Dam olish kuni" else "javob"
+        label = "Dam olish" if kind == "dam" else "Javob olish"
+        ctx.user_data["daymark_kind"] = kind
+        await update.message.reply_text(
+            f"📅 *{label} kunlari*\n\n"
+            f"Boshlanish sanasini kiriting (kun raqami, masalan: 20):",
+            parse_mode="Markdown",
+            reply_markup=ReplyKeyboardMarkup([["⬅️ Orqaga"]], resize_keyboard=True),
+        )
+        return ATT_DAYMARK_START
 
     elif txt == "🏥 Filial/Lavozim o'zgartirish":
         farmatsevt = ctx.user_data.get("att_farmatsevt", {})
@@ -566,6 +581,84 @@ async def cmd_fix_latlon(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 
+async def att_daymark_start_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Dam olish / Javob olish: boshlanish sanasini qabul qiladi."""
+    txt = update.message.text.strip() if update.message and update.message.text else ""
+
+    if txt == "⬅️ Orqaga":
+        return await _show_att_menu(update, ctx)
+
+    if not txt.isdigit():
+        await update.message.reply_text(
+            "❌ Iltimos, kun raqamini kiriting (masalan: 20):",
+        )
+        return ATT_DAYMARK_START
+
+    ctx.user_data["daymark_start"] = int(txt)
+    await update.message.reply_text(
+        "📅 Tugash sanasini kiriting (kun raqami, masalan: 23):",
+    )
+    return ATT_DAYMARK_END
+
+
+async def att_daymark_end_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Dam olish / Javob olish: tugash sanasini qabul qiladi va jadvalga yozadi."""
+    txt = update.message.text.strip() if update.message and update.message.text else ""
+
+    if txt == "⬅️ Orqaga":
+        return await _show_att_menu(update, ctx)
+
+    if not txt.isdigit():
+        await update.message.reply_text(
+            "❌ Iltimos, kun raqamini kiriting (masalan: 23):",
+        )
+        return ATT_DAYMARK_END
+
+    start_day = ctx.user_data.get("daymark_start")
+    end_day = int(txt)
+    kind = ctx.user_data.get("daymark_kind", "dam")
+    label = "Dam olish" if kind == "dam" else "Javob olish"
+    farmatsevt = ctx.user_data.get("att_farmatsevt", {})
+
+    from attendance import mark_rest_days
+    res = mark_rest_days(
+        ismi=farmatsevt.get("ismi", ""),
+        filial=farmatsevt.get("filial", ""),
+        start_day=start_day,
+        end_day=end_day,
+        kind=kind,
+    )
+
+    if res.get("error"):
+        await update.message.reply_text(
+            f"❌ {res['error']}",
+            reply_markup=att_main_keyboard(),
+        )
+    elif res.get("ok"):
+        lines = [f"✅ *{label} belgilandi!*\n"]
+        if res["marked"]:
+            lines.append(f"📌 Belgilangan kunlar: {', '.join(map(str, res['marked']))}")
+        if res["skipped"]:
+            lines.append(
+                f"⚠️ O'tkazib yuborilgan kunlar (allaqachon to'ldirilgan): "
+                f"{', '.join(map(str, res['skipped']))}"
+            )
+        await update.message.reply_text(
+            "\n".join(lines),
+            parse_mode="Markdown",
+            reply_markup=att_main_keyboard(),
+        )
+    else:
+        await update.message.reply_text(
+            "❌ Xatolik yuz berdi. Administratorga murojaat qiling.",
+            reply_markup=att_main_keyboard(),
+        )
+
+    ctx.user_data.pop("daymark_start", None)
+    ctx.user_data.pop("daymark_kind", None)
+    return ATT_MENU
+
+
 def change_lavozim_keyboard():
     return ReplyKeyboardMarkup([
         ["👔 Farmatsevt"],
@@ -702,6 +795,12 @@ def get_att_states():
         ATT_ZAMENA_LOCATION: [
             MessageHandler(filters.LOCATION, att_zamena_location_handler),
             MessageHandler(filters.TEXT & ~filters.COMMAND, att_zamena_location_handler),
+        ],
+        ATT_DAYMARK_START: [
+            MessageHandler(filters.TEXT & ~filters.COMMAND, att_daymark_start_handler),
+        ],
+        ATT_DAYMARK_END: [
+            MessageHandler(filters.TEXT & ~filters.COMMAND, att_daymark_end_handler),
         ],
     }
 
