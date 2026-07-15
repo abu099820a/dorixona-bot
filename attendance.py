@@ -900,9 +900,9 @@ def update_farmatsevt_filial_lavozim(
 ) -> bool:
     """
     Farmatsevtning filial va lavozimini yangilaydi:
-    1. Eski filial qatorini o'chiradi
-    2. Yangi filialning oxiriga qo'shadi
-    3. Davomat jadvalida ham filialini yangilaydi
+    1. Eski qatorni o'chiradi
+    2. Yangi filialning oxirgi xodimidan KEYIN qo'shadi
+    3. Davomat jadvalida B ustunidagi filial nomini yangilaydi
     """
     try:
         client = get_sheets_client()
@@ -910,51 +910,52 @@ def update_farmatsevt_filial_lavozim(
         ws = sh.worksheet("Farmatsevtlar")
         all_values = ws.get_all_values()
 
-        # Eski qatorni topish
+        # Eski qatorni topish (B ustun = Ismi)
         old_row_num = None
+        tel = ""
         for i, row in enumerate(all_values):
             if i == 0:
                 continue
-            if str(row[1]).strip() == ismi.strip():
+            if len(row) > 1 and str(row[1]).strip() == ismi.strip():
                 old_row_num = i + 1  # 1-indexed
+                tel = str(row[2]).strip() if len(row) > 2 else ""
                 break
 
         if not old_row_num:
             print(f"[CHG] Farmatsevt topilmadi: {ismi}")
             return False
 
-        # Telefon saqlab olish
-        tel = str(all_values[old_row_num - 1][2]).strip() if len(all_values[old_row_num - 1]) > 2 else ""
-
         # Eski qatorni o'chirish
         ws.delete_rows(old_row_num)
-        print(f"[CHG] Eski qator o'chirildi: {ismi} | {old_filial}")
+        print(f"[CHG] Eski qator o'chirildi: {ismi} | {old_filial} | qator {old_row_num}")
 
         # Yangi filialning oxirgi qatorini topish
-        all_values = ws.get_all_values()  # Qayta o'qish
-        last_row = 1
+        all_values = ws.get_all_values()
+        last_row = len(all_values)  # default: eng oxiri
+        found_filial = False
+
         for i, row in enumerate(all_values):
             if i == 0:
                 continue
             if not row or not row[0]:
                 continue
             row_filial = str(row[0]).strip()
-            # Filial nomidan raqam ajratish
-            import re
+            # Filial raqamini solishtirish
             m1 = re.match(r"^(\d+)", row_filial)
             m2 = re.match(r"^(\d+)", new_filial)
             if m1 and m2 and m1.group(1) == m2.group(1):
-                last_row = i + 1
+                last_row = i + 1  # 1-indexed
+                found_filial = True
 
-        # Yangi qatorni qo'shish
         insert_row = last_row + 1
         ws.insert_row(
             [new_filial, ismi, tel, str(telegram_id), new_lavozim, str(lat), str(lon)],
-            index=insert_row
+            index=insert_row,
+            value_input_option="USER_ENTERED"
         )
-        print(f"[CHG] Yangi qator qo'shildi: {ismi} | {new_filial} | {new_lavozim}")
+        print(f"[CHG] Yangi qator qo'shildi: {ismi} | {new_filial} | qator {insert_row}")
 
-        # Davomat jadvalida filialini yangilash
+        # Davomat jadvalida B ustunidagi ismi qatorida A ustun (filial) yangilanadi
         try:
             att_sh = client.open_by_key(ATTENDANCE_SHEET_ID)
             ws_att = _get_or_create_month_sheet(att_sh)
@@ -976,3 +977,4 @@ def update_farmatsevt_filial_lavozim(
     except Exception as e:
         print(f"[CHG] Yangilash xato: {e}")
         return False
+
