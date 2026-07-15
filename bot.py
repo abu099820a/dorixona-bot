@@ -2,6 +2,7 @@ import math, io, re
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 import pandas as pd
 from register_handlers import register_enter, get_reg_states
+from salary_handlers import cmd_send_salaries, get_sal_states, SAL_WAIT_ZIP
 from attendance_handlers import (
     att_enter, get_att_states,
     ATT_PHONE, ATT_MENU, ATT_LOCATION,
@@ -742,8 +743,10 @@ def main():
             ],
             **get_att_states(),
             **get_reg_states(),
+            **get_sal_states(),
         },
-        fallbacks=[CommandHandler("start", start)],
+        fallbacks=[CommandHandler("start", start), MessageHandler(filters.ALL, start)],
+        allow_reentry=True,
     )
     app.add_handler(conv)
     print("✅ Vaksin Med bot ishga tushdi!")
@@ -754,6 +757,7 @@ def main():
     app.add_handler(CmdHandler("fill_codes", cmd_fill_codes))
     app.add_handler(CmdHandler("fix_latlon", cmd_fix_latlon))
     app.add_handler(CmdHandler("fill_phones", cmd_fill_phones))
+    app.add_handler(CmdHandler("send_salaries", cmd_send_salaries))
     app.run_polling()
 
 if __name__ == "__main__":
