@@ -206,15 +206,12 @@ async def att_menu_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     elif txt == "🔄 Zamena":
         ctx.user_data["att_zamena"] = True
-        filiallar = get_filiallar_list()
-        if not filiallar:
-            await update.message.reply_text("❌ Filiallar ro'yxati yuklanmadi.")
-            return ATT_MENU
-        ctx.user_data["att_filiallar"] = filiallar
         await update.message.reply_text(
-            "🔄 *Zamena rejimi*\nFilial raqamini tanlang:",
-            reply_markup=filial_inline_keyboard(filiallar),
+            "🔄 *Zamena rejimi*\n\n"
+            "Boradigan filial *raqamini* yozing:\n"
+            "_(masalan: 6)_",
             parse_mode="Markdown",
+            reply_markup=ReplyKeyboardMarkup([["⬅️ Orqaga"]], resize_keyboard=True),
         )
         return ATT_ZAMENA_FILIAL
 
@@ -576,7 +573,7 @@ def get_att_states():
             MessageHandler(filters.TEXT & ~filters.COMMAND, att_location_handler),
         ],
         ATT_ZAMENA_FILIAL: [
-            CallbackQueryHandler(att_zamena_filial_handler, pattern="^att_"),
+            MessageHandler(filters.TEXT & ~filters.COMMAND, att_zamena_filial_handler),
         ],
         ATT_ZAMENA_LOCATION: [
             MessageHandler(filters.LOCATION, att_zamena_location_handler),
