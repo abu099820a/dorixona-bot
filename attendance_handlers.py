@@ -342,26 +342,28 @@ async def att_location_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 # ─── 5. Zamena ───────────────────────────────────────────────────────────────
 
 async def att_zamena_filial_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
+    """Zamena uchun filial raqamini matn orqali qabul qiladi."""
+    txt = update.message.text.strip() if update.message and update.message.text else ""
 
-    if q.data == "att_back":
-        await q.message.reply_text("📋 Davomot menyu", reply_markup=att_main_keyboard())
-        return ATT_MENU
+    if txt == "⬅️ Orqaga":
+        return await _show_att_menu(update, ctx)
 
-    filial_no = q.data.replace("att_fil_", "")
-    filiallar = ctx.user_data.get("att_filiallar", [])
-    selected = next((f for f in filiallar if f["filial"] == filial_no), None)
+    filiallar = get_filiallar_list()
+    selected = next((f for f in filiallar if str(f["filial"]).strip() == txt.strip()), None)
 
     if not selected:
-        await q.message.reply_text("❌ Filial topilmadi.")
+        await update.message.reply_text(
+            f"❌ *{txt}* raqamli filial topilmadi.\n\nFilial raqamini qayta kiriting:",
+            parse_mode="Markdown",
+        )
         return ATT_ZAMENA_FILIAL
 
     ctx.user_data["att_zamena_filial"] = selected
     ctx.user_data["att_action"] = "keldi"
 
-    await q.message.reply_text(
-        f"🔄 *Zamena* — Filial #{filial_no}\n📍 Lokatsiyangizni yuboring:",
+    filial_name = selected.get("filial_name", txt)
+    await update.message.reply_text(
+        f"🔄 *Zamena* — #{txt} {filial_name}\n\n📍 Lokatsiyangizni yuboring:",
         reply_markup=location_keyboard("📍 Zamena lokatsiyamni yuborish"),
         parse_mode="Markdown",
     )
