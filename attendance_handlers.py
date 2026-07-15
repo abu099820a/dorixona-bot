@@ -22,6 +22,8 @@ from attendance import (
 )
 
 ATT_PASSWORD = 106   # Parol kutish state
+ATT_CHANGE_FILIAL = 108
+ATT_CHANGE_LAVOZIM = 109
 ATT_PAROL = "офис"  # Universal parol
 
 # ─── Klaviaturalar ────────────────────────────────────────────────────────────
@@ -197,12 +199,17 @@ async def att_menu_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return ATT_LOCATION
 
     elif txt == "🏥 Filial/Lavozim o'zgartirish":
+        farmatsevt = ctx.user_data.get("att_farmatsevt", {})
+        ctx.user_data["change_farmatsevt"] = farmatsevt
         await update.message.reply_text(
-            "🏥 *Filial/Lavozim o'zgartirish*\n\n🔧 Tez orada...",
+            f"🏥 *Filial/Lavozim o'zgartirish*\n\n"
+            f"👤 {farmatsevt.get('ismi', '')}\n"
+            f"🏪 Hozirgi filial: {farmatsevt.get('filial', '')}\n\n"
+            f"Yangi filial *raqamini* kiriting:\n_(masalan: 6)_",
             parse_mode="Markdown",
-            reply_markup=att_main_keyboard(),
+            reply_markup=ReplyKeyboardMarkup([["⬅️ Orqaga"]], resize_keyboard=True),
         )
-        return ATT_MENU
+        return ATT_CHANGE_FILIAL
 
     elif txt == "🔄 Zamena":
         ctx.user_data["att_zamena"] = True
@@ -546,6 +553,101 @@ async def cmd_fix_latlon(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await msg.edit_text(f"❌ Xato: {e}")
 
+
+
+async def att_change_filial_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Yangi filial raqamini qabul qiladi."""
+    txt = update.message.text.strip() if update.message and update.message.text else ""
+
+    if txt == "⬅️ Orqaga":
+        return await _show_att_menu(update, ctx)
+
+    # Filial mavjudligini tekshirish
+    from attendance import get_filiallar_list
+    filiallar = get_filiallar_list()
+    selected = next((f for f in filiallar if str(f["filial"]).strip() == txt.strip()), None)
+
+    if not selected:
+        await update.message.reply_text(
+            f"❌ *{txt}* raqamli filial topilmadi.\nQayta kiriting:",
+            parse_mode="Markdown",
+        )
+        return ATT_CHANGE_FILIAL
+
+    ctx.user_data["change_new_filial"] = selected
+    await update.message.reply_text(
+        f"🏪 *{selected.get('filial_name', txt)}*\n\n👔 Yangi lavozimingizni tanlang:",
+        parse_mode="Markdown",
+        reply_markup=change_lavozim_keyboard(),
+    )
+    return ATT_CHANGE_LAVOZIM
+
+
+async def att_change_lavozim_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Yangi lavozimni qabul qiladi va ma'lumotni yangilaydi."""
+    txt = update.message.text.strip() if update.message and update.message.text else ""
+
+    if txt == "⬅️ Orqaga":
+        farmatsevt = ctx.user_data.get("change_farmatsevt", {})
+        await update.message.reply_text(
+            f"Yangi filial raqamini kiriting:",
+            reply_markup=ReplyKeyboardMarkup([["⬅️ Orqaga"]], resize_keyboard=True),
+        )
+        return ATT_CHANGE_FILIAL
+
+    lavozim_map = {
+        "👔 Farmatsevt": "Farmatsevt",
+        "👔 Dorixona mudiri": "Dorixona mudiri",
+        "👔 Stajyor": "Stajyor",
+    }
+
+    if txt not in lavozim_map:
+        await update.message.reply_text(
+            "❌ Tugmalardan birini tanlang:",
+            reply_markup=change_lavozim_keyboard(),
+        )
+        return ATT_CHANGE_LAVOZIM
+
+    lavozim = lavozim_map[txt]
+    farmatsevt = ctx.user_data.get("change_farmatsevt", {})
+    new_filial = ctx.user_data.get("change_new_filial", {})
+    user_id = update.effective_user.id
+
+    # Sheets da yangilash
+    from attendance import update_farmatsevt_filial_lavozim
+    ok = update_farmatsevt_filial_lavozim(
+        ismi=farmatsevt.get("ismi", ""),
+        old_filial=farmatsevt.get("filial", ""),
+        new_filial=new_filial.get("filial_name", ""),
+        new_lavozim=lavozim,
+        lat=new_filial.get("lat", 0),
+        lon=new_filial.get("lon", 0),
+        telegram_id=user_id,
+    )
+
+    if ok:
+        # Sessiyani yangilash
+        ctx.user_data["att_farmatsevt"] = {
+            **farmatsevt,
+            "filial": new_filial.get("filial_name", ""),
+            "lat": new_filial.get("lat", 0),
+            "lon": new_filial.get("lon", 0),
+        }
+        await update.message.reply_text(
+            f"✅ *Ma'lumotlar yangilandi!*\n\n"
+            f"👤 {farmatsevt.get('ismi', '')}\n"
+            f"🏪 Yangi filial: {new_filial.get('filial_name', '')}\n"
+            f"👔 Lavozim: {lavozim}",
+            parse_mode="Markdown",
+            reply_markup=att_main_keyboard(),
+        )
+    else:
+        await update.message.reply_text(
+            "❌ Xatolik. Admin bilan bog'laning.",
+            reply_markup=att_main_keyboard(),
+        )
+    return ATT_MENU
+
 # ─── Handler ro'yxati ─────────────────────────────────────────────────────────
 
 def get_att_states():
@@ -566,6 +668,12 @@ def get_att_states():
         ],
         ATT_ZAMENA_FILIAL: [
             MessageHandler(filters.TEXT & ~filters.COMMAND, att_zamena_filial_handler),
+        ],
+        ATT_CHANGE_FILIAL: [
+            MessageHandler(filters.TEXT & ~filters.COMMAND, att_change_filial_handler),
+        ],
+        ATT_CHANGE_LAVOZIM: [
+            MessageHandler(filters.TEXT & ~filters.COMMAND, att_change_lavozim_handler),
         ],
         ATT_ZAMENA_LOCATION: [
             MessageHandler(filters.LOCATION, att_zamena_location_handler),

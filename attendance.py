@@ -892,3 +892,87 @@ def get_today_times(ismi: str, now=None) -> dict:
     except Exception as e:
         print(f"[ATT] get_today_times xato: {e}")
         return {"keldi": "", "ketdi": ""}
+
+
+def update_farmatsevt_filial_lavozim(
+    ismi: str, old_filial: str, new_filial: str,
+    new_lavozim: str, lat: float, lon: float, telegram_id: int
+) -> bool:
+    """
+    Farmatsevtning filial va lavozimini yangilaydi:
+    1. Eski filial qatorini o'chiradi
+    2. Yangi filialning oxiriga qo'shadi
+    3. Davomat jadvalida ham filialini yangilaydi
+    """
+    try:
+        client = get_sheets_client()
+        sh = client.open_by_key(PHARMACY_SHEET_ID)
+        ws = sh.worksheet("Farmatsevtlar")
+        all_values = ws.get_all_values()
+
+        # Eski qatorni topish
+        old_row_num = None
+        for i, row in enumerate(all_values):
+            if i == 0:
+                continue
+            if str(row[1]).strip() == ismi.strip():
+                old_row_num = i + 1  # 1-indexed
+                break
+
+        if not old_row_num:
+            print(f"[CHG] Farmatsevt topilmadi: {ismi}")
+            return False
+
+        # Telefon saqlab olish
+        tel = str(all_values[old_row_num - 1][2]).strip() if len(all_values[old_row_num - 1]) > 2 else ""
+
+        # Eski qatorni o'chirish
+        ws.delete_rows(old_row_num)
+        print(f"[CHG] Eski qator o'chirildi: {ismi} | {old_filial}")
+
+        # Yangi filialning oxirgi qatorini topish
+        all_values = ws.get_all_values()  # Qayta o'qish
+        last_row = 1
+        for i, row in enumerate(all_values):
+            if i == 0:
+                continue
+            if not row or not row[0]:
+                continue
+            row_filial = str(row[0]).strip()
+            # Filial nomidan raqam ajratish
+            import re
+            m1 = re.match(r"^(\d+)", row_filial)
+            m2 = re.match(r"^(\d+)", new_filial)
+            if m1 and m2 and m1.group(1) == m2.group(1):
+                last_row = i + 1
+
+        # Yangi qatorni qo'shish
+        insert_row = last_row + 1
+        ws.insert_row(
+            [new_filial, ismi, tel, str(telegram_id), new_lavozim, str(lat), str(lon)],
+            index=insert_row
+        )
+        print(f"[CHG] Yangi qator qo'shildi: {ismi} | {new_filial} | {new_lavozim}")
+
+        # Davomat jadvalida filialini yangilash
+        try:
+            att_sh = client.open_by_key(ATTENDANCE_SHEET_ID)
+            ws_att = _get_or_create_month_sheet(att_sh)
+            att_values = ws_att.get_all_values()
+            for i, row in enumerate(att_values):
+                if i < 2:
+                    continue
+                if not row or len(row) < 2:
+                    continue
+                if str(row[1]).strip() == ismi.strip():
+                    ws_att.update_cell(i + 1, 1, new_filial)
+                    print(f"[CHG] Davomat yangilandi: {ismi} | {new_filial}")
+                    break
+        except Exception as e:
+            print(f"[CHG] Davomat yangilash xato: {e}")
+
+        return True
+
+    except Exception as e:
+        print(f"[CHG] Yangilash xato: {e}")
+        return False
