@@ -582,14 +582,14 @@ async def att_change_filial_handler(update: Update, ctx: ContextTypes.DEFAULT_TY
         return await _show_att_menu(update, ctx)
 
     # Filial mavjudligini tekshirish
-    from attendance import get_filiallar_list
-    filiallar = get_filiallar_list()
-    # Filial raqami bo'yicha qidirish: "14" → filial_no="14"
-    selected = None
-    for f in filiallar:
-        if str(f["filial"]).strip() == txt.strip():
-            selected = f
-            break
+    # MUHIM: get_filiallar_list() o'rniga get_filial_info() ishlatiladi, chunki u
+    # Farmatsevtlar jadvalida allaqachon mavjud bo'lgan "RAQAM - NOM" formatidagi
+    # to'liq filial nomini qaytaradi (masalan "1 - ТАШМИ-1"). get_filiallar_list()
+    # esa faqat raqamsiz nom qaytargani uchun keyingi bosqichda filial guruhini
+    # aniqlash (raqam solishtirish) ishlamay qolib, xodim doim jadval oxiriga
+    # tushib ketishi yoki eski joyida qolib ketishiga sabab bo'lgan.
+    from register_handlers import get_filial_info
+    selected = get_filial_info(txt.strip())
 
     if not selected:
         await update.message.reply_text(
@@ -600,7 +600,7 @@ async def att_change_filial_handler(update: Update, ctx: ContextTypes.DEFAULT_TY
 
     ctx.user_data["change_new_filial"] = selected
     await update.message.reply_text(
-        f"🏪 *{selected.get('filial_name', txt)}*\n\n👔 Yangi lavozimingizni tanlang:",
+        f"🏪 *{selected.get('filial_nomi', txt)}*\n\n👔 Yangi lavozimingizni tanlang:",
         parse_mode="Markdown",
         reply_markup=change_lavozim_keyboard(),
     )
@@ -642,7 +642,7 @@ async def att_change_lavozim_handler(update: Update, ctx: ContextTypes.DEFAULT_T
     ok = update_farmatsevt_filial_lavozim(
         ismi=farmatsevt.get("ismi", ""),
         old_filial=farmatsevt.get("filial", ""),
-        new_filial=new_filial.get("filial_name", ""),
+        new_filial=new_filial.get("filial_nomi", ""),
         new_lavozim=lavozim,
         lat=new_filial.get("lat", 0),
         lon=new_filial.get("lon", 0),
@@ -653,14 +653,14 @@ async def att_change_lavozim_handler(update: Update, ctx: ContextTypes.DEFAULT_T
         # Sessiyani yangilash
         ctx.user_data["att_farmatsevt"] = {
             **farmatsevt,
-            "filial": new_filial.get("filial_name", ""),
+            "filial": new_filial.get("filial_nomi", ""),
             "lat": new_filial.get("lat", 0),
             "lon": new_filial.get("lon", 0),
         }
         await update.message.reply_text(
             f"✅ *Ma'lumotlar yangilandi!*\n\n"
             f"👤 {farmatsevt.get('ismi', '')}\n"
-            f"🏪 Yangi filial: {new_filial.get('filial_name', '')}\n"
+            f"🏪 Yangi filial: {new_filial.get('filial_nomi', '')}\n"
             f"👔 Lavozim: {lavozim}",
             parse_mode="Markdown",
             reply_markup=att_main_keyboard(),

@@ -955,20 +955,54 @@ def update_farmatsevt_filial_lavozim(
         )
         print(f"[CHG] Yangi qator qo'shildi: {ismi} | {new_filial} | qator {insert_row}")
 
-        # Davomat jadvalida B ustunidagi ismi qatorida A ustun (filial) yangilanadi
+        # Davomat jadvalida xodimning qatori topilib, ESKI joydan olib
+        # tashlanadi va YANGI filial guruhi ostiga ko'chiriladi (nafaqat A
+        # ustunidagi matn almashtiriladi — aks holda xodim eski filial
+        # bo'limida qolib, faqat nomi o'zgarib ko'rinadi).
         try:
             att_sh = client.open_by_key(ATTENDANCE_SHEET_ID)
             ws_att = _get_or_create_month_sheet(att_sh)
             att_values = ws_att.get_all_values()
+
+            old_att_row_num = None
+            row_data = None
             for i, row in enumerate(att_values):
                 if i < 2:
                     continue
                 if not row or len(row) < 2:
                     continue
                 if str(row[1]).strip() == ismi.strip():
-                    ws_att.update_cell(i + 1, 1, new_filial)
-                    print(f"[CHG] Davomat yangilandi: {ismi} | {new_filial}")
+                    old_att_row_num = i + 1  # 1-indexed
+                    row_data = list(row)
                     break
+
+            if old_att_row_num and row_data is not None:
+                # Filial ustunini (A) yangilash
+                row_data[0] = new_filial
+
+                # Eski qatorni o'chirish
+                ws_att.delete_rows(old_att_row_num)
+                print(f"[CHG] Davomat: eski qator o'chirildi | {ismi} | qator {old_att_row_num}")
+
+                # Yangi filial guruhining oxirgi qatorini topish (raqam bo'yicha)
+                att_values = ws_att.get_all_values()
+                new_last_row = len(att_values)
+                m_new = re.match(r"^(\d+)", new_filial)
+
+                for i, row in enumerate(att_values):
+                    if i < 2:
+                        continue
+                    if not row or not row[0]:
+                        continue
+                    m_row = re.match(r"^(\d+)", str(row[0]).strip())
+                    if m_row and m_new and m_row.group(1) == m_new.group(1):
+                        new_last_row = i + 1
+
+                insert_row = new_last_row + 1
+                ws_att.insert_row(row_data, index=insert_row, value_input_option="USER_ENTERED")
+                print(f"[CHG] Davomat: yangi qator qo'shildi | {ismi} | {new_filial} | qator {insert_row}")
+            else:
+                print(f"[CHG] Davomat: {ismi} topilmadi")
         except Exception as e:
             print(f"[CHG] Davomat yangilash xato: {e}")
 
