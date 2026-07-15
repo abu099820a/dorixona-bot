@@ -346,7 +346,17 @@ async def att_zamena_filial_handler(update: Update, ctx: ContextTypes.DEFAULT_TY
         return await _show_att_menu(update, ctx)
 
     filiallar = get_filiallar_list()
-    selected = next((f for f in filiallar if str(f["filial"]).strip() == txt.strip()), None)
+    selected = None
+    for f in filiallar:
+        fil_no = str(f["filial"]).strip()
+        import re as _re
+        m = _re.match(r"^(\d+)", fil_no)
+        if m and m.group(1) == txt.strip():
+            selected = f
+            break
+        if fil_no == txt.strip():
+            selected = f
+            break
 
     if not selected:
         await update.message.reply_text(
@@ -565,7 +575,18 @@ async def att_change_filial_handler(update: Update, ctx: ContextTypes.DEFAULT_TY
     # Filial mavjudligini tekshirish
     from attendance import get_filiallar_list
     filiallar = get_filiallar_list()
-    selected = next((f for f in filiallar if str(f["filial"]).strip() == txt.strip()), None)
+    # Raqam bo'yicha qidirish (to'liq nom yoki faqat raqam)
+    selected = None
+    for f in filiallar:
+        fil_no = str(f["filial"]).strip()
+        import re as _re
+        m = _re.match(r"^(\d+)", fil_no)
+        if m and m.group(1) == txt.strip():
+            selected = f
+            break
+        if fil_no == txt.strip():
+            selected = f
+            break
 
     if not selected:
         await update.message.reply_text(
