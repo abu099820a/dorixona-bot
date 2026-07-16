@@ -861,6 +861,55 @@ def sync_pharmacists():
     return results
 
 
+def get_today_status(ismi: str, filial: str = "", now=None) -> dict:
+    """
+    Berilgan sana (odatda bugun) uchun farmatsevtning Keldi/Ketdi vaqtlarini
+    to'g'ridan-to'g'ri JADVALDAN o'qib qaytaradi.
+
+    MUHIM: bu funksiya bot qayta ishga tushgan holatlarda ham (masalan
+    Railway redeploy) ishonchli ishlaydi, chunki ctx.user_data (xotira)
+    ga emas, doim Google Sheets'dagi haqiqiy ma'lumotga tayanadi. Avvalgi
+    versiyada Keldi/Ketdi tekshiruvlari faqat xotiradagi vaqt belgilariga
+    tayanar edi — bot qayta ishga tushganda bu ma'lumot yo'qolib, xodim
+    "Keldi"ni bosib bo'lgan bo'lsa ham bot "Avval Keldi ni bosing!" deb
+    noto'g'ri xabar berardi.
+
+    Qaytaradi: {"keldi": "HH:MM"|None, "ketdi": "HH:MM"|None}
+    Zamena formatidagi "14:32 (6)" kabi qiymatlardan ham vaqt qismi
+    to'g'ri ajratib olinadi.
+    """
+    try:
+        if now is None:
+            now = datetime.now(UZ_TZ)
+        client = get_sheets_client()
+        sh = client.open_by_key(ATTENDANCE_SHEET_ID)
+        ws = _get_or_create_month_sheet(sh, target_date=now)
+
+        day = now.day
+        keldi_col = date_to_col(day)
+        ketdi_col = keldi_col + 1
+
+        row_num = _get_farmatsevt_row(ws, ismi, filial)
+        if row_num == -1:
+            return {"keldi": None, "ketdi": None}
+
+        row_values = ws.row_values(row_num)
+        keldi_val = row_values[keldi_col - 1] if len(row_values) >= keldi_col else ""
+        ketdi_val = row_values[ketdi_col - 1] if len(row_values) >= ketdi_col else ""
+
+        def _extract_time(v):
+            v = str(v).strip()
+            if not v:
+                return None
+            m = re.match(r"^(\d{1,2}:\d{2})", v)
+            return m.group(1) if m else v
+
+        return {"keldi": _extract_time(keldi_val), "ketdi": _extract_time(ketdi_val)}
+    except Exception as e:
+        print(f"[ATT] get_today_status xato: {e}")
+        return {"keldi": None, "ketdi": None}
+
+
 def check_today_keldi(ismi: str) -> bool:
     """
     Bugun farmatsevtning keldi vaqti jadvalda yozilganmi tekshiradi.

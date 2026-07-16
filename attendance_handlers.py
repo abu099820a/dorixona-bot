@@ -278,14 +278,48 @@ async def att_location_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     now_str = now.strftime("%H:%M")
     now_ts = now.timestamp()
 
-    # ⏰ Vaqt cheklovi tekshiruvi
-    last_keldi = ctx.user_data.get("last_keldi_ts")
-    last_ketdi = ctx.user_data.get("last_ketdi_ts")
+    # Tungi smena: 00:00-05:00 da ketdi bosilsa, bu kechagi ish kuniga tegishli
+    check_date = now
+    if action == "ketdi" and now.hour < 5:
+        check_date = now - timedelta(days=1)
+
+    # ⏰ JADVALDAN tekshirish — ISHONCHLI MANBA.
+    # MUHIM: avvalgi versiyada bu tekshiruv faqat ctx.user_data (bot
+    # xotirasi) ga tayanar edi. Bot qayta ishga tushganda (Railway
+    # redeploy, xato bo'lib qayta ko'tarilishi va h.k.) xotiradagi bu
+    # ma'lumot yo'qolib ketadi — natijada xodim "Keldi"ni allaqachon
+    # bosgan (jadvalda yozilgan) bo'lsa ham, bot "Avval Keldi ni bosing!"
+    # deb NOTO'G'RI xabar berardi (aynan shu — Nigora Eshmirzayevada
+    # ko'rilgan muammo). Endi tekshiruv har doim to'g'ridan-to'g'ri
+    # Google Sheets'dagi haqiqiy Keldi/Ketdi qiymatidan olinadi.
+    from attendance import get_today_status
+    sheet_today = get_today_status(
+        farmatsevt.get("ismi", ""), farmatsevt.get("filial", ""), now=check_date
+    )
+    sheet_keldi_time = sheet_today.get("keldi")   # "HH:MM" | None
+    sheet_ketdi_time = sheet_today.get("ketdi")   # "HH:MM" | None
+
+    last_keldi_ts = ctx.user_data.get("last_keldi_ts")
+    last_ketdi_ts = ctx.user_data.get("last_ketdi_ts")
+
+    keldi_done = bool(sheet_keldi_time) or bool(last_keldi_ts)
+    ketdi_done = bool(sheet_ketdi_time) or bool(last_ketdi_ts)
+    is_late_checkout = False
 
     if action == "keldi":
-        # Ketdidan keyin 7 soat o'tganmi?
-        if last_ketdi and (now_ts - last_ketdi) < 7 * 3600:
-            qolgan_min = int((7 * 3600 - (now_ts - last_ketdi)) / 60)
+        # Ketdidan keyin 7 soat o'tganmi? Iloji boricha jadvaldagi haqiqiy
+        # ketdi vaqtidan hisoblaymiz (xotiradagi vaqt bo'lmasa ham ishlaydi).
+        ketdi_ts_for_cooldown = last_ketdi_ts
+        if not ketdi_ts_for_cooldown and sheet_ketdi_time:
+            try:
+                h, m = map(int, sheet_ketdi_time.split(":"))
+                ketdi_dt = check_date.replace(hour=h, minute=m, second=0, microsecond=0)
+                ketdi_ts_for_cooldown = ketdi_dt.timestamp()
+            except Exception:
+                ketdi_ts_for_cooldown = None
+
+        if ketdi_ts_for_cooldown and (now_ts - ketdi_ts_for_cooldown) < 7 * 3600:
+            qolgan_min = int((7 * 3600 - (now_ts - ketdi_ts_for_cooldown)) / 60)
             soat = qolgan_min // 60
             daqiqa = qolgan_min % 60
             await update.message.reply_text(
@@ -296,17 +330,10 @@ async def att_location_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             )
             return ATT_MENU
         # Ketdi bosilmay yana keldi bosyaptimi?
-        if last_keldi and not last_ketdi:
+        if keldi_done and not ketdi_done:
             await update.message.reply_text(
                 f"❌ Avval *Ketdi* ni bosing!\n"
-                f"Keldi vaqti: *{ctx.user_data.get('last_keldi_str', '')}*",
-                parse_mode="Markdown",
-                reply_markup=att_main_keyboard(),
-            )
-            return ATT_MENU
-        if last_keldi and last_ketdi and last_keldi > last_ketdi:
-            await update.message.reply_text(
-                f"❌ Avval *Ketdi* ni bosing!",
+                f"Keldi vaqti: *{sheet_keldi_time or ctx.user_data.get('last_keldi_str', '')}*",
                 parse_mode="Markdown",
                 reply_markup=att_main_keyboard(),
             )
@@ -314,19 +341,36 @@ async def att_location_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     elif action == "ketdi":
         # Keldi bosilmay ketdi bosyaptimi?
-        if not last_keldi:
-            await update.message.reply_text(
-                "❌ Avval *Keldi* ni bosing!",
-                parse_mode="Markdown",
-                reply_markup=att_main_keyboard(),
+        if not keldi_done:
+            # Ehtimol xodim KECHA Keldi bosgan-u, Ketdi bosishni kechiktirib
+            # yuborgan (masalan ertalab soat 5 dan keyin bosayotgan bo'lsa,
+            # tungi smena qoidasi ishlamaydi). Shu sababli KECHAGI kunni ham
+            # tekshiramiz — agar u yerda "ochiq" (Keldi bor, Ketdi yo'q)
+            # qator topilsa, Ketdi o'sha kunga yoziladi.
+            fallback_date = check_date - timedelta(days=1)
+            fallback_status = get_today_status(
+                farmatsevt.get("ismi", ""), farmatsevt.get("filial", ""), now=fallback_date
             )
-            return ATT_MENU
+            if fallback_status.get("keldi") and not fallback_status.get("ketdi"):
+                check_date = fallback_date
+                sheet_keldi_time = fallback_status.get("keldi")
+                sheet_ketdi_time = fallback_status.get("ketdi")
+                keldi_done = True
+                ketdi_done = False
+                is_late_checkout = True
+            else:
+                await update.message.reply_text(
+                    "❌ Avval *Keldi* ni bosing!",
+                    parse_mode="Markdown",
+                    reply_markup=att_main_keyboard(),
+                )
+                return ATT_MENU
 
-    # Tungi smena: 00:00-05:00 da ketdi → kechagi sana ga yozish
-    write_now = now
-    if action == "ketdi" and now.hour < 5:
-        from datetime import timedelta
-        write_now = now - timedelta(days=1)
+    # write_time sifatida check_date ishlatiladi — bu tungi smena qoidasini
+    # ("00:00-05:00 da ketdi → kechagi kun") va yuqoridagi kechikkan-ketdi
+    # holatini (ochiq qolgan kechagi Keldi topilsa) ikkalasini ham to'g'ri
+    # hisobga oladi.
+    write_now = check_date
 
     ok = write_attendance(farmatsevt, action, zamena=False, write_time=write_now)
 
@@ -339,11 +383,18 @@ async def att_location_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             ctx.user_data["last_ketdi_ts"] = now_ts
 
         emoji = "✅" if action == "keldi" else "🚪"
+        late_note = ""
+        if is_late_checkout:
+            late_note = (
+                f"\n⚠️ Bu *{write_now.strftime('%d.%m')}* kunidagi ochiq qolgan "
+                f"Keldi uchun Ketdi sifatida belgilandi (kechikkan ketdi)."
+            )
         await update.message.reply_text(
             f"{emoji} *{farmatsevt['ismi']}* — {action}!\n"
             f"🕐 Vaqt: {now_str}\n"
             f"🏪 Filial: {farmatsevt['filial']}\n"
-            f"📏 Masofa: {dist:.0f} m",
+            f"📏 Masofa: {dist:.0f} m"
+            f"{late_note}",
             parse_mode="Markdown",
             reply_markup=att_main_keyboard(),
         )
