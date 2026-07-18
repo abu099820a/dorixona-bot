@@ -1799,8 +1799,7 @@ async def _broadcast_send(update, ctx, ids: list, text: str) -> tuple:
         try:
             await ctx.bot.send_message(
                 chat_id=int(tid),
-                text=f"📩 *Murojaat*\n👤 Kimdan: {sender_name}\n\n{text}",
-                parse_mode="Markdown",
+                text=f"📩 Murojaat\n👤 Kimdan: {sender_name}\n\n{text}",
             )
             sent += 1
         except Exception as e:
