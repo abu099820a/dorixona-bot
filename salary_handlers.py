@@ -54,6 +54,7 @@ SALARY_PHONE_WAIT = 504
 FIRM_WAIT_ZIP = 505
 FIRM_REG_NAME = 506
 FIRM_REG_PHONE = 507
+ADMIN_FIRM_LOOKUP = 508
 
 
 # ─── Google Sheets ────────────────────────────────────────────────────────────
@@ -596,7 +597,7 @@ def save_firma_file(firma_nomi: str, file_id: str, file_name: str) -> bool:
         all_values = ws.get_all_values()
 
         for i, row in enumerate(all_values[1:], start=2):
-            if row and str(row[0]).strip().upper() == firma_nomi.strip().upper():
+            if row and _norm_firma_nomi(row[0]) == _norm_firma_nomi(firma_nomi):
                 ws.update_cell(i, 4, file_id)
                 ws.update_cell(i, 5, file_name)
                 return True
@@ -628,6 +629,40 @@ def get_firma_file_by_telegram_id(telegram_id) -> dict | None:
         return None
     except Exception as e:
         logger.error(f"[FIRMS] get_firma_file_by_telegram_id xato: {e}")
+        return None
+
+
+def _norm_firma_nomi(s: str) -> str:
+    """
+    Firma nomini solishtirish uchun "normallashtiradi": bosh/oxiridagi
+    va ortiqcha ichki bo'shliqlarni, ko'rinmas belgilarni (NBSP va h.k.)
+    olib tashlaydi, katta harfga o'tkazadi. Ikkita jadvaldagi bir xil
+    nom turlicha bo'shliq/formatlanish tufayli mos kelmay qolishining
+    oldini oladi.
+    """
+    s = str(s)
+    s = re.sub(r"[\s\u00a0\u200b\u200c\u200d\ufeff]+", " ", s)
+    return s.strip().upper()
+
+
+def get_firma_file_by_name(firma_nomi: str) -> dict | None:
+    """Berilgan firma NOMI bo'yicha "Firmalar" varag'idan saqlangan faylni topadi (admin uchun)."""
+    try:
+        from register_handlers import _get_firmalar_ws
+        ws = _get_firmalar_ws()
+        records = ws.get_all_records()
+        target = _norm_firma_nomi(firma_nomi)
+
+        for row in records:
+            if _norm_firma_nomi(row.get("Firma nomi", "")) == target:
+                return {
+                    "firma_nomi": str(row.get("Firma nomi", "")).strip(),
+                    "file_id": str(row.get("FileID", "")).strip(),
+                    "file_name": str(row.get("FileName", "")).strip(),
+                }
+        return None
+    except Exception as e:
+        logger.error(f"[FIRMS] get_firma_file_by_name xato: {e}")
         return None
 
 
@@ -664,9 +699,10 @@ def get_firm_summa(firma_nomi: str) -> dict | None:
         records = ws.get_all_records()
         print(f"[FIRMS] Qidirilayotgan firma: '{firma_nomi}' | Jadvaldagi firmalar: "
               f"{[str(r.get('Firma nomi','')) for r in records]}")
+        target = _norm_firma_nomi(firma_nomi)
         for row in records:
             firma = str(row.get("Firma nomi", "")).strip()
-            if firma.upper() == firma_nomi.strip().upper():
+            if _norm_firma_nomi(firma) == target:
                 print(f"[FIRMS] MOS TOPILDI: qator={row}")
                 return {
                     "shartnoma": str(row.get("Shartnoma raqami", "")).strip(),
@@ -726,15 +762,11 @@ def payments_keyboard(language: str = "uz"):
     from telegram import ReplyKeyboardMarkup
     if language == "ru":
         return ReplyKeyboardMarkup([
-            ["📦 Отправить ZIP файлы"],
-            ["🏢 Отчёт по оплатам фирмам"],
             ["📤 Отправить файлы фирмам"],
             ["📊 Получить мой отчёт"],
             ["⬅️ Назад"],
         ], resize_keyboard=True)
     return ReplyKeyboardMarkup([
-        ["📦 ZIP orqali yuborish"],
-        ["🏢 Firmalarga to'lovlar hisoboti"],
         ["📤 Firmalarga fayl yuborish"],
         ["📊 Hisobotimni olish"],
         ["⬅️ Orqaga"],
@@ -758,8 +790,6 @@ async def payments_menu_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     txt = update.message.text.strip() if update.message and update.message.text else ""
 
     back_txt = "⬅️ Назад" if language == "ru" else "⬅️ Orqaga"
-    zip_txt = "📦 Отправить ZIP файлы" if language == "ru" else "📦 ZIP orqali yuborish"
-    firms_txt = "🏢 Отчёт по оплатам фирмам" if language == "ru" else "🏢 Firmalarga to'lovlar hisoboti"
     firm_send_txt = "📤 Отправить файлы фирмам" if language == "ru" else "📤 Firmalarga fayl yuborish"
     my_report_txt = "📊 Получить мой отчёт" if language == "ru" else "📊 Hisobotimni olish"
 
@@ -772,25 +802,6 @@ async def payments_menu_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         )
         return REPORTS_MENU
 
-    elif txt == zip_txt:
-        if update.effective_user.id not in ADMIN_IDS:
-            await update.message.reply_text(
-                "❌ Bu bo'lim faqat administrator uchun.",
-                reply_markup=payments_keyboard(language),
-            )
-            return PAYMENTS_MENU
-        return await cmd_send_salaries(update, ctx)
-
-    elif txt == firms_txt:
-        if ctx.user_data.get("payments_auth"):
-            return await _show_firms_report(update, ctx)
-        from telegram import ReplyKeyboardMarkup
-        await update.message.reply_text(
-            "🔐 Parolni kiriting:" if language == "uz" else "🔐 Введите пароль:",
-            reply_markup=ReplyKeyboardMarkup([[back_txt]], resize_keyboard=True),
-        )
-        return PAYMENTS_PASSWORD
-
     elif txt == firm_send_txt:
         if update.effective_user.id not in ADMIN_IDS:
             await update.message.reply_text(
@@ -801,6 +812,15 @@ async def payments_menu_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return await cmd_send_firm_files(update, ctx)
 
     elif txt == my_report_txt:
+        if update.effective_user.id in ADMIN_IDS:
+            # Admin uchun: firma nomini so'raymiz, so'ng shu firmaning
+            # saqlangan faylini va to'lovini topib beramiz
+            from telegram import ReplyKeyboardMarkup
+            await update.message.reply_text(
+                "🏢 Qaysi firma? Firma nomini kiriting:",
+                reply_markup=ReplyKeyboardMarkup([[back_txt]], resize_keyboard=True),
+            )
+            return ADMIN_FIRM_LOOKUP
         await get_my_report_handler(update, ctx)
         return PAYMENTS_MENU
 
@@ -1479,11 +1499,38 @@ async def _send_firm_direct_report(update: Update, ctx: ContextTypes.DEFAULT_TYP
     return REPORTS_MENU
 
 
+async def admin_firm_lookup_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Admin firma nomini kiritadi — bot shu firmaning faylini va to'lovini topib beradi."""
+    language = ctx.user_data.get("lang", "uz")
+    back_txt = "⬅️ Назад" if language == "ru" else "⬅️ Orqaga"
+    txt = update.message.text.strip() if update.message.text else ""
+
+    if txt == back_txt:
+        await update.message.reply_text(
+            "📊 *Отчёт va to'lovlar*\n\nBo'limni tanlang:" if language == "uz"
+            else "📊 *Отчёт и оплаты*\n\nВыберите раздел:",
+            parse_mode="Markdown",
+            reply_markup=payments_keyboard(language),
+        )
+        return PAYMENTS_MENU
+
+    info = await run_read(get_firma_file_by_name, txt)
+    if not info:
+        await update.message.reply_text(
+            f"❌ *{txt}* nomli firma \"Firmalar\" ro'yxatida topilmadi.\n\nQayta kiriting:",
+            parse_mode="Markdown",
+        )
+        return ADMIN_FIRM_LOOKUP
+
+    await _send_firm_direct_report(update, ctx, info)
+    return PAYMENTS_MENU
+
+
 async def get_my_report_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """
     Firma vakili "📊 Hisobotimni olish" tugmasini bosganda — uning
-    TelegramID'si bo'yicha "Firmalar" varag'idan saqlangan fayl (file_id)
-    topilib, ADMIN aralashuvisiz to'g'ridan-to'g'ri yuboriladi.
+    TelegramID'si bo'yicha faylni VA shu oylik to'lov summasini yuboradi
+    (xuddi "Отчёт va to'lovlar" to'g'ridan-to'g'ri bosilganidek).
     """
     language = ctx.user_data.get("lang", "uz")
     user_id = update.effective_user.id
@@ -1500,27 +1547,7 @@ async def get_my_report_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    if not info.get("file_id"):
-        await update.message.reply_text(
-            f"📭 *{info.get('firma_nomi', '')}*\n\n"
-            "Sizning hisobotingiz hali yuklanmagan. Birozdan so'ng qayta "
-            "urinib ko'ring yoki administratorga murojaat qiling."
-            if language == "uz" else
-            f"📭 *{info.get('firma_nomi', '')}*\n\nВаш отчёт ещё не загружен.",
-            parse_mode="Markdown",
-        )
-        return
-
-    try:
-        await ctx.bot.send_document(
-            chat_id=update.effective_chat.id,
-            document=info["file_id"],
-            filename=info.get("file_name") or "hisobot.xlsx",
-            caption=f"📊 {info.get('firma_nomi', '')} — hisobot",
-        )
-    except Exception as e:
-        logger.error(f"[FIRMS] Hisobot yuborish xato: {e}")
-        await update.message.reply_text("❌ Faylni yuborishda xatolik yuz berdi.")
+    await _send_firm_direct_report(update, ctx, info)
 
 
 # ─── States ───────────────────────────────────────────────────────────────────
@@ -1544,5 +1571,8 @@ def get_sal_states():
         FIRM_WAIT_ZIP: [
             MessageHandler(filters.Document.ALL, firm_receive_zip),
             MessageHandler(filters.TEXT & ~filters.COMMAND, firm_zip_cancel),
+        ],
+        ADMIN_FIRM_LOOKUP: [
+            MessageHandler(filters.TEXT & ~filters.COMMAND, admin_firm_lookup_handler),
         ],
     }

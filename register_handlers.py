@@ -582,6 +582,12 @@ def _get_firmalar_ws():
         return ws
 
 
+def _norm_firma_nomi(s: str) -> str:
+    """Firma nomini solishtirish uchun normallashtiradi (bo'shliq/ko'rinmas belgilar)."""
+    s = re.sub(r"[\s\u00a0\u200b\u200c\u200d\ufeff]+", " ", str(s))
+    return s.strip().upper()
+
+
 def save_firma(firma_nomi: str, phone: str, user_id: int) -> bool:
     """Firmani "Firmalar" varag'iga saqlaydi (yangi qator, yoki mavjud bo'lsa yangilaydi)."""
     try:
@@ -589,7 +595,7 @@ def save_firma(firma_nomi: str, phone: str, user_id: int) -> bool:
         all_values = ws.get_all_values()
 
         for i, row in enumerate(all_values[1:], start=2):
-            if row and str(row[0]).strip().upper() == firma_nomi.strip().upper():
+            if row and _norm_firma_nomi(row[0]) == _norm_firma_nomi(firma_nomi):
                 ws.update_cell(i, 2, phone)
                 ws.update_cell(i, 3, str(user_id))
                 return True
