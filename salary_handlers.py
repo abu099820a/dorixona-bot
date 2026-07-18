@@ -749,10 +749,24 @@ async def reports_menu_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return MENU
 
     elif txt == salary_txt:
+        # 1) Avval sessiyada bormi tekshiramiz (tezroq)
         phone = ctx.user_data.get("salary_phone") or ctx.user_data.get("att_phone")
+
+        # 2) Bo'lmasa — Farmatsevtlar jadvalidan TelegramID orqali avtomatik
+        #    topishga harakat qilamiz (bu DOIMIY manba, bot qayta ishga
+        #    tushsa ham yo'qolmaydi — foydalanuvchi har safar qayta telefon
+        #    yubormasligi uchun)
+        if not phone:
+            user_id = update.effective_user.id
+            phone = await run_read(_get_phone_by_telegram_id, user_id)
+            if phone:
+                ctx.user_data["salary_phone"] = phone
+
         if phone:
             return await _show_salary_report(update, ctx, phone)
 
+        # 3) Faqat shu ikkalasi ham muvaffaqiyatsiz bo'lsa — telefon so'raymiz
+        #    (masalan ro'yxatdan o'tish yozuvi buzilgan/topilmagan hollarda)
         from telegram import ReplyKeyboardMarkup, KeyboardButton
         kb = ReplyKeyboardMarkup([
             [KeyboardButton("📱 Telefon raqamimni yuborish", request_contact=True)],
