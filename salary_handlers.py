@@ -50,6 +50,7 @@ SAL_WAIT_ZIP = 500
 REPORTS_MENU = 501
 PAYMENTS_MENU = 502
 PAYMENTS_PASSWORD = 503
+SALARY_PHONE_WAIT = 504
 
 
 # ─── Google Sheets ────────────────────────────────────────────────────────────
@@ -415,30 +416,26 @@ async def cmd_sync_oylik(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await msg.edit_text(f"❌ Xato: {e}")
 
 
-def get_farmatsevt_salary(telegram_id) -> dict | None:
+def get_farmatsevt_salary_by_phone(phone: str) -> dict | None:
     """
-    Xodimning TelegramID'si orqali telefon raqamini topadi, so'ng
-    "Oylik" va "Aksiya" varaqlaridan (SALARY_SHEET_ID) o'sha telefon
-    raqamiga mos qatorlarni qidiradi va ikkalasini birlashtirib to'liq
-    hisobotni qaytaradi.
+    Berilgan TELEFON RAQAMI orqali (TelegramID orqali EMAS) "Oylik" va
+    "Aksiya" varaqlaridan (SALARY_SHEET_ID) mos qatorlarni qidiradi va
+    ikkalasini birlashtirib to'liq hisobotni qaytaradi.
 
-    Jadval tuzilishi (ikkala varaqda ham bir xil, filial sarlavha
-    qatorlari + xodim qatorlari aralash holda, ustunlar POZITSIYA
-    bo'yicha o'qiladi):
-        A: Filial nomi (sarlavha qatorida) yoki Xodim ismi (xodim qatorida)
-        B: Telefon (faqat xodim qatorida bo'ladi)
-        C/D: Reja (faqat filial sarlavhasida)
-        E: Bir oylik savdo
-        G: Foiz | H: Oylik % (savdodan bonus)
-        I: Fiksa (asosiy oylik) | J: Rejaga chiqqani uchun bonus
-        K: Avans olganlar | L/M/N: turli shtraflar
-        O: Umumiy summa (qo'lga tegadigan yakuniy summa)
+    MUHIM: bu funksiya Farmatsevtlar jadvalidagi TelegramID ustuniga
+    umuman bog'liq emas — faqat berilgan telefon raqamini Oylik/Aksiya
+    jadvalidagi C ustuni bilan solishtiradi. Shuning uchun, agar
+    foydalanuvchining TelegramID'si Farmatsevtlar jadvalida to'g'ri
+    saqlanmagan bo'lsa ham (masalan qo'lda qo'shilgan xodim), telefon
+    raqami to'g'ri bo'lsa — natija topiladi.
 
-    MUHIM: bu varaqlar oylik davomida QO'LDA tozalanib, keyingi oy
-    ma'lumotlari bilan qayta to'ldiriladi — shuning uchun oy nomi bilan
-    emas, doim bitta doimiy "Oylik"/"Aksiya" nomi bilan ochiladi.
+    Jadval tuzilishi (ikkala varaqda ham bir xil, Davomat kabi):
+        A: Filial (raqam bilan) | B: Ismi | C: Telefon
+        D: Reja(keyingi oy) | E: Reja(joriy oy) | F: Savdo | G: Farq
+        H: Foiz | I: Oylik % (bonus) | J: Fiksa | K: Reja bonusi
+        L: Avans | M/N/O: shtraflar | P: Umumiy summa | Q: Karta
 
-    Qaytaradi to'liq breakdown dict yoki None (ikkalasida ham topilmasa).
+    Qaytaradi to'liq breakdown dict yoki None (topilmasa).
     """
     def _find_row_by_phone(ws, target_phone):
         all_values = ws.get_all_values()
@@ -486,13 +483,10 @@ def get_farmatsevt_salary(telegram_id) -> dict | None:
         return None
 
     try:
-        phone = _get_phone_by_telegram_id(telegram_id)
-        print(f"[MAOSH] TelegramID={telegram_id} -> telefon='{phone}'")
         if not phone:
-            print(f"[MAOSH] Telefon topilmadi (Farmatsevtlar jadvalida TelegramID mos kelmadi)")
             return None
         target_phone = _sal_normalize_phone(phone)
-        print(f"[MAOSH] Qidirilayotgan normalized telefon: '{target_phone}'")
+        print(f"[MAOSH] Qidirilayotgan telefon: '{target_phone}'")
 
         client = _get_client()
         sh = client.open_by_key(SALARY_SHEET_ID)
@@ -528,8 +522,23 @@ def get_farmatsevt_salary(telegram_id) -> dict | None:
         return result
 
     except Exception as e:
-        logger.error(f"[MAOSH] get_farmatsevt_salary xato: {e}")
+        logger.error(f"[MAOSH] get_farmatsevt_salary_by_phone xato: {e}")
         return None
+
+
+def get_farmatsevt_salary(telegram_id) -> dict | None:
+    """
+    ESKI (zaxira) yo'l: TelegramID orqali Farmatsevtlar jadvalidan
+    telefon raqamini topib, so'ng get_farmatsevt_salary_by_phone() ni
+    chaqiradi. Endi asosiy oqim buni ishlatmaydi (o'rniga foydalanuvchi
+    telefon raqamini to'g'ridan-to'g'ri kiritadi/ulashadi) — lekin
+    boshqa joylarda kerak bo'lib qolishi mumkinligi uchun saqlanmoqda.
+    """
+    phone = _get_phone_by_telegram_id(telegram_id)
+    print(f"[MAOSH] (zaxira yo'l) TelegramID={telegram_id} -> telefon='{phone}'")
+    if not phone:
+        return None
+    return get_farmatsevt_salary_by_phone(phone)
 
 
 def get_firms_report() -> list:
@@ -740,90 +749,22 @@ async def reports_menu_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return MENU
 
     elif txt == salary_txt:
-        user_id = update.effective_user.id
-        data = await run_read(get_farmatsevt_salary, user_id)
+        phone = ctx.user_data.get("salary_phone") or ctx.user_data.get("att_phone")
+        if phone:
+            return await _show_salary_report(update, ctx, phone)
 
-        if not data:
-            msg = (
-                "❌ Sizning telefon raqamingiz bo'yicha joriy oy uchun maosh "
-                "ma'lumoti topilmadi.\n\nAgar siz ro'yxatdan o'tgan xodim "
-                "bo'lsangiz, buxgalteriya hali ma'lumotni kiritmagan bo'lishi "
-                "mumkin — birozdan so'ng qayta urinib ko'ring yoki "
-                "administratorga murojaat qiling."
-            )
-            await update.message.reply_text(msg, reply_markup=reports_keyboard(language))
-            return REPORTS_MENU
-
-        def _fmt(n):
-            try:
-                n = float(n)
-                if n == int(n):
-                    return f"{int(n):,}".replace(",", " ")
-                return f"{n:,.2f}".replace(",", " ")
-            except Exception:
-                return str(n)
-
-        g = lambda k, d=0: data.get(k, d)
-
-        lines = [
-            f"💰 *Maosh va aksiyalar*\n",
-            f"👤 {data['ismi']}",
-            f"🏪 Filial: {data['filial']}\n",
-        ]
-
-        # Reja (Plan) va bajarilgan foiz
-        reja_joriy = g("reja_joriy")
-        savdo = g("savdo")
-        if reja_joriy:
-            bajarildi_foiz = (savdo / reja_joriy) * 100
-            lines.append(f"🎯 Reja (joriy oy): {_fmt(reja_joriy)} so'm")
-            lines.append(f"📊 Savdo: {_fmt(savdo)} so'm")
-            lines.append(f"✅ Bajarildi: *{bajarildi_foiz:.1f}%*")
-            if g("reja_farq"):
-                farq = g("reja_farq")
-                belgi = "🔺" if farq >= 0 else "🔻"
-                lines.append(f"{belgi} Rejadan farq: {_fmt(farq)} so'm")
-        else:
-            lines.append(f"📊 Savdo: {_fmt(savdo)} so'm")
-
-        if g("reja_keyingi"):
-            lines.append(f"📅 Reja (keyingi oy): {_fmt(g('reja_keyingi'))} so'm")
-
-        lines.append("")
-        if g("foiz"):
-            lines.append(f"📈 Foiz: {g('foiz') * 100:.1f}%")
-        if g("oylik_percent_bonus"):
-            lines.append(f"🎁 Savdodan bonus: {_fmt(g('oylik_percent_bonus'))} so'm")
-        if g("fiksa"):
-            lines.append(f"💵 Fiksa (asosiy oylik): {_fmt(g('fiksa'))} so'm")
-        if g("reja_bonus"):
-            lines.append(f"🏆 Rejaga chiqqani uchun bonus: {_fmt(g('reja_bonus'))} so'm")
-
-        deductions = []
-        if g("avans"):
-            deductions.append(f"➖ Avans: {_fmt(g('avans'))} so'm")
-        if g("shtraf_pereuchyot"):
-            deductions.append(f"➖ Pereuchyot shtrafi: {_fmt(g('shtraf_pereuchyot'))} so'm")
-        if g("shtraf_vaqt"):
-            deductions.append(f"➖ Kech ochilgan/erta yopilgan shtrafi: {_fmt(g('shtraf_vaqt'))} so'm")
-        if g("shtraf_srok"):
-            deductions.append(f"➖ Srok shtrafi: {_fmt(g('shtraf_srok'))} so'm")
-        if deductions:
-            lines.append("")
-            lines.extend(deductions)
-
-        lines.append("")
-        lines.append(f"💵 Oylik: {_fmt(g('oylik_jami'))} so'm")
-        lines.append(f"🎁 Aksiya: {_fmt(g('aksiya_jami'))} so'm")
-        lines.append(f"💰 *JAMI: {_fmt(g('yakuniy_jami'))} so'm*")
-        if g("karta"):
-            lines.append(f"💳 Plastik kartaga: {_fmt(g('karta'))} so'm")
-
-        text = "\n".join(lines)
+        from telegram import ReplyKeyboardMarkup, KeyboardButton
+        kb = ReplyKeyboardMarkup([
+            [KeyboardButton("📱 Telefon raqamimni yuborish", request_contact=True)],
+            [back_txt],
+        ], resize_keyboard=True)
         await update.message.reply_text(
-            text, parse_mode="Markdown", reply_markup=reports_keyboard(language)
+            "📱 Maosh ma'lumotingizni ko'rish uchun telefon raqamingizni yuboring:"
+            if language == "uz" else
+            "📱 Отправьте номер телефона, чтобы посмотреть данные о зарплате:",
+            reply_markup=kb,
         )
-        return REPORTS_MENU
+        return SALARY_PHONE_WAIT
 
     elif txt == payments_txt:
         return await payments_menu_enter(update, ctx)
@@ -836,6 +777,121 @@ async def reports_menu_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         reply_markup=reports_keyboard(language),
     )
     return REPORTS_MENU
+
+
+async def _show_salary_report(update: Update, ctx: ContextTypes.DEFAULT_TYPE, phone: str):
+    """Berilgan telefon raqami bo'yicha maosh hisobotini topib ko'rsatadi."""
+    language = ctx.user_data.get("lang", "uz")
+    data = await run_read(get_farmatsevt_salary_by_phone, phone)
+
+    if not data:
+        msg = (
+            "❌ Sizning telefon raqamingiz bo'yicha joriy oy uchun maosh "
+            "ma'lumoti topilmadi.\n\nAgar siz ro'yxatdan o'tgan xodim "
+            "bo'lsangiz, buxgalteriya hali ma'lumotni kiritmagan bo'lishi "
+            "mumkin — birozdan so'ng qayta urinib ko'ring yoki "
+            "administratorga murojaat qiling."
+        )
+        await update.message.reply_text(msg, reply_markup=reports_keyboard(language))
+        return REPORTS_MENU
+
+    def _fmt(n):
+        try:
+            n = float(n)
+            if n == int(n):
+                return f"{int(n):,}".replace(",", " ")
+            return f"{n:,.2f}".replace(",", " ")
+        except Exception:
+            return str(n)
+
+    g = lambda k, d=0: data.get(k, d)
+
+    lines = [
+        f"💰 *Maosh va aksiyalar*\n",
+        f"👤 {data['ismi']}",
+        f"🏪 Filial: {data['filial']}\n",
+    ]
+
+    reja_joriy = g("reja_joriy")
+    savdo = g("savdo")
+    if reja_joriy:
+        bajarildi_foiz = (savdo / reja_joriy) * 100
+        lines.append(f"🎯 Reja (joriy oy): {_fmt(reja_joriy)} so'm")
+        lines.append(f"📊 Savdo: {_fmt(savdo)} so'm")
+        lines.append(f"✅ Bajarildi: *{bajarildi_foiz:.1f}%*")
+        if g("reja_farq"):
+            farq = g("reja_farq")
+            belgi = "🔺" if farq >= 0 else "🔻"
+            lines.append(f"{belgi} Rejadan farq: {_fmt(farq)} so'm")
+    else:
+        lines.append(f"📊 Savdo: {_fmt(savdo)} so'm")
+
+    if g("reja_keyingi"):
+        lines.append(f"📅 Reja (keyingi oy): {_fmt(g('reja_keyingi'))} so'm")
+
+    lines.append("")
+    if g("foiz"):
+        lines.append(f"📈 Foiz: {g('foiz') * 100:.1f}%")
+    if g("oylik_percent_bonus"):
+        lines.append(f"🎁 Savdodan bonus: {_fmt(g('oylik_percent_bonus'))} so'm")
+    if g("fiksa"):
+        lines.append(f"💵 Fiksa (asosiy oylik): {_fmt(g('fiksa'))} so'm")
+    if g("reja_bonus"):
+        lines.append(f"🏆 Rejaga chiqqani uchun bonus: {_fmt(g('reja_bonus'))} so'm")
+
+    deductions = []
+    if g("avans"):
+        deductions.append(f"➖ Avans: {_fmt(g('avans'))} so'm")
+    if g("shtraf_pereuchyot"):
+        deductions.append(f"➖ Pereuchyot shtrafi: {_fmt(g('shtraf_pereuchyot'))} so'm")
+    if g("shtraf_vaqt"):
+        deductions.append(f"➖ Kech ochilgan/erta yopilgan shtrafi: {_fmt(g('shtraf_vaqt'))} so'm")
+    if g("shtraf_srok"):
+        deductions.append(f"➖ Srok shtrafi: {_fmt(g('shtraf_srok'))} so'm")
+    if deductions:
+        lines.append("")
+        lines.extend(deductions)
+
+    lines.append("")
+    lines.append(f"💵 Oylik: {_fmt(g('oylik_jami'))} so'm")
+    lines.append(f"🎁 Aksiya: {_fmt(g('aksiya_jami'))} so'm")
+    lines.append(f"💰 *JAMI: {_fmt(g('yakuniy_jami'))} so'm*")
+    if g("karta"):
+        lines.append(f"💳 Plastik kartaga: {_fmt(g('karta'))} so'm")
+
+    text = "\n".join(lines)
+    await update.message.reply_text(
+        text, parse_mode="Markdown", reply_markup=reports_keyboard(language)
+    )
+    return REPORTS_MENU
+
+
+async def salary_phone_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """SALARY_PHONE_WAIT holatida: telefon raqamini (kontakt orqali) qabul qiladi."""
+    language = ctx.user_data.get("lang", "uz")
+    back_txt = "⬅️ Назад" if language == "ru" else "⬅️ Orqaga"
+
+    if update.message.text == back_txt:
+        await update.message.reply_text(
+            "📊 *Отчёт va to'lovlar*\n\nBo'limni tanlang:" if language == "uz"
+            else "📊 *Отчёт и оплаты*\n\nВыберите раздел:",
+            parse_mode="Markdown",
+            reply_markup=reports_keyboard(language),
+        )
+        return REPORTS_MENU
+
+    contact = update.message.contact
+    if not contact:
+        await update.message.reply_text(
+            "❌ Iltimos, tugma orqali telefon raqamingizni yuboring."
+            if language == "uz" else
+            "❌ Пожалуйста, отправьте номер телефона через кнопку."
+        )
+        return SALARY_PHONE_WAIT
+
+    phone = contact.phone_number
+    ctx.user_data["salary_phone"] = phone
+    return await _show_salary_report(update, ctx, phone)
 
 
 # ─── Handlerlar ───────────────────────────────────────────────────────────────
@@ -983,5 +1039,9 @@ def get_sal_states():
         ],
         PAYMENTS_PASSWORD: [
             MessageHandler(filters.TEXT & ~filters.COMMAND, payments_password_handler),
+        ],
+        SALARY_PHONE_WAIT: [
+            MessageHandler(filters.CONTACT, salary_phone_handler),
+            MessageHandler(filters.TEXT & ~filters.COMMAND, salary_phone_handler),
         ],
     }
