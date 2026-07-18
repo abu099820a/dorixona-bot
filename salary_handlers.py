@@ -202,76 +202,138 @@ def _filial_kod(filial: str) -> str:
     return m.group(1) if m else ""
 
 
-def _merge_filial_column(ws, first_row: int, last_row: int):
-    """A ustunidagi [first_row, last_row] oralig'ini bitta katakka birlashtiradi."""
-    if last_row <= first_row:
-        return
-    try:
-        requests = [
-            {"unmergeCells": {"range": {
-                "sheetId": ws.id,
-                "startRowIndex": first_row - 1, "endRowIndex": last_row,
-                "startColumnIndex": 0, "endColumnIndex": 1,
-            }}},
-            {"mergeCells": {"range": {
-                "sheetId": ws.id,
-                "startRowIndex": first_row - 1, "endRowIndex": last_row,
-                "startColumnIndex": 0, "endColumnIndex": 1,
-            }, "mergeType": "MERGE_ALL"}},
-        ]
-        ws.spreadsheet.batch_update({"requests": requests})
-    except Exception as e:
-        logger.error(f"[MAOSH] Merge xato: {e}")
-
-
 def _sync_one_sheet(ws, farmatsevtlar: list) -> dict:
     """
     Berilgan varaqqa (Oylik yoki Aksiya) Farmatsevtlar ro'yxatidagi
-    xodimlardan hali mavjud bo'lmaganlarini qo'shadi va filial katagini
-    guruh bo'ylab qayta birlashtiradi (merge).
+    xodimlardan hali mavjud bo'lmaganlarini qo'shadi.
+
+    MUHIM: bu funksiya BUTUN jadval mazmunini XOTIRADA (Python ichida)
+    qayta quradi va faqat OXIRIDA 1-2 ta Google Sheets so'rovi yuboradi
+    (bitta "yozish" + bitta "merge"). Avvalgi versiya har bir xodim
+    uchun alohida-alohida so'rov yuborar edi — bu ko'p xodimda Google'ning
+    "daqiqasiga so'rov" kvotasidan (429 xato) oshib ketishga va, jarayon
+    yarim yo'lda uzilib qolsa, jadval tartibi buzilib qolishiga sabab
+    bo'lgan edi.
+
     Qaytaradi: {"added": [...], "skipped": int}
     """
     all_values = ws.get_all_values()
+    header = all_values[0] if all_values else []
+    data_rows = [list(r) for r in all_values[1:]]
+    ncols = max(len(header), 17)
 
-    # Allaqachon mavjud telefon raqamlari
+    def _pad(row):
+        row = list(row) + [""] * (ncols - len(row))
+        return row[:ncols]
+
+    data_rows = [_pad(r) for r in data_rows]
+
+    # Mavjud telefon raqamlari
     existing_phones = set()
-    for row in all_values[1:]:
-        if len(row) > 2 and row[2]:
+    for row in data_rows:
+        if row[2]:
             existing_phones.add(_sal_normalize_phone(row[2]))
 
+    # Filial bo'yicha guruhlab, qo'shilishi kerak bo'lganlarni ajratamiz
+    to_add_by_filial = {}
     added = []
     for f in farmatsevtlar:
         phone_norm = _sal_normalize_phone(f["telefon"])
         if not phone_norm or phone_norm in existing_phones:
             continue
-
-        # Filial guruhidagi birinchi/oxirgi qatorni qayta hisoblaymiz (har
-        # safar yangilanadi, chunki oldingi qo'shishlar qator raqamlarini
-        # suradi)
-        all_values = ws.get_all_values()
-        filial_kod = _filial_kod(f["filial"])
-        first_row = None
-        last_row = 1
-        for i, row in enumerate(all_values):
-            if i == 0 or not row or not row[0]:
-                continue
-            if _filial_kod(str(row[0]).strip()) == filial_kod:
-                if first_row is None:
-                    first_row = i + 1
-                last_row = i + 1
-
-        insert_row = last_row + 1
-        ws.insert_row(
-            [f["filial"], f["ismi"], f["telefon"]],
-            index=insert_row, value_input_option="USER_ENTERED"
-        )
-        if first_row is not None:
-            _merge_filial_column(ws, first_row, insert_row)
-
+        kod = _filial_kod(f["filial"])
+        to_add_by_filial.setdefault(kod, []).append(f)
         existing_phones.add(phone_norm)
         added.append(f["ismi"])
 
+    if not added:
+        return {"added": [], "skipped": len(farmatsevtlar)}
+
+    # Yangi ro'yxatni original tartibni SAQLAGAN holda quramiz: mavjud
+    # qatorlar orasidan, har bir filial guruhi TUGAGAN joyda, o'sha
+    # filialga tegishli yangi xodimlarni qo'shib chiqamiz
+    new_rows = []
+    n = len(data_rows)
+    i = 0
+    while i < n:
+        row = data_rows[i]
+        new_rows.append(row)
+        cur_kod = _filial_kod(row[0]) if row[0] else None
+        next_kod = None
+        if i + 1 < n and data_rows[i + 1][0]:
+            next_kod = _filial_kod(data_rows[i + 1][0])
+        if cur_kod and cur_kod != next_kod and cur_kod in to_add_by_filial:
+            for f in to_add_by_filial.pop(cur_kod):
+                new_rows.append(_pad([f["filial"], f["ismi"], f["telefon"]]))
+        i += 1
+
+    # Jadvalda umuman topilmagan filiallar (masalan yangi filial) — oxiriga
+    for kod, flist in to_add_by_filial.items():
+        for f in flist:
+            new_rows.append(_pad([f["filial"], f["ismi"], f["telefon"]]))
+
+    # 1) Butun ma'lumotni BITTA so'rov bilan yozib qo'yamiz
+    if new_rows:
+        needed_rows = 1 + len(new_rows)
+        if ws.row_count < needed_rows:
+            ws.resize(rows=needed_rows)
+        ws.update(
+            f"A2:{col_letter(ncols)}{needed_rows}",
+            new_rows, value_input_option="USER_ENTERED"
+        )
+
+    # 2) Filial ustunini (A) guruhlar bo'ylab BITTA so'rovda qayta merge qilamiz
+    _merge_all_filial_groups(ws, new_rows)
+
     return {"added": added, "skipped": len(farmatsevtlar) - len(added)}
+
+
+def col_letter(n: int) -> str:
+    """1 -> A, 2 -> B, 27 -> AA ..."""
+    result = ""
+    while n > 0:
+        n, r = divmod(n - 1, 26)
+        result = chr(65 + r) + result
+    return result
+
+
+def _merge_all_filial_groups(ws, data_rows: list):
+    """
+    A ustunidagi filial guruhlarini (yonma-yon bir xil kodli qatorlarni)
+    BITTA batch_update so'rovi bilan qayta merge qiladi (avval butun
+    ustunni unmerge qilib, so'ng har bir guruhni alohida merge qilish
+    so'rovlarini bitta so'rovga jamlab yuboradi).
+    """
+    n = len(data_rows)
+    if n == 0:
+        return
+    requests = [{"unmergeCells": {"range": {
+        "sheetId": ws.id,
+        "startRowIndex": 1, "endRowIndex": 1 + n,
+        "startColumnIndex": 0, "endColumnIndex": 1,
+    }}}]
+
+    i = 0
+    while i < n:
+        kod = _filial_kod(data_rows[i][0]) if data_rows[i][0] else None
+        j = i
+        while j + 1 < n:
+            next_kod = _filial_kod(data_rows[j + 1][0]) if data_rows[j + 1][0] else None
+            if next_kod != kod:
+                break
+            j += 1
+        if kod and j > i:
+            requests.append({"mergeCells": {"range": {
+                "sheetId": ws.id,
+                "startRowIndex": 1 + i, "endRowIndex": 1 + j + 1,
+                "startColumnIndex": 0, "endColumnIndex": 1,
+            }, "mergeType": "MERGE_ALL"}})
+        i = j + 1
+
+    try:
+        ws.spreadsheet.batch_update({"requests": requests})
+    except Exception as e:
+        logger.error(f"[MAOSH] Merge xato: {e}")
 
 
 def sync_oylik_sheet() -> dict:
