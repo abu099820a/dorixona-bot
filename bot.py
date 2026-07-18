@@ -788,8 +788,19 @@ def main():
     # Alohida guruh sifatida bu xavf yo'q, chunki ConversationHandler
     # o'z holatini hech qachon bu handler orqali "bilib olmaydi".
     async def _recover_session(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-        if update.message:
-            await start(update, ctx)
+        if not update.message:
+            return
+        key = (update.effective_chat.id, update.effective_user.id)
+        try:
+            if key in conv._conversations:
+                return
+        except Exception as e:
+            # Ichki atribut kutilmagan formatda bo'lsa — xavfsizlik uchun
+            # hech narsa qilmaymiz (aks holda ikki marta javob xatosi
+            # qaytarilishi mumkin edi)
+            print(f"[RECOVER] _conversations tekshiruvida xato: {e}")
+            return
+        await start(update, ctx)
 
     app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, _recover_session), group=1)
 
