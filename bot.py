@@ -2,7 +2,10 @@ import math, io, re
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 import pandas as pd
 from register_handlers import register_enter, get_reg_states
-from salary_handlers import cmd_send_salaries, get_sal_states, SAL_WAIT_ZIP
+from salary_handlers import (
+    cmd_send_salaries, get_sal_states, SAL_WAIT_ZIP,
+    reports_menu_enter, reports_menu_handler, REPORTS_MENU,
+)
 from attendance_handlers import (
     att_enter, get_att_states,
     ATT_PHONE, ATT_MENU, ATT_LOCATION,
@@ -375,11 +378,7 @@ async def menu_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return await register_enter(update, ctx)
 
     elif txt == T[language]["reports_btn"]:
-        await update.message.reply_text(
-            "📊 *Hisobotlar va to'lovlar*\n\n🔧 Tez orada...",
-            parse_mode="Markdown",
-        )
-        return MENU
+        return await reports_menu_enter(update, ctx)
 
     elif txt == T[language]["appeal_btn"]:
         await update.message.reply_text(
@@ -710,8 +709,8 @@ async def auto_sync_job():
     now = datetime.now(UZ_TZ)
     print(f"[AUTO SYNC] Boshlandi: {now.strftime('%d.%m.%Y %H:%M')}")
     try:
-        from attendance import sync_pharmacists
-        results = sync_pharmacists()
+        from attendance import sync_pharmacists, run_write
+        results = await run_write(sync_pharmacists)
         added = len(results.get('added', []))
         updated = len(results.get('updated', []))
         removed = len(results.get('removed', []))
@@ -720,12 +719,26 @@ async def auto_sync_job():
         print(f"[AUTO SYNC] Xato: {e}")
 
 def main():
-    app = Application.builder().token(TOKEN).build()
+    app = Application.builder().token(TOKEN).concurrent_updates(256).build()
     conv = ConversationHandler(
-        entry_points=[CommandHandler("start", start)],
+        # MUHIM: MessageHandler(filters.ALL, start) ham entry_points ga
+        # qo'shilgan. Sabab: ConversationHandler holati xotirada (RAM)
+        # saqlanadi va persistence ulanmagan — shuning uchun bot qayta
+        # deploy qilinganda (Railway process qayta ishga tushganda) barcha
+        # foydalanuvchilarning suhbat holati yo'qoladi. Agar shu holatda
+        # kimdir eski klaviaturadagi biror tugmani bossa (masalan "✅
+        # Keldi"), bu matn faqat "/start" ga mos keladigan entry_point
+        # bilan tanilmagani uchun bot HECH NARSA javob bermay qolar edi.
+        # Endi har qanday xabar — hatto suhbat holati topilmasa ham —
+        # avtomatik "/start" bosilgandek qayta tiklanadi.
+        entry_points=[
+            CommandHandler("start", start),
+            MessageHandler(filters.ALL, start),
+        ],
         states={
             LANG: [CallbackQueryHandler(set_lang, pattern="^lang_")],
             MENU: [MessageHandler(filters.TEXT & ~filters.COMMAND, menu_handler)],
+            REPORTS_MENU: [MessageHandler(filters.TEXT & ~filters.COMMAND, reports_menu_handler)],
             SEARCH_MENU: [MessageHandler(filters.TEXT & ~filters.COMMAND, search_menu_handler)],
             SEARCH_INPUT: [MessageHandler(filters.TEXT & ~filters.COMMAND, search_handler)],
             SELECT_RESULT: [CallbackQueryHandler(select_result, pattern="^sel_")],

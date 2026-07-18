@@ -8,10 +8,36 @@ import math
 import re
 import os
 import json
+import asyncio
 from datetime import datetime, date, timezone, timedelta
 UZ_TZ = timezone(timedelta(hours=5))
 import gspread
 from google.oauth2.service_account import Credentials
+
+# ─── Parallellik uchun yordamchilar ────────────────────────────────────────
+# gspread SINXRON (bloklovchi) kutubxona. Agar uni to'g'ridan-to'g'ri async
+# handler ichida chaqirsak, butun bot (barcha foydalanuvchilar uchun)
+# Google Sheets javob qaytarguncha to'xtab qoladi. Shu sababli har bir
+# chaqiruv asyncio.to_thread() orqali alohida oqimga yuboriladi.
+#
+# O'QISH amallari (get_all_values va h.k.) — bemalol PARALLEL bajarilaveradi.
+# YOZISH amallari (update_cell, insert_row, delete_rows va h.k.) — WRITE_LOCK
+# orqali NAVBAT bilan bajariladi, aks holda ikki kishi bir vaqtda yozsa,
+# ma'lumot noto'g'ri qatorga tushib ketishi yoki bir-birini bosib yuborishi
+# mumkin (Google Sheets o'zida "qulflash" mexanizmi yo'q).
+WRITE_LOCK = asyncio.Lock()
+
+
+async def run_read(func, *args, **kwargs):
+    """O'qish amalini alohida oqimda (parallel) bajaradi."""
+    return await asyncio.to_thread(func, *args, **kwargs)
+
+
+async def run_write(func, *args, **kwargs):
+    """Yozish amalini WRITE_LOCK orqali navbat bilan, alohida oqimda bajaradi."""
+    async with WRITE_LOCK:
+        return await asyncio.to_thread(func, *args, **kwargs)
+
 
 # ─── Sozlamalar ──────────────────────────────────────────────────────────────
 
@@ -74,14 +100,28 @@ def normalize_phone(phone: str) -> str:
     return "+" + digits
 
 
+_CACHED_SHEETS_CLIENT = None
+
 def get_sheets_client():
+    """
+    Google Sheets mijozini qaytaradi. Mijoz KESHLANADI (module-level) —
+    har bir chaqiruvda qaytadan autentifikatsiya qilish keraksiz kechikish
+    berardi (500+ foydalanuvchi bo'lganda bu sezilarli farq qiladi).
+    google-auth kutubxonasi token muddati tugaganda uni ICHKI ravishda
+    o'zi yangilaydi, shuning uchun mijozni qayta yaratish shart emas.
+    """
+    global _CACHED_SHEETS_CLIENT
+    if _CACHED_SHEETS_CLIENT is not None:
+        return _CACHED_SHEETS_CLIENT
+
     creds_json = os.getenv("GOOGLE_CREDENTIALS")
     if creds_json:
         info = json.loads(creds_json)
         creds = Credentials.from_service_account_info(info, scopes=SCOPES)
     else:
         creds = Credentials.from_service_account_file("credentials.json", scopes=SCOPES)
-    return gspread.authorize(creds)
+    _CACHED_SHEETS_CLIENT = gspread.authorize(creds)
+    return _CACHED_SHEETS_CLIENT
 
 
 def col_letter(n):
@@ -278,25 +318,70 @@ def _get_farmatsevt_row(ws, ismi: str, filial: str = "") -> int:
 
 # ─── Asosiy funksiyalar ───────────────────────────────────────────────────────
 
+def _find_lat_lon(headers: list, row: list) -> tuple:
+    """
+    Qatordan Lat/Lon qiymatini topadi.
+    1. Avval ustun sarlavhasi bo'yicha (Lat/Latitude/Kenglik va h.k.,
+       katta-kichik harfga sezgir emas) qidiradi.
+    2. Topilmasa (yoki 0/bo'sh bo'lsa) — F va G ustunlarini (pozitsiya
+       bo'yicha, 0-indeksda 5 va 6) zaxira sifatida sinab ko'radi.
+
+    Bu — sarlavha nomi "Lat"/"Lon" bilan aniq mos kelmagan yoki umuman
+    sarlavhasiz jadvallarda ham koordinata to'g'ri o'qilishini ta'minlaydi.
+    """
+    def _clean(v):
+        try:
+            v = str(v).strip().replace(",", ".")
+            return float(v) if v and v not in ("0", "nan") else 0.0
+        except Exception:
+            return 0.0
+
+    lat, lon = 0.0, 0.0
+    headers_lower = [str(h).strip().lower() for h in headers]
+
+    for idx, h in enumerate(headers_lower):
+        if h in ("lat", "latitude", "kenglik", "широта") and idx < len(row):
+            lat = _clean(row[idx])
+            if lat:
+                break
+    for idx, h in enumerate(headers_lower):
+        if h in ("lon", "long", "longitude", "uzunlik", "долгота") and idx < len(row):
+            lon = _clean(row[idx])
+            if lon:
+                break
+
+    # Zaxira: sarlavha orqali topilmasa — F/G ustunini (indeks 5,6) sinaymiz
+    if not lat and len(row) > 5:
+        lat = _clean(row[5])
+    if not lon and len(row) > 6:
+        lon = _clean(row[6])
+
+    return lat, lon
+
+
 def get_farmatsevt(phone: str):
     try:
         client = get_sheets_client()
         sh = client.open_by_key(PHARMACY_SHEET_ID)
         ws = sh.worksheet("Farmatsevtlar")
-        records = ws.get_all_records()
+        all_values = ws.get_all_values()
+        if not all_values:
+            return None
+        headers = all_values[0]
         norm = normalize_phone(phone)
-        for row in records:
-            tel_raw = row.get("Telefon", "")
-            if isinstance(tel_raw, float):
-                tel_raw = str(int(tel_raw))
-            else:
-                tel_raw = str(tel_raw)
-            if normalize_phone(tel_raw) == norm:
+
+        for row in all_values[1:]:
+            if not row:
+                continue
+            row_dict = {headers[i]: (row[i] if i < len(row) else "") for i in range(len(headers))}
+            tel_raw = row_dict.get("Telefon", "")
+            if normalize_phone(str(tel_raw)) == norm:
+                lat, lon = _find_lat_lon(headers, row)
                 return {
-                    "ismi":   str(row.get("Ismi", "")).strip(),
-                    "filial": str(row.get("Filial", "")).strip(),
-                    "lat":    float(str(row.get("Lat", 0)).replace(",", ".")),
-                    "lon":    float(str(row.get("Lon", 0)).replace(",", ".")),
+                    "ismi":   str(row_dict.get("Ismi", "")).strip(),
+                    "filial": str(row_dict.get("Filial", "")).strip(),
+                    "lat":    lat,
+                    "lon":    lon,
                 }
         return None
     except Exception as e:
@@ -420,15 +505,23 @@ def get_farmatsevt_by_userid(user_id: int):
         client = get_sheets_client()
         sh = client.open_by_key(PHARMACY_SHEET_ID)
         ws = sh.worksheet("Farmatsevtlar")
-        records = ws.get_all_records()
+        all_values = ws.get_all_values()
+        if not all_values:
+            return None
+        headers = all_values[0]
         uid = str(user_id)
-        for i, row in enumerate(records):
-            if str(row.get("TelegramID", "")).strip() == uid:
+
+        for row in all_values[1:]:
+            if not row:
+                continue
+            row_dict = {headers[i]: (row[i] if i < len(row) else "") for i in range(len(headers))}
+            if str(row_dict.get("TelegramID", "")).strip() == uid:
+                lat, lon = _find_lat_lon(headers, row)
                 return {
-                    "ismi":   str(row.get("Ismi", "")).strip(),
-                    "filial": str(row.get("Filial", "")).strip(),
-                    "lat":    float(str(row.get("Lat", 0)).replace(",", ".")),
-                    "lon":    float(str(row.get("Lon", 0)).replace(",", ".")),
+                    "ismi":   str(row_dict.get("Ismi", "")).strip(),
+                    "filial": str(row_dict.get("Filial", "")).strip(),
+                    "lat":    lat,
+                    "lon":    lon,
                 }
         return None
     except Exception as e:

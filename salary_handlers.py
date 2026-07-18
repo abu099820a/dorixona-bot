@@ -28,6 +28,7 @@ from telegram.ext import (
 )
 from google.oauth2.service_account import Credentials
 import gspread
+from attendance import run_read, run_write
 
 logger = logging.getLogger(__name__)
 
@@ -39,22 +40,34 @@ SCOPES = [
 ]
 
 PHARMACY_SHEET_ID = os.getenv("PHARMACY_SHEET_ID", "")
+SALARY_SHEET_ID = os.getenv("SALARY_SHEET_ID", "")
+FIRMS_SHEET_ID = os.getenv("FIRMS_SHEET_ID", "")
 ADMIN_IDS = [709544046]
+PAYMENTS_PAROL = "офис"  # Davomat bo'limi bilan bir xil umumiy parol
 
 # Conversation states
 SAL_WAIT_ZIP = 500
+REPORTS_MENU = 501
+PAYMENTS_MENU = 502
+PAYMENTS_PASSWORD = 503
 
 
 # ─── Google Sheets ────────────────────────────────────────────────────────────
 
+_CACHED_CLIENT = None
+
 def _get_client():
+    global _CACHED_CLIENT
+    if _CACHED_CLIENT is not None:
+        return _CACHED_CLIENT
     creds_json = os.getenv("GOOGLE_CREDENTIALS")
     if creds_json:
         info = json.loads(creds_json)
         creds = Credentials.from_service_account_info(info, scopes=SCOPES)
     else:
         creds = Credentials.from_service_account_file("credentials.json", scopes=SCOPES)
-    return gspread.authorize(creds)
+    _CACHED_CLIENT = gspread.authorize(creds)
+    return _CACHED_CLIENT
 
 
 def get_mudir_map() -> dict:
@@ -127,6 +140,303 @@ def find_telegram_id(filename: str, mudir_map: dict) -> str | None:
     return None
 
 
+def get_farmatsevt_salary(telegram_id) -> dict | None:
+    """
+    Berilgan TelegramID bo'yicha joriy oy uchun Maosh/Aksiya ma'lumotini
+    "Maosh" Google Sheets'idan (SALARY_SHEET_ID) o'qiydi.
+
+    Jadval tuzilishi (Davomat jadvali kabi, har oy uchun alohida varaq,
+    masalan "Iyul 2026"):
+        TelegramID | Ismi | Filial | Maosh | Aksiya | Jami
+
+    Qaytaradi: {"ismi", "filial", "maosh", "aksiya", "jami", "oy_nomi"} | None
+    None qaytsa — o'sha oy uchun varaq hali yaratilmagan yoki xodim
+    topilmagan degani.
+    """
+    from datetime import datetime
+    from attendance import OY_NOMLARI, UZ_TZ
+
+    try:
+        client = _get_client()
+        sh = client.open_by_key(SALARY_SHEET_ID)
+
+        now = datetime.now(UZ_TZ)
+        sheet_name = f"{OY_NOMLARI[now.month]} {now.year}"
+
+        try:
+            ws = sh.worksheet(sheet_name)
+        except gspread.exceptions.WorksheetNotFound:
+            return None
+
+        records = ws.get_all_records()
+        tid_str = str(telegram_id).strip()
+
+        for row in records:
+            row_tid = str(row.get("TelegramID", "")).strip()
+            if row_tid == tid_str:
+                return {
+                    "ismi": str(row.get("Ismi", "")).strip(),
+                    "filial": str(row.get("Filial", "")).strip(),
+                    "maosh": row.get("Maosh", ""),
+                    "aksiya": row.get("Aksiya", ""),
+                    "jami": row.get("Jami", ""),
+                    "oy_nomi": sheet_name,
+                }
+        return None
+
+    except Exception as e:
+        logger.error(f"[MAOSH] get_farmatsevt_salary xato: {e}")
+        return None
+
+
+def get_firms_report() -> list:
+    """
+    "Firmalar to'lovlari" Google Sheets'idan (FIRMS_SHEET_ID) barcha
+    firmalar ro'yxatini o'qiydi.
+
+    Jadval tuzilishi (bitta oddiy varaq, oy bo'yicha bo'linmagan):
+        Firma nomi | Summa | Holati
+
+    Qaytaradi: [{"firma", "summa", "holati"}, ...]
+    """
+    try:
+        client = _get_client()
+        sh = client.open_by_key(FIRMS_SHEET_ID)
+        ws = sh.sheet1
+        records = ws.get_all_records()
+
+        result = []
+        for row in records:
+            firma = str(row.get("Firma nomi", "")).strip()
+            if not firma:
+                continue
+            result.append({
+                "firma": firma,
+                "summa": row.get("Summa", ""),
+                "holati": str(row.get("Holati", "")).strip(),
+            })
+        return result
+
+    except Exception as e:
+        logger.error(f"[FIRMS] get_firms_report xato: {e}")
+        return []
+
+
+def payments_keyboard(language: str = "uz"):
+    from telegram import ReplyKeyboardMarkup
+    if language == "ru":
+        return ReplyKeyboardMarkup([
+            ["📦 Отправить ZIP файлы"],
+            ["🏢 Отчёт по оплатам фирмам"],
+            ["⬅️ Назад"],
+        ], resize_keyboard=True)
+    return ReplyKeyboardMarkup([
+        ["📦 ZIP orqali yuborish"],
+        ["🏢 Firmalarga to'lovlar hisoboti"],
+        ["⬅️ Orqaga"],
+    ], resize_keyboard=True)
+
+
+async def payments_menu_enter(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    language = ctx.user_data.get("lang", "uz")
+    text = (
+        "📊 *Отчёт и оплаты*\n\nВыберите раздел:" if language == "ru"
+        else "📊 *Отчёт va to'lovlar*\n\nBo'limni tanlang:"
+    )
+    await update.message.reply_text(
+        text, parse_mode="Markdown", reply_markup=payments_keyboard(language)
+    )
+    return PAYMENTS_MENU
+
+
+async def payments_menu_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    language = ctx.user_data.get("lang", "uz")
+    txt = update.message.text.strip() if update.message and update.message.text else ""
+
+    back_txt = "⬅️ Назад" if language == "ru" else "⬅️ Orqaga"
+    zip_txt = "📦 Отправить ZIP файлы" if language == "ru" else "📦 ZIP orqali yuborish"
+    firms_txt = "🏢 Отчёт по оплатам фирмам" if language == "ru" else "🏢 Firmalarga to'lovlar hisoboti"
+
+    if txt == back_txt:
+        await update.message.reply_text(
+            "📊 *Hisobotlar va to'lovlar*\n\nBo'limni tanlang:" if language == "uz"
+            else "📊 *Отчёты и оплаты*\n\nВыберите раздел:",
+            parse_mode="Markdown",
+            reply_markup=reports_keyboard(language),
+        )
+        return REPORTS_MENU
+
+    elif txt == zip_txt:
+        if update.effective_user.id not in ADMIN_IDS:
+            await update.message.reply_text(
+                "❌ Bu bo'lim faqat administrator uchun.",
+                reply_markup=payments_keyboard(language),
+            )
+            return PAYMENTS_MENU
+        return await cmd_send_salaries(update, ctx)
+
+    elif txt == firms_txt:
+        if ctx.user_data.get("payments_auth"):
+            return await _show_firms_report(update, ctx)
+        from telegram import ReplyKeyboardMarkup
+        await update.message.reply_text(
+            "🔐 Parolni kiriting:" if language == "uz" else "🔐 Введите пароль:",
+            reply_markup=ReplyKeyboardMarkup([[back_txt]], resize_keyboard=True),
+        )
+        return PAYMENTS_PASSWORD
+
+    # Tanilmagan matn
+    await update.message.reply_text(
+        "📊 *Отчёт va to'lovlar*\n\nBo'limni tanlang:" if language == "uz"
+        else "📊 *Отчёт и оплаты*\n\nВыберите раздел:",
+        parse_mode="Markdown",
+        reply_markup=payments_keyboard(language),
+    )
+    return PAYMENTS_MENU
+
+
+async def payments_password_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    language = ctx.user_data.get("lang", "uz")
+    txt = update.message.text.strip() if update.message and update.message.text else ""
+    back_txt = "⬅️ Назад" if language == "ru" else "⬅️ Orqaga"
+
+    if txt == back_txt:
+        await update.message.reply_text(
+            "📊 *Отчёт va to'lovlar*\n\nBo'limni tanlang:" if language == "uz"
+            else "📊 *Отчёт и оплаты*\n\nВыберите раздел:",
+            parse_mode="Markdown",
+            reply_markup=payments_keyboard(language),
+        )
+        return PAYMENTS_MENU
+
+    if txt == PAYMENTS_PAROL:
+        ctx.user_data["payments_auth"] = True
+        return await _show_firms_report(update, ctx)
+    else:
+        await update.message.reply_text(
+            "❌ Parol noto'g'ri. Qayta urinib ko'ring:" if language == "uz"
+            else "❌ Неверный пароль. Попробуйте снова:",
+        )
+        return PAYMENTS_PASSWORD
+
+
+async def _show_firms_report(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    language = ctx.user_data.get("lang", "uz")
+    firms = await run_read(get_firms_report)
+
+    if not firms:
+        text = (
+            "❌ Hozircha firmalar ro'yxati topilmadi." if language == "uz"
+            else "❌ Список фирм пока не найден."
+        )
+        await update.message.reply_text(text, reply_markup=payments_keyboard(language))
+        return PAYMENTS_MENU
+
+    lines = ["🏢 *Firmalarga to'lovlar hisoboti*\n"] if language == "uz" \
+        else ["🏢 *Отчёт по оплатам фирмам*\n"]
+
+    for f in firms:
+        holati = f["holati"].strip().lower()
+        if holati in ("to'langan", "оплачено", "✅", "ha", "да"):
+            belgi = "✅"
+        elif holati in ("to'lanmagan", "не оплачено", "❌", "yo'q", "нет"):
+            belgi = "❌"
+        else:
+            belgi = "⏳"
+        lines.append(f"{belgi} *{f['firma']}* — {f['summa']} ({f['holati']})")
+
+    await update.message.reply_text(
+        "\n".join(lines), parse_mode="Markdown", reply_markup=payments_keyboard(language)
+    )
+    return PAYMENTS_MENU
+
+
+def reports_keyboard(language: str = "uz"):
+    """Hisobotlar va to'lovlar bo'limining pastki menyusi."""
+    from telegram import ReplyKeyboardMarkup
+    if language == "ru":
+        return ReplyKeyboardMarkup([
+            ["💰 Зарплата и бонусы"],
+            ["📊 Отчёт и оплаты"],
+            ["⬅️ Назад"],
+        ], resize_keyboard=True)
+    return ReplyKeyboardMarkup([
+        ["💰 Maosh va aksiyalar"],
+        ["📊 Отчёт va to'lovlar"],
+        ["⬅️ Orqaga"],
+    ], resize_keyboard=True)
+
+
+async def reports_menu_enter(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """'📊 Hisobotlar va to'lovlar' tugmasi bosilganda chaqiriladi."""
+    language = ctx.user_data.get("lang", "uz")
+    text = (
+        "📊 *Отчёты и оплаты*\n\nВыберите раздел:" if language == "ru"
+        else "📊 *Hisobotlar va to'lovlar*\n\nBo'limni tanlang:"
+    )
+    await update.message.reply_text(
+        text, parse_mode="Markdown", reply_markup=reports_keyboard(language)
+    )
+    return REPORTS_MENU
+
+
+async def reports_menu_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Hisobotlar va to'lovlar pastki menyusidagi tugmalarni ishlaydi."""
+    from bot import main_keyboard, T, MENU
+    language = ctx.user_data.get("lang", "uz")
+    txt = update.message.text.strip() if update.message and update.message.text else ""
+
+    back_txt = "⬅️ Назад" if language == "ru" else "⬅️ Orqaga"
+    salary_txt = "💰 Зарплата и бонусы" if language == "ru" else "💰 Maosh va aksiyalar"
+    payments_txt = "📊 Отчёт и оплаты" if language == "ru" else "📊 Отчёт va to'lovlar"
+
+    if txt == back_txt:
+        await update.message.reply_text(
+            T[language]["menu"], reply_markup=main_keyboard(language), parse_mode="Markdown"
+        )
+        return MENU
+
+    elif txt == salary_txt:
+        user_id = update.effective_user.id
+        data = await run_read(get_farmatsevt_salary, user_id)
+
+        if not data:
+            msg = (
+                "❌ Sizning TelegramID'ingiz bo'yicha joriy oy uchun maosh "
+                "ma'lumoti topilmadi.\n\nAgar siz ro'yxatdan o'tgan xodim "
+                "bo'lsangiz, buxgalteriya hali ma'lumotni kiritmagan bo'lishi "
+                "mumkin — birozdan so'ng qayta urinib ko'ring yoki "
+                "administratorga murojaat qiling."
+            )
+            await update.message.reply_text(msg, reply_markup=reports_keyboard(language))
+            return REPORTS_MENU
+
+        text = (
+            f"💰 *Maosh va aksiyalar — {data['oy_nomi']}*\n\n"
+            f"👤 {data['ismi']}\n"
+            f"🏪 Filial: {data['filial']}\n\n"
+            f"💵 Maosh: *{data['maosh']}*\n"
+            f"🎁 Aksiya: *{data['aksiya']}*\n"
+            f"📦 Jami: *{data['jami']}*"
+        )
+        await update.message.reply_text(
+            text, parse_mode="Markdown", reply_markup=reports_keyboard(language)
+        )
+        return REPORTS_MENU
+
+    elif txt == payments_txt:
+        return await payments_menu_enter(update, ctx)
+
+    # Tanilmagan matn — menyuni qayta ko'rsatamiz
+    await update.message.reply_text(
+        "📊 *Hisobotlar va to'lovlar*\n\nBo'limni tanlang:" if language == "uz"
+        else "📊 *Отчёты и оплаты*\n\nВыберите раздел:",
+        parse_mode="Markdown",
+        reply_markup=reports_keyboard(language),
+    )
+    return REPORTS_MENU
+
+
 # ─── Handlerlar ───────────────────────────────────────────────────────────────
 
 async def cmd_send_salaries(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -166,7 +476,7 @@ async def sal_receive_zip(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         zip_bytes = await file.download_as_bytearray()
 
         # Mudirlar ro'yxatini olish
-        mudir_map = get_mudir_map()
+        mudir_map = await run_read(get_mudir_map)
         if not mudir_map:
             await msg.edit_text("❌ Mudirlar ro'yxati topilmadi. Farmatsevtlar Sheets ni tekshiring.")
             return
@@ -266,5 +576,11 @@ def get_sal_states():
         SAL_WAIT_ZIP: [
             MessageHandler(filters.Document.ALL, sal_receive_zip),
             MessageHandler(filters.TEXT & ~filters.COMMAND, sal_cancel),
+        ],
+        PAYMENTS_MENU: [
+            MessageHandler(filters.TEXT & ~filters.COMMAND, payments_menu_handler),
+        ],
+        PAYMENTS_PASSWORD: [
+            MessageHandler(filters.TEXT & ~filters.COMMAND, payments_password_handler),
         ],
     }

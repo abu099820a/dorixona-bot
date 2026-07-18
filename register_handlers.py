@@ -25,6 +25,7 @@ from telegram.ext import (
 )
 from google.oauth2.service_account import Credentials
 import gspread
+from attendance import run_read, run_write
 
 # ─── Sozlamalar ───────────────────────────────────────────────────────────────
 
@@ -53,14 +54,20 @@ COL_LON       = 7  # G
 
 # ─── Yordamchi ───────────────────────────────────────────────────────────────
 
+_CACHED_CLIENT = None
+
 def _get_client():
+    global _CACHED_CLIENT
+    if _CACHED_CLIENT is not None:
+        return _CACHED_CLIENT
     creds_json = os.getenv("GOOGLE_CREDENTIALS")
     if creds_json:
         info = json.loads(creds_json)
         creds = Credentials.from_service_account_info(info, scopes=SCOPES)
     else:
         creds = Credentials.from_service_account_file("credentials.json", scopes=SCOPES)
-    return gspread.authorize(creds)
+    _CACHED_CLIENT = gspread.authorize(creds)
+    return _CACHED_CLIENT
 
 
 def normalize_phone(phone: str) -> str:
@@ -405,7 +412,7 @@ async def reg_phone_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
 
     # Sheets da tekshirish
-    farmatsevt = find_by_phone(phone)
+    farmatsevt = await run_read(find_by_phone, phone)
 
     if farmatsevt:
         # MAVJUD FARMATSEVT
@@ -427,7 +434,7 @@ async def reg_phone_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             return MENU
         else:
             # TelegramID bo'sh — saqlaydi
-            ok = save_telegram_id(farmatsevt["row_num"], user_id)
+            ok = await run_write(save_telegram_id, farmatsevt["row_num"], user_id)
             if ok:
                 await update.message.reply_text(
                     f"🎉 *Ro'yxatdan o'tdingiz!*\n\n"
@@ -497,7 +504,7 @@ async def reg_filial_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return REG_NAME
 
     # Filial ma'lumotlarini olish
-    filial_info = get_filial_info(txt)
+    filial_info = await run_read(get_filial_info, txt)
 
     if not filial_info:
         await update.message.reply_text(
@@ -556,7 +563,8 @@ async def reg_lavozim_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     filial_info = ctx.user_data.get("reg_filial_info", {})
     user_id     = update.effective_user.id
 
-    ok = add_new_farmatsevt(
+    ok = await run_write(
+        add_new_farmatsevt,
         ismi=ismi,
         telefon=phone,
         filial_nomi=filial_info.get("filial_nomi", ""),

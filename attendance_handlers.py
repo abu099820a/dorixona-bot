@@ -19,6 +19,7 @@ from attendance import (
     haversine_m, MAX_DISTANCE_KM, normalize_phone,
     init_month_sheet, calculate_monthly_hours,
     sync_pharmacists, fill_codes_in_sheet,
+    run_read, run_write,
 )
 
 ATT_PASSWORD = 106   # Parol kutish state
@@ -76,7 +77,7 @@ async def att_enter(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     # TelegramID bo'yicha tekshirish
     if not ctx.user_data.get("att_farmatsevt"):
-        farmatsevt = get_farmatsevt_by_userid(user_id)
+        farmatsevt = await run_read(get_farmatsevt_by_userid, user_id)
         if farmatsevt:
             ctx.user_data["att_auth"] = True
             ctx.user_data["att_farmatsevt"] = farmatsevt
@@ -144,7 +145,7 @@ async def att_phone_received(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return ATT_PHONE
 
     phone = normalize_phone(contact.phone_number)
-    farmatsevt = get_farmatsevt(phone)
+    farmatsevt = await run_read(get_farmatsevt, phone)
 
     if not farmatsevt:
         await update.message.reply_text(
@@ -159,7 +160,7 @@ async def att_phone_received(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     # TelegramID ni saqlash — keyingi safar telefon so'ralmaydi
     user_id = update.effective_user.id
-    save_userid_to_sheet(user_id, phone)
+    await run_write(save_userid_to_sheet, user_id, phone)
 
     await update.message.reply_text(
         f"✅ Xush kelibsiz, *{farmatsevt['ismi']}*!\n"
@@ -262,7 +263,24 @@ async def att_location_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ulon = loc.longitude
 
     farmatsevt = ctx.user_data.get("att_farmatsevt", {})
-    dist = haversine_m(ulat, ulon, farmatsevt.get("lat", 0), farmatsevt.get("lon", 0))
+
+    fil_lat = farmatsevt.get("lat", 0)
+    fil_lon = farmatsevt.get("lon", 0)
+    if not fil_lat or not fil_lon:
+        # Filialning koordinatasi jadvalda kiritilmagan yoki 0/bo'sh —
+        # bunday holatda (0,0) nuqtasidan hisoblash mantiqsiz masofa
+        # (~8000+ km) beradi. Aniq xabar bilan to'xtatamiz.
+        await update.message.reply_text(
+            f"⚠️ *{farmatsevt.get('filial', '')}* filiali uchun "
+            f"koordinata (Lat/Lon) sozlanmagan.\n\n"
+            f"Iltimos, administratorga murojaat qiling — "
+            f"Farmatsevtlar jadvalida Lat/Lon ustunlarini to'ldirish kerak.",
+            parse_mode="Markdown",
+            reply_markup=location_keyboard(),
+        )
+        return ATT_LOCATION
+
+    dist = haversine_m(ulat, ulon, fil_lat, fil_lon)
 
     if dist > MAX_DISTANCE_KM * 1000:
         await update.message.reply_text(
@@ -293,8 +311,8 @@ async def att_location_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     # ko'rilgan muammo). Endi tekshiruv har doim to'g'ridan-to'g'ri
     # Google Sheets'dagi haqiqiy Keldi/Ketdi qiymatidan olinadi.
     from attendance import get_today_status
-    sheet_today = get_today_status(
-        farmatsevt.get("ismi", ""), farmatsevt.get("filial", ""), now=check_date
+    sheet_today = await run_read(
+        get_today_status, farmatsevt.get("ismi", ""), farmatsevt.get("filial", ""), check_date
     )
     sheet_keldi_time = sheet_today.get("keldi")   # "HH:MM" | None
     sheet_ketdi_time = sheet_today.get("ketdi")   # "HH:MM" | None
@@ -348,8 +366,8 @@ async def att_location_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             # tekshiramiz — agar u yerda "ochiq" (Keldi bor, Ketdi yo'q)
             # qator topilsa, Ketdi o'sha kunga yoziladi.
             fallback_date = check_date - timedelta(days=1)
-            fallback_status = get_today_status(
-                farmatsevt.get("ismi", ""), farmatsevt.get("filial", ""), now=fallback_date
+            fallback_status = await run_read(
+                get_today_status, farmatsevt.get("ismi", ""), farmatsevt.get("filial", ""), fallback_date
             )
             if fallback_status.get("keldi") and not fallback_status.get("ketdi"):
                 check_date = fallback_date
@@ -372,7 +390,7 @@ async def att_location_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     # hisobga oladi.
     write_now = check_date
 
-    ok = write_attendance(farmatsevt, action, zamena=False, write_time=write_now)
+    ok = await run_write(write_attendance, farmatsevt, action, False, write_now)
 
     if ok:
         # Vaqtni saqlash
@@ -411,7 +429,7 @@ async def att_zamena_filial_handler(update: Update, ctx: ContextTypes.DEFAULT_TY
     if txt == "⬅️ Orqaga":
         return await _show_att_menu(update, ctx)
 
-    filiallar = get_filiallar_list()
+    filiallar = await run_read(get_filiallar_list)
     selected = None
     for f in filiallar:
         fil_no = str(f["filial"]).strip()
@@ -465,7 +483,20 @@ async def att_zamena_location_handler(update: Update, ctx: ContextTypes.DEFAULT_
     ulon = update.message.location.longitude
 
     zamena_filial = ctx.user_data.get("att_zamena_filial", {})
-    dist = haversine_m(ulat, ulon, zamena_filial.get("lat", 0), zamena_filial.get("lon", 0))
+
+    zf_lat = zamena_filial.get("lat", 0)
+    zf_lon = zamena_filial.get("lon", 0)
+    if not zf_lat or not zf_lon:
+        await update.message.reply_text(
+            f"⚠️ *{zamena_filial.get('filial_name', '')}* filiali uchun "
+            f"koordinata (Lat/Lon) sozlanmagan.\n\n"
+            f"Iltimos, administratorga murojaat qiling.",
+            parse_mode="Markdown",
+            reply_markup=location_keyboard("📍 Zamena lokatsiyamni yuborish"),
+        )
+        return ATT_ZAMENA_LOCATION
+
+    dist = haversine_m(ulat, ulon, zf_lat, zf_lon)
 
     if dist > MAX_DISTANCE_KM * 1000:
         await update.message.reply_text(
@@ -477,7 +508,7 @@ async def att_zamena_location_handler(update: Update, ctx: ContextTypes.DEFAULT_
 
     farmatsevt = ctx.user_data.get("att_farmatsevt", {})
     zamena_info = {**farmatsevt, "filial": farmatsevt["filial"], "zamena_filial": zamena_filial["filial"]}
-    ok = write_attendance(zamena_info, "keldi", zamena=True)
+    ok = await run_write(write_attendance, zamena_info, "keldi", True)
     now_str = __import__("datetime").datetime.now().strftime("%H:%M")
 
     if ok:
@@ -672,12 +703,13 @@ async def att_daymark_end_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE
     farmatsevt = ctx.user_data.get("att_farmatsevt", {})
 
     from attendance import mark_rest_days
-    res = mark_rest_days(
-        ismi=farmatsevt.get("ismi", ""),
-        filial=farmatsevt.get("filial", ""),
-        start_day=start_day,
-        end_day=end_day,
-        kind=kind,
+    res = await run_write(
+        mark_rest_days,
+        farmatsevt.get("ismi", ""),
+        farmatsevt.get("filial", ""),
+        start_day,
+        end_day,
+        kind,
     )
 
     if res.get("error"):
@@ -733,7 +765,7 @@ async def att_change_filial_handler(update: Update, ctx: ContextTypes.DEFAULT_TY
     # aniqlash (raqam solishtirish) ishlamay qolib, xodim doim jadval oxiriga
     # tushib ketishi yoki eski joyida qolib ketishiga sabab bo'lgan.
     from register_handlers import get_filial_info
-    selected = get_filial_info(txt.strip())
+    selected = await run_read(get_filial_info, txt.strip())
 
     if not selected:
         await update.message.reply_text(
@@ -781,15 +813,26 @@ async def att_change_lavozim_handler(update: Update, ctx: ContextTypes.DEFAULT_T
     new_filial = ctx.user_data.get("change_new_filial", {})
     user_id = update.effective_user.id
 
+    def _safe_float(v):
+        try:
+            v = str(v).strip().replace(",", ".")
+            return float(v) if v else 0.0
+        except Exception:
+            return 0.0
+
+    new_lat = _safe_float(new_filial.get("lat", 0))
+    new_lon = _safe_float(new_filial.get("lon", 0))
+
     # Sheets da yangilash
     from attendance import update_farmatsevt_filial_lavozim
-    ok = update_farmatsevt_filial_lavozim(
+    ok = await run_write(
+        update_farmatsevt_filial_lavozim,
         ismi=farmatsevt.get("ismi", ""),
         old_filial=farmatsevt.get("filial", ""),
         new_filial=new_filial.get("filial_nomi", ""),
         new_lavozim=lavozim,
-        lat=new_filial.get("lat", 0),
-        lon=new_filial.get("lon", 0),
+        lat=new_lat,
+        lon=new_lon,
         telegram_id=user_id,
     )
 
@@ -798,9 +841,16 @@ async def att_change_lavozim_handler(update: Update, ctx: ContextTypes.DEFAULT_T
         ctx.user_data["att_farmatsevt"] = {
             **farmatsevt,
             "filial": new_filial.get("filial_nomi", ""),
-            "lat": new_filial.get("lat", 0),
-            "lon": new_filial.get("lon", 0),
+            "lat": new_lat,
+            "lon": new_lon,
         }
+        if not new_lat or not new_lon:
+            await update.message.reply_text(
+                f"⚠️ Diqqat: *{new_filial.get('filial_nomi', '')}* filiali uchun "
+                f"koordinata (Lat/Lon) topilmadi — administratorga xabar bering, "
+                f"aks holda Keldi/Ketdi bosilganda xatolik chiqishi mumkin.",
+                parse_mode="Markdown",
+            )
         await update.message.reply_text(
             f"✅ *Ma'lumotlar yangilandi!*\n\n"
             f"👤 {farmatsevt.get('ismi', '')}\n"
@@ -870,7 +920,7 @@ async def cmd_sync_pharmacists(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
     msg = await update.message.reply_text("⏳ Sinxronizatsiya boshlanmoqda...")
     try:
-        results = sync_pharmacists()
+        results = await run_write(sync_pharmacists)
         if "error" in results:
             await msg.edit_text(f"❌ Xato: {results['error']}")
             return
@@ -900,7 +950,7 @@ async def cmd_fill_codes(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
     msg = await update.message.reply_text("⏳ Kodlar yaratilmoqda...")
     try:
-        codes = fill_codes_in_sheet()
+        codes = await run_write(fill_codes_in_sheet)
         if not codes:
             await msg.edit_text("ℹ️ Barcha farmatsevtlarda kod allaqachon bor.")
             return
@@ -1030,7 +1080,7 @@ async def cmd_init_month(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
     await update.message.reply_text("⏳ Oy listi tayyorlanmoqda...")
     try:
-        init_month_sheet()
+        await run_write(init_month_sheet)
         await update.message.reply_text("✅ Farmatsevtlar ro'yxati Sheet ga yozildi!")
     except Exception as e:
         await update.message.reply_text(f"❌ Xato: {e}")
@@ -1043,7 +1093,7 @@ async def cmd_calc_hours(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
     await update.message.reply_text("⏳ Ish soatlari hisoblanmoqda...")
     try:
-        count = calculate_monthly_hours()
+        count = await run_write(calculate_monthly_hours)
         await update.message.reply_text(f"✅ {count} ta farmatsevt ish soati hisoblandi!")
     except Exception as e:
         await update.message.reply_text(f"❌ Xato: {e}")
