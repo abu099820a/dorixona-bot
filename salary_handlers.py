@@ -439,6 +439,7 @@ def get_farmatsevt_salary_by_phone(phone: str) -> dict | None:
     """
     def _find_row_by_phone(ws, target_phone):
         all_values = ws.get_all_values()
+        seen_phones = []
         for row in all_values[1:]:
             if not row or not row[0]:
                 continue
@@ -450,8 +451,11 @@ def get_farmatsevt_salary_by_phone(phone: str) -> dict | None:
             telefon_cell = str(_cell(SAL_COL_TELEFON)).strip()
             if not telefon_cell:
                 continue  # bo'sh (sarlavha) qator — xodim emas
-            if _sal_normalize_phone(telefon_cell) != target_phone:
+            norm = _sal_normalize_phone(telefon_cell)
+            seen_phones.append((telefon_cell, norm))
+            if norm != target_phone:
                 continue
+            print(f"[MAOSH] MOS TOPILDI: xom='{telefon_cell}' normalized='{norm}'")
 
             def _num(col, _row=row):
                 v = _row[col - 1] if col - 1 < len(_row) else ""
@@ -480,6 +484,8 @@ def get_farmatsevt_salary_by_phone(phone: str) -> dict | None:
                 "jami": _num(SAL_COL_JAMI),
                 "karta": _num(SAL_COL_KARTA),
             }
+        print(f"[MAOSH] '{ws.title}' da mos topilmadi. Ko'rilgan telefon(lar) "
+              f"(xom -> normalized), birinchi 15 tasi: {seen_phones[:15]}")
         return None
 
     try:
