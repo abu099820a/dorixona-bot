@@ -768,6 +768,31 @@ def main():
         allow_reentry=True,
     )
     app.add_handler(conv)
+
+    # ── Redeploy'dan keyingi sessiya tiklash (XAVFSIZ usul) ──
+    # MUHIM: bu handler ConversationHandler'ning ICHIGA emas, balki
+    # ALOHIDA, PASTROQ ustuvorlikdagi guruhga (group=1) qo'shiladi.
+    # PTB avval group=0 dagi ConversationHandler'ni tekshiradi — agar u
+    # xabarni "o'zimga tegishli" deb hisoblasa (faol suhbat davom
+    # etayotgan bo'lsa, entry_point yoki fallback mos kelsa), shu yerda
+    # to'xtaydi va bu pastdagi handler UMUMAN ishga tushmaydi. Faqat
+    # ConversationHandler HECH NARSANI qo'lga OLA OLMAGANDA (ya'ni bot
+    # qayta ishga tushib, foydalanuvchi uchun suhbat holati butunlay
+    # yo'qolganda) — shu handler ishga tushib, "/start" bosilgandek
+    # sessiyani qayta tiklaydi.
+    #
+    # Avvalgi urinishda bu mantiq ConversationHandler'ning o'z
+    # entry_points/fallbacks ichiga joylashtirilgan edi — bu esa
+    # suhbat holatini kuzatishga aralashib, foydalanuvchilarni doim
+    # tilni tanlashga qaytarib yuborish xatosiga sabab bo'lgan edi.
+    # Alohida guruh sifatida bu xavf yo'q, chunki ConversationHandler
+    # o'z holatini hech qachon bu handler orqali "bilib olmaydi".
+    async def _recover_session(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+        if update.message:
+            await start(update, ctx)
+
+    app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, _recover_session), group=1)
+
     print("✅ Vaksin Med bot ishga tushdi!")
     from telegram.ext import CommandHandler as CmdHandler
     app.add_handler(CmdHandler("init_month", cmd_init_month))
