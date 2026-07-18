@@ -477,7 +477,7 @@ def get_farmatsevt_salary_by_phone(phone: str) -> dict | None:
                 if v == "" or v is None:
                     return 0
                 try:
-                    return float(str(v).replace(",", ".").replace(" ", ""))
+                    return float(re.sub(r"\s+", "", str(v)).replace(",", "."))
                 except Exception:
                     return 0
 
