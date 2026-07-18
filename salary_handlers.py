@@ -140,49 +140,163 @@ def find_telegram_id(filename: str, mudir_map: dict) -> str | None:
     return None
 
 
+SALARY_WS_NAME = "Oylik"
+AKSIYA_WS_NAME = "Aksiya"
+
+# Maosh jadvalidagi ustunlar (pozitsiya bo'yicha, 1-indeksda):
+# A=1 Filial/Ismi | B=2 Telefon | C=3 Reja(keyingi oy) | D=4 Reja(joriy oy)
+# E=5 Savdo | F=6 Rejadan farq | G=7 Foiz | H=8 Oylik % (bonus)
+# I=9 Fiksa | J=10 Reja bonusi | K=11 Avans | L=12 Pereuchyot shtraf
+# M=13 Kech/erta shtraf | N=14 Srok shtraf | O=15 Umumiy summa
+# P=16 Plastik kartaga tushadigan
+SAL_COL_FILIAL_ISMI = 1
+SAL_COL_TELEFON = 2
+SAL_COL_REJA_KEYINGI = 3
+SAL_COL_REJA_JORIY = 4
+SAL_COL_SAVDO = 5
+SAL_COL_FARQ = 6
+SAL_COL_FOIZ = 7
+SAL_COL_OYLIK_PERCENT = 8
+SAL_COL_FIKSA = 9
+SAL_COL_REJA_BONUS = 10
+SAL_COL_AVANS = 11
+SAL_COL_SHTRAF_PEREUCHYOT = 12
+SAL_COL_SHTRAF_VAQT = 13
+SAL_COL_SHTRAF_SROK = 14
+SAL_COL_JAMI = 15
+SAL_COL_KARTA = 16
+
+
+def _sal_normalize_phone(phone) -> str:
+    digits = re.sub(r"\D", "", str(phone))
+    if digits.startswith("998"):
+        return digits
+    if digits.startswith("0"):
+        return "998" + digits[1:]
+    if len(digits) == 9:
+        return "998" + digits
+    return digits
+
+
+def _get_phone_by_telegram_id(telegram_id) -> str:
+    """Farmatsevtlar jadvalidan TelegramID bo'yicha telefon raqamini topadi."""
+    try:
+        client = _get_client()
+        ws = client.open_by_key(PHARMACY_SHEET_ID).worksheet("Farmatsevtlar")
+        records = ws.get_all_records()
+        tid = str(telegram_id).strip()
+        for row in records:
+            if str(row.get("TelegramID", "")).strip() == tid:
+                return str(row.get("Telefon", "")).strip()
+        return ""
+    except Exception as e:
+        logger.error(f"[MAOSH] Telefon qidirish xato: {e}")
+        return ""
+
+
 def get_farmatsevt_salary(telegram_id) -> dict | None:
     """
-    Berilgan TelegramID bo'yicha joriy oy uchun Maosh/Aksiya ma'lumotini
-    "Maosh" Google Sheets'idan (SALARY_SHEET_ID) o'qiydi.
+    Xodimning TelegramID'si orqali telefon raqamini topadi, so'ng
+    "Oylik" va "Aksiya" varaqlaridan (SALARY_SHEET_ID) o'sha telefon
+    raqamiga mos qatorlarni qidiradi va ikkalasini birlashtirib to'liq
+    hisobotni qaytaradi.
 
-    Jadval tuzilishi (Davomat jadvali kabi, har oy uchun alohida varaq,
-    masalan "Iyul 2026"):
-        TelegramID | Ismi | Filial | Maosh | Aksiya | Jami
+    Jadval tuzilishi (ikkala varaqda ham bir xil, filial sarlavha
+    qatorlari + xodim qatorlari aralash holda, ustunlar POZITSIYA
+    bo'yicha o'qiladi):
+        A: Filial nomi (sarlavha qatorida) yoki Xodim ismi (xodim qatorida)
+        B: Telefon (faqat xodim qatorida bo'ladi)
+        C/D: Reja (faqat filial sarlavhasida)
+        E: Bir oylik savdo
+        G: Foiz | H: Oylik % (savdodan bonus)
+        I: Fiksa (asosiy oylik) | J: Rejaga chiqqani uchun bonus
+        K: Avans olganlar | L/M/N: turli shtraflar
+        O: Umumiy summa (qo'lga tegadigan yakuniy summa)
 
-    Qaytaradi: {"ismi", "filial", "maosh", "aksiya", "jami", "oy_nomi"} | None
-    None qaytsa — o'sha oy uchun varaq hali yaratilmagan yoki xodim
-    topilmagan degani.
+    MUHIM: bu varaqlar oylik davomida QO'LDA tozalanib, keyingi oy
+    ma'lumotlari bilan qayta to'ldiriladi — shuning uchun oy nomi bilan
+    emas, doim bitta doimiy "Oylik"/"Aksiya" nomi bilan ochiladi.
+
+    Qaytaradi to'liq breakdown dict yoki None (ikkalasida ham topilmasa).
     """
-    from datetime import datetime
-    from attendance import OY_NOMLARI, UZ_TZ
+    def _find_row_by_phone(ws, target_phone):
+        all_values = ws.get_all_values()
+        current_filial = ""
+        for row in all_values[1:]:
+            if not row or not row[0]:
+                continue
+
+            def _cell(col, _row=row):
+                idx = col - 1
+                return _row[idx] if idx < len(_row) else ""
+
+            telefon_cell = str(_cell(SAL_COL_TELEFON)).strip()
+            if not telefon_cell:
+                current_filial = str(_cell(SAL_COL_FILIAL_ISMI)).strip()
+                continue
+            if _sal_normalize_phone(telefon_cell) != target_phone:
+                continue
+
+            def _num(col, _row=row):
+                v = _row[col - 1] if col - 1 < len(_row) else ""
+                if v == "" or v is None:
+                    return 0
+                try:
+                    return float(str(v).replace(",", ".").replace(" ", ""))
+                except Exception:
+                    return 0
+
+            return {
+                "ismi": str(_cell(SAL_COL_FILIAL_ISMI)).strip(),
+                "filial": current_filial,
+                "savdo": _num(SAL_COL_SAVDO),
+                "foiz": _num(SAL_COL_FOIZ),
+                "oylik_percent_bonus": _num(SAL_COL_OYLIK_PERCENT),
+                "fiksa": _num(SAL_COL_FIKSA),
+                "reja_bonus": _num(SAL_COL_REJA_BONUS),
+                "avans": _num(SAL_COL_AVANS),
+                "shtraf_pereuchyot": _num(SAL_COL_SHTRAF_PEREUCHYOT),
+                "shtraf_vaqt": _num(SAL_COL_SHTRAF_VAQT),
+                "shtraf_srok": _num(SAL_COL_SHTRAF_SROK),
+                "jami": _num(SAL_COL_JAMI),
+                "karta": _num(SAL_COL_KARTA),
+            }
+        return None
 
     try:
+        phone = _get_phone_by_telegram_id(telegram_id)
+        if not phone:
+            return None
+        target_phone = _sal_normalize_phone(phone)
+
         client = _get_client()
         sh = client.open_by_key(SALARY_SHEET_ID)
 
-        now = datetime.now(UZ_TZ)
-        sheet_name = f"{OY_NOMLARI[now.month]} {now.year}"
-
+        oylik_data = None
         try:
-            ws = sh.worksheet(sheet_name)
+            ws_oylik = sh.worksheet(SALARY_WS_NAME)
+            oylik_data = _find_row_by_phone(ws_oylik, target_phone)
         except gspread.exceptions.WorksheetNotFound:
+            pass
+
+        aksiya_data = None
+        try:
+            ws_aksiya = sh.worksheet(AKSIYA_WS_NAME)
+            aksiya_data = _find_row_by_phone(ws_aksiya, target_phone)
+        except gspread.exceptions.WorksheetNotFound:
+            pass
+
+        if not oylik_data and not aksiya_data:
             return None
 
-        records = ws.get_all_records()
-        tid_str = str(telegram_id).strip()
-
-        for row in records:
-            row_tid = str(row.get("TelegramID", "")).strip()
-            if row_tid == tid_str:
-                return {
-                    "ismi": str(row.get("Ismi", "")).strip(),
-                    "filial": str(row.get("Filial", "")).strip(),
-                    "maosh": row.get("Maosh", ""),
-                    "aksiya": row.get("Aksiya", ""),
-                    "jami": row.get("Jami", ""),
-                    "oy_nomi": sheet_name,
-                }
-        return None
+        base = oylik_data or {}
+        result = dict(base)
+        result["ismi"] = (oylik_data or aksiya_data).get("ismi", "")
+        result["filial"] = (oylik_data or aksiya_data).get("filial", "")
+        result["aksiya_jami"] = aksiya_data["jami"] if aksiya_data else 0
+        result["oylik_jami"] = oylik_data["jami"] if oylik_data else 0
+        result["yakuniy_jami"] = result["oylik_jami"] + result["aksiya_jami"]
+        return result
 
     except Exception as e:
         logger.error(f"[MAOSH] get_farmatsevt_salary xato: {e}")
@@ -402,7 +516,7 @@ async def reports_menu_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
         if not data:
             msg = (
-                "❌ Sizning TelegramID'ingiz bo'yicha joriy oy uchun maosh "
+                "❌ Sizning telefon raqamingiz bo'yicha joriy oy uchun maosh "
                 "ma'lumoti topilmadi.\n\nAgar siz ro'yxatdan o'tgan xodim "
                 "bo'lsangiz, buxgalteriya hali ma'lumotni kiritmagan bo'lishi "
                 "mumkin — birozdan so'ng qayta urinib ko'ring yoki "
@@ -411,14 +525,53 @@ async def reports_menu_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(msg, reply_markup=reports_keyboard(language))
             return REPORTS_MENU
 
-        text = (
-            f"💰 *Maosh va aksiyalar — {data['oy_nomi']}*\n\n"
-            f"👤 {data['ismi']}\n"
-            f"🏪 Filial: {data['filial']}\n\n"
-            f"💵 Maosh: *{data['maosh']}*\n"
-            f"🎁 Aksiya: *{data['aksiya']}*\n"
-            f"📦 Jami: *{data['jami']}*"
-        )
+        def _fmt(n):
+            try:
+                n = float(n)
+                if n == int(n):
+                    return f"{int(n):,}".replace(",", " ")
+                return f"{n:,.2f}".replace(",", " ")
+            except Exception:
+                return str(n)
+
+        g = lambda k, d=0: data.get(k, d)
+
+        lines = [
+            f"💰 *Maosh va aksiyalar*\n",
+            f"👤 {data['ismi']}",
+            f"🏪 Filial: {data['filial']}\n",
+            f"📊 Savdo: {_fmt(g('savdo'))} so'm",
+        ]
+        if g("foiz"):
+            lines.append(f"📈 Foiz: {g('foiz') * 100:.1f}%")
+        if g("oylik_percent_bonus"):
+            lines.append(f"🎁 Savdodan bonus: {_fmt(g('oylik_percent_bonus'))} so'm")
+        if g("fiksa"):
+            lines.append(f"💵 Fiksa (asosiy oylik): {_fmt(g('fiksa'))} so'm")
+        if g("reja_bonus"):
+            lines.append(f"🏆 Rejaga chiqqani uchun bonus: {_fmt(g('reja_bonus'))} so'm")
+
+        deductions = []
+        if g("avans"):
+            deductions.append(f"➖ Avans: {_fmt(g('avans'))} so'm")
+        if g("shtraf_pereuchyot"):
+            deductions.append(f"➖ Pereuchyot shtrafi: {_fmt(g('shtraf_pereuchyot'))} so'm")
+        if g("shtraf_vaqt"):
+            deductions.append(f"➖ Kech ochilgan/erta yopilgan shtrafi: {_fmt(g('shtraf_vaqt'))} so'm")
+        if g("shtraf_srok"):
+            deductions.append(f"➖ Srok shtrafi: {_fmt(g('shtraf_srok'))} so'm")
+        if deductions:
+            lines.append("")
+            lines.extend(deductions)
+
+        lines.append("")
+        lines.append(f"💵 Oylik: {_fmt(g('oylik_jami'))} so'm")
+        lines.append(f"🎁 Aksiya: {_fmt(g('aksiya_jami'))} so'm")
+        lines.append(f"💰 *JAMI: {_fmt(g('yakuniy_jami'))} so'm*")
+        if g("karta"):
+            lines.append(f"💳 Plastik kartaga: {_fmt(g('karta'))} so'm")
+
+        text = "\n".join(lines)
         await update.message.reply_text(
             text, parse_mode="Markdown", reply_markup=reports_keyboard(language)
         )
