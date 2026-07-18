@@ -143,28 +143,30 @@ def find_telegram_id(filename: str, mudir_map: dict) -> str | None:
 SALARY_WS_NAME = "Oylik"
 AKSIYA_WS_NAME = "Aksiya"
 
-# Maosh jadvalidagi ustunlar (pozitsiya bo'yicha, 1-indeksda):
-# A=1 Filial/Ismi | B=2 Telefon | C=3 Reja(keyingi oy) | D=4 Reja(joriy oy)
-# E=5 Savdo | F=6 Rejadan farq | G=7 Foiz | H=8 Oylik % (bonus)
-# I=9 Fiksa | J=10 Reja bonusi | K=11 Avans | L=12 Pereuchyot shtraf
-# M=13 Kech/erta shtraf | N=14 Srok shtraf | O=15 Umumiy summa
-# P=16 Plastik kartaga tushadigan
-SAL_COL_FILIAL_ISMI = 1
-SAL_COL_TELEFON = 2
-SAL_COL_REJA_KEYINGI = 3
-SAL_COL_REJA_JORIY = 4
-SAL_COL_SAVDO = 5
-SAL_COL_FARQ = 6
-SAL_COL_FOIZ = 7
-SAL_COL_OYLIK_PERCENT = 8
-SAL_COL_FIKSA = 9
-SAL_COL_REJA_BONUS = 10
-SAL_COL_AVANS = 11
-SAL_COL_SHTRAF_PEREUCHYOT = 12
-SAL_COL_SHTRAF_VAQT = 13
-SAL_COL_SHTRAF_SROK = 14
-SAL_COL_JAMI = 15
-SAL_COL_KARTA = 16
+# Maosh jadvalidagi ustunlar (pozitsiya bo'yicha, 1-indeksda) — YANGI format
+# (Davomat jadvaliga o'xshab, alohida Filial/Ismi/Telefon ustunlari bilan):
+# A=1 Filial (raqam bilan, "1 - ТАШМИ-1") | B=2 Ismi | C=3 Telefon
+# D=4 Reja(keyingi oy) | E=5 Reja(joriy oy) | F=6 Savdo | G=7 Rejadan farq
+# H=8 Foiz | I=9 Oylik % (bonus) | J=10 Fiksa | K=11 Reja bonusi
+# L=12 Avans | M=13 Pereuchyot shtraf | N=14 Kech/erta shtraf
+# O=15 Srok shtraf | P=16 Umumiy summa | Q=17 Plastik kartaga tushadigan
+SAL_COL_FILIAL = 1
+SAL_COL_ISMI = 2
+SAL_COL_TELEFON = 3
+SAL_COL_REJA_KEYINGI = 4
+SAL_COL_REJA_JORIY = 5
+SAL_COL_SAVDO = 6
+SAL_COL_FARQ = 7
+SAL_COL_FOIZ = 8
+SAL_COL_OYLIK_PERCENT = 9
+SAL_COL_FIKSA = 10
+SAL_COL_REJA_BONUS = 11
+SAL_COL_AVANS = 12
+SAL_COL_SHTRAF_PEREUCHYOT = 13
+SAL_COL_SHTRAF_VAQT = 14
+SAL_COL_SHTRAF_SROK = 15
+SAL_COL_JAMI = 16
+SAL_COL_KARTA = 17
 
 
 def _sal_normalize_phone(phone) -> str:
@@ -221,7 +223,6 @@ def get_farmatsevt_salary(telegram_id) -> dict | None:
     """
     def _find_row_by_phone(ws, target_phone):
         all_values = ws.get_all_values()
-        current_filial = ""
         for row in all_values[1:]:
             if not row or not row[0]:
                 continue
@@ -232,8 +233,7 @@ def get_farmatsevt_salary(telegram_id) -> dict | None:
 
             telefon_cell = str(_cell(SAL_COL_TELEFON)).strip()
             if not telefon_cell:
-                current_filial = str(_cell(SAL_COL_FILIAL_ISMI)).strip()
-                continue
+                continue  # bo'sh (sarlavha) qator — xodim emas
             if _sal_normalize_phone(telefon_cell) != target_phone:
                 continue
 
@@ -247,8 +247,8 @@ def get_farmatsevt_salary(telegram_id) -> dict | None:
                     return 0
 
             return {
-                "ismi": str(_cell(SAL_COL_FILIAL_ISMI)).strip(),
-                "filial": current_filial,
+                "ismi": str(_cell(SAL_COL_ISMI)).strip(),
+                "filial": str(_cell(SAL_COL_FILIAL)).strip(),
                 "savdo": _num(SAL_COL_SAVDO),
                 "foiz": _num(SAL_COL_FOIZ),
                 "oylik_percent_bonus": _num(SAL_COL_OYLIK_PERCENT),

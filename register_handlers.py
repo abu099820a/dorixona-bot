@@ -350,30 +350,13 @@ def _add_to_attendance(ismi: str, filial_nomi: str, telefon: str = ""):
         print(f"[REG] Davomat yangilash xato: {e}")
 
 
-def _oylik_filial_nom(filial_nomi: str) -> str:
+def _add_to_salary_sheet(ws_name: str, ismi: str, filial_nomi: str, telefon: str = ""):
     """
-    Farmatsevtlar formatidagi filial nomidan ("6 - ЮНУСАБАД 7") faqat
-    NOM qismini ajratib oladi ("ЮНУСАБАД 7") — Oylik varag'ida filiallar
-    raqamsiz, faqat nom bilan yozilgani uchun solishtirish shu orqali
-    amalga oshiriladi.
-    """
-    m = re.match(r"^\d+\s*[-\u2014]\s*(.+)$", str(filial_nomi).strip())
-    nom = m.group(1).strip() if m else str(filial_nomi).strip()
-    return re.sub(r"\s+", " ", nom).strip().upper()
-
-
-def _add_to_oylik(ismi: str, filial_nomi: str, telefon: str = ""):
-    """
-    "Oylik" (Maosh) Sheets'ga (SALARY_SHEET_ID) yangi xodimni qo'shadi.
-    Jadval: A ustunda filial sarlavha qatorlari (raqamsiz, faqat nom) va
-    xodim qatorlari aralash holda; B ustun bo'sh bo'lsa — sarlavha qatori.
-
-    MUHIM: bu jadval raqamli filial kodi ishlatmaydi, shuning uchun
-    moslashtirish FILIAL NOMI orqali (katta-kichik harf va bo'sh joyларга
-    e'tibor bermay) amalga oshiriladi. Agar mos filial topilmasa, xodim
-    hech qayerga qo'shilmaydi va bu holat logga yoziladi — administrator
-    "Oylik" varag'ida filial nomini tekshirib, qo'lda tuzatishi kerak
-    bo'lishi mumkin (masalan imlo farqi tufayli).
+    "Oylik" yoki "Aksiya" Sheets'ga (SALARY_SHEET_ID) yangi xodimni
+    qo'shadi. Jadval endi Davomat bilan bir xil formatda:
+        A=Filial (raqam bilan, masalan "1 - ТАШМИ-1") | B=Ismi | C=Telefon
+    Shu filialdagi oxirgi xodimdan keyin qo'shiladi (raqamli kod bo'yicha
+    aniqlanadi — Farmatsevtlar/Davomat bilan bir xil mantiq).
     """
     try:
         if not SALARY_SHEET_ID:
@@ -382,46 +365,36 @@ def _add_to_oylik(ismi: str, filial_nomi: str, telefon: str = ""):
         sh = client.open_by_key(SALARY_SHEET_ID)
 
         try:
-            ws = sh.worksheet("Oylik")
+            ws = sh.worksheet(ws_name)
         except Exception:
-            print("[REG] 'Oylik' varag'i topilmadi — o'tkazib yuborildi")
+            print(f"[REG] '{ws_name}' varag'i topilmadi — o'tkazib yuborildi")
             return
 
         all_values = ws.get_all_values()
-        target_nom = _oylik_filial_nom(filial_nomi)
-
-        last_row = None
-        in_target_filial = False
+        filial_kod = _filial_kod(filial_nomi)
+        last_row = 1  # sarlavha qatoridan keyin, default
 
         for i, row in enumerate(all_values):
             if i == 0:
                 continue  # sarlavha qatori
             if not row or not row[0]:
                 continue
-            a_val = str(row[0]).strip()
-            b_val = str(row[1]).strip() if len(row) > 1 else ""
-
-            if not b_val:
-                # Filial sarlavha qatori
-                row_nom = re.sub(r"\s+", " ", a_val).strip().upper()
-                in_target_filial = (row_nom == target_nom)
-                if in_target_filial:
-                    last_row = i + 1
-            else:
-                # Xodim qatori
-                if in_target_filial:
-                    last_row = i + 1
-
-        if last_row is None:
-            print(f"[REG] Oylik: '{filial_nomi}' ({target_nom}) filiali topilmadi, qo'shilmadi")
-            return
+            row_filial = str(row[0]).strip()
+            if _filial_kod(row_filial) == filial_kod:
+                last_row = i + 1
 
         insert_row = last_row + 1
-        ws.insert_row([ismi, telefon], index=insert_row, value_input_option="USER_ENTERED")
-        print(f"[REG] Oylik ga qo'shildi: {filial_nomi} | {ismi} | {telefon} | qator {insert_row}")
+        ws.insert_row([filial_nomi, ismi, telefon], index=insert_row, value_input_option="USER_ENTERED")
+        print(f"[REG] {ws_name} ga qo'shildi: {filial_nomi} | {ismi} | {telefon} | qator {insert_row}")
 
     except Exception as e:
-        print(f"[REG] Oylik yangilash xato: {e}")
+        print(f"[REG] {ws_name} yangilash xato: {e}")
+
+
+def _add_to_oylik(ismi: str, filial_nomi: str, telefon: str = ""):
+    """Xodimni "Oylik" va "Aksiya" varaqlarining ikkalasiga ham qo'shadi."""
+    _add_to_salary_sheet("Oylik", ismi, filial_nomi, telefon)
+    _add_to_salary_sheet("Aksiya", ismi, filial_nomi, telefon)
 
 
 # ─── Klaviaturalar ────────────────────────────────────────────────────────────
