@@ -758,7 +758,17 @@ def main():
             **get_reg_states(),
             **get_sal_states(),
         },
-        fallbacks=[CommandHandler("start", start), MessageHandler(filters.ALL, start)],
+        fallbacks=[
+            CommandHandler("start", start),
+            # MUHIM: filters.ALL o'rniga filters.ALL & ~filters.COMMAND —
+            # aks holda /sync_oylik, /calc_hours kabi ConversationHandler
+            # tashqarisida ro'yxatdan o'tgan admin buyruqlari, agar
+            # foydalanuvchi biror suhbat holatida bo'lsa (masalan
+            # REPORTS_MENU), shu yerda "ushlanib qolib", bot tilni
+            # tanlashga qaytadan qaytib ketardi — buyruqning o'ziga
+            # umuman yetib bormasdi.
+            MessageHandler(filters.ALL & ~filters.COMMAND, start),
+        ],
         allow_reentry=True,
     )
     app.add_handler(conv)
