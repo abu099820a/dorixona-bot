@@ -468,7 +468,10 @@ def get_farmatsevt_salary(telegram_id) -> dict | None:
             return {
                 "ismi": str(_cell(SAL_COL_ISMI)).strip(),
                 "filial": str(_cell(SAL_COL_FILIAL)).strip(),
+                "reja_keyingi": _num(SAL_COL_REJA_KEYINGI),
+                "reja_joriy": _num(SAL_COL_REJA_JORIY),
                 "savdo": _num(SAL_COL_SAVDO),
+                "reja_farq": _num(SAL_COL_FARQ),
                 "foiz": _num(SAL_COL_FOIZ),
                 "oylik_percent_bonus": _num(SAL_COL_OYLIK_PERCENT),
                 "fiksa": _num(SAL_COL_FIKSA),
@@ -484,26 +487,33 @@ def get_farmatsevt_salary(telegram_id) -> dict | None:
 
     try:
         phone = _get_phone_by_telegram_id(telegram_id)
+        print(f"[MAOSH] TelegramID={telegram_id} -> telefon='{phone}'")
         if not phone:
+            print(f"[MAOSH] Telefon topilmadi (Farmatsevtlar jadvalida TelegramID mos kelmadi)")
             return None
         target_phone = _sal_normalize_phone(phone)
+        print(f"[MAOSH] Qidirilayotgan normalized telefon: '{target_phone}'")
 
         client = _get_client()
         sh = client.open_by_key(SALARY_SHEET_ID)
+        mavjud_varaqlar = [w.title for w in sh.worksheets()]
+        print(f"[MAOSH] SALARY_SHEET_ID dagi varaqlar: {mavjud_varaqlar}")
 
         oylik_data = None
         try:
             ws_oylik = sh.worksheet(SALARY_WS_NAME)
             oylik_data = _find_row_by_phone(ws_oylik, target_phone)
+            print(f"[MAOSH] '{SALARY_WS_NAME}' da topildimi: {oylik_data is not None}")
         except gspread.exceptions.WorksheetNotFound:
-            pass
+            print(f"[MAOSH] '{SALARY_WS_NAME}' varag'i topilmadi. Mavjudlar: {mavjud_varaqlar}")
 
         aksiya_data = None
         try:
             ws_aksiya = sh.worksheet(AKSIYA_WS_NAME)
             aksiya_data = _find_row_by_phone(ws_aksiya, target_phone)
+            print(f"[MAOSH] '{AKSIYA_WS_NAME}' da topildimi: {aksiya_data is not None}")
         except gspread.exceptions.WorksheetNotFound:
-            pass
+            print(f"[MAOSH] '{AKSIYA_WS_NAME}' varag'i topilmadi. Mavjudlar: {mavjud_varaqlar}")
 
         if not oylik_data and not aksiya_data:
             return None
@@ -759,8 +769,27 @@ async def reports_menu_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"💰 *Maosh va aksiyalar*\n",
             f"👤 {data['ismi']}",
             f"🏪 Filial: {data['filial']}\n",
-            f"📊 Savdo: {_fmt(g('savdo'))} so'm",
         ]
+
+        # Reja (Plan) va bajarilgan foiz
+        reja_joriy = g("reja_joriy")
+        savdo = g("savdo")
+        if reja_joriy:
+            bajarildi_foiz = (savdo / reja_joriy) * 100
+            lines.append(f"🎯 Reja (joriy oy): {_fmt(reja_joriy)} so'm")
+            lines.append(f"📊 Savdo: {_fmt(savdo)} so'm")
+            lines.append(f"✅ Bajarildi: *{bajarildi_foiz:.1f}%*")
+            if g("reja_farq"):
+                farq = g("reja_farq")
+                belgi = "🔺" if farq >= 0 else "🔻"
+                lines.append(f"{belgi} Rejadan farq: {_fmt(farq)} so'm")
+        else:
+            lines.append(f"📊 Savdo: {_fmt(savdo)} so'm")
+
+        if g("reja_keyingi"):
+            lines.append(f"📅 Reja (keyingi oy): {_fmt(g('reja_keyingi'))} so'm")
+
+        lines.append("")
         if g("foiz"):
             lines.append(f"📈 Foiz: {g('foiz') * 100:.1f}%")
         if g("oylik_percent_bonus"):
