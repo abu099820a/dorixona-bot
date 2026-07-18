@@ -350,13 +350,42 @@ def _add_to_attendance(ismi: str, filial_nomi: str, telefon: str = ""):
         print(f"[REG] Davomat yangilash xato: {e}")
 
 
+def _merge_filial_column(ws, first_row: int, last_row: int):
+    """
+    A ustunidagi [first_row, last_row] oralig'ini (1-indeksda) bitta
+    katakka birlashtiradi (merge) — filial nomi guruh bo'ylab bitta
+    katakda ko'rinishi uchun (Davomat jadvalidagi kabi). Avval o'sha
+    diapazonni "unmerge" qilib, keyin qayta merge qiladi — bu eski
+    merge holati qanday bo'lishidan qat'i nazar to'g'ri natija beradi.
+    """
+    if last_row <= first_row:
+        return
+    try:
+        requests = [
+            {"unmergeCells": {"range": {
+                "sheetId": ws.id,
+                "startRowIndex": first_row - 1, "endRowIndex": last_row,
+                "startColumnIndex": 0, "endColumnIndex": 1,
+            }}},
+            {"mergeCells": {"range": {
+                "sheetId": ws.id,
+                "startRowIndex": first_row - 1, "endRowIndex": last_row,
+                "startColumnIndex": 0, "endColumnIndex": 1,
+            }, "mergeType": "MERGE_ALL"}},
+        ]
+        ws.spreadsheet.batch_update({"requests": requests})
+    except Exception as e:
+        print(f"[REG] Merge xato: {e}")
+
+
 def _add_to_salary_sheet(ws_name: str, ismi: str, filial_nomi: str, telefon: str = ""):
     """
     "Oylik" yoki "Aksiya" Sheets'ga (SALARY_SHEET_ID) yangi xodimni
     qo'shadi. Jadval endi Davomat bilan bir xil formatda:
         A=Filial (raqam bilan, masalan "1 - ТАШМИ-1") | B=Ismi | C=Telefon
     Shu filialdagi oxirgi xodimdan keyin qo'shiladi (raqamli kod bo'yicha
-    aniqlanadi — Farmatsevtlar/Davomat bilan bir xil mantiq).
+    aniqlanadi — Farmatsevtlar/Davomat bilan bir xil mantiq), so'ng A
+    ustunidagi filial katagi butun guruh bo'ylab qayta birlashtiriladi.
     """
     try:
         if not SALARY_SHEET_ID:
@@ -372,6 +401,7 @@ def _add_to_salary_sheet(ws_name: str, ismi: str, filial_nomi: str, telefon: str
 
         all_values = ws.get_all_values()
         filial_kod = _filial_kod(filial_nomi)
+        first_row = None
         last_row = 1  # sarlavha qatoridan keyin, default
 
         for i, row in enumerate(all_values):
@@ -381,11 +411,16 @@ def _add_to_salary_sheet(ws_name: str, ismi: str, filial_nomi: str, telefon: str
                 continue
             row_filial = str(row[0]).strip()
             if _filial_kod(row_filial) == filial_kod:
+                if first_row is None:
+                    first_row = i + 1
                 last_row = i + 1
 
         insert_row = last_row + 1
         ws.insert_row([filial_nomi, ismi, telefon], index=insert_row, value_input_option="USER_ENTERED")
         print(f"[REG] {ws_name} ga qo'shildi: {filial_nomi} | {ismi} | {telefon} | qator {insert_row}")
+
+        if first_row is not None:
+            _merge_filial_column(ws, first_row, insert_row)
 
     except Exception as e:
         print(f"[REG] {ws_name} yangilash xato: {e}")

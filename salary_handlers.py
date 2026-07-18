@@ -202,10 +202,33 @@ def _filial_kod(filial: str) -> str:
     return m.group(1) if m else ""
 
 
+def _merge_filial_column(ws, first_row: int, last_row: int):
+    """A ustunidagi [first_row, last_row] oralig'ini bitta katakka birlashtiradi."""
+    if last_row <= first_row:
+        return
+    try:
+        requests = [
+            {"unmergeCells": {"range": {
+                "sheetId": ws.id,
+                "startRowIndex": first_row - 1, "endRowIndex": last_row,
+                "startColumnIndex": 0, "endColumnIndex": 1,
+            }}},
+            {"mergeCells": {"range": {
+                "sheetId": ws.id,
+                "startRowIndex": first_row - 1, "endRowIndex": last_row,
+                "startColumnIndex": 0, "endColumnIndex": 1,
+            }, "mergeType": "MERGE_ALL"}},
+        ]
+        ws.spreadsheet.batch_update({"requests": requests})
+    except Exception as e:
+        logger.error(f"[MAOSH] Merge xato: {e}")
+
+
 def _sync_one_sheet(ws, farmatsevtlar: list) -> dict:
     """
     Berilgan varaqqa (Oylik yoki Aksiya) Farmatsevtlar ro'yxatidagi
-    xodimlardan hali mavjud bo'lmaganlarini qo'shadi.
+    xodimlardan hali mavjud bo'lmaganlarini qo'shadi va filial katagini
+    guruh bo'ylab qayta birlashtiradi (merge).
     Qaytaradi: {"added": [...], "skipped": int}
     """
     all_values = ws.get_all_values()
@@ -222,15 +245,19 @@ def _sync_one_sheet(ws, farmatsevtlar: list) -> dict:
         if not phone_norm or phone_norm in existing_phones:
             continue
 
-        # Filial guruhidagi oxirgi qatorni qayta hisoblaymiz (har safar
-        # yangilanadi, chunki oldingi qo'shishlar qator raqamlarini suradi)
+        # Filial guruhidagi birinchi/oxirgi qatorni qayta hisoblaymiz (har
+        # safar yangilanadi, chunki oldingi qo'shishlar qator raqamlarini
+        # suradi)
         all_values = ws.get_all_values()
         filial_kod = _filial_kod(f["filial"])
+        first_row = None
         last_row = 1
         for i, row in enumerate(all_values):
             if i == 0 or not row or not row[0]:
                 continue
             if _filial_kod(str(row[0]).strip()) == filial_kod:
+                if first_row is None:
+                    first_row = i + 1
                 last_row = i + 1
 
         insert_row = last_row + 1
@@ -238,6 +265,9 @@ def _sync_one_sheet(ws, farmatsevtlar: list) -> dict:
             [f["filial"], f["ismi"], f["telefon"]],
             index=insert_row, value_input_option="USER_ENTERED"
         )
+        if first_row is not None:
+            _merge_filial_column(ws, first_row, insert_row)
+
         existing_phones.add(phone_norm)
         added.append(f["ismi"])
 
@@ -267,18 +297,25 @@ def sync_oylik_sheet() -> dict:
                 farmatsevtlar.append({"ismi": ismi, "filial": filial, "telefon": telefon})
 
         sh = client.open_by_key(SALARY_SHEET_ID)
+        mavjud_varaqlar = [w.title for w in sh.worksheets()]
 
         try:
             ws_oylik = sh.worksheet(SALARY_WS_NAME)
             result["oylik"] = _sync_one_sheet(ws_oylik, farmatsevtlar)
         except gspread.exceptions.WorksheetNotFound:
-            result["error"] = f"'{SALARY_WS_NAME}' varag'i topilmadi"
+            result["error"] = (
+                f"'{SALARY_WS_NAME}' varag'i topilmadi. "
+                f"Mavjud varaqlar: {', '.join(mavjud_varaqlar)}"
+            )
 
         try:
             ws_aksiya = sh.worksheet(AKSIYA_WS_NAME)
             result["aksiya"] = _sync_one_sheet(ws_aksiya, farmatsevtlar)
         except gspread.exceptions.WorksheetNotFound:
-            pass
+            result["aksiya_error"] = (
+                f"'{AKSIYA_WS_NAME}' varag'i topilmadi. "
+                f"Mavjud varaqlar: {', '.join(mavjud_varaqlar)}"
+            )
 
         return result
 
@@ -301,7 +338,10 @@ async def cmd_sync_oylik(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             return
         lines = ["✅ *Sinxronizatsiya tugadi!*\n"]
         lines.append(f"📄 Oylik: +{len(res['oylik']['added'])} ta qo'shildi")
-        lines.append(f"🎁 Aksiya: +{len(res['aksiya']['added'])} ta qo'shildi")
+        if res.get("aksiya_error"):
+            lines.append(f"⚠️ Aksiya: {res['aksiya_error']}")
+        else:
+            lines.append(f"🎁 Aksiya: +{len(res['aksiya']['added'])} ta qo'shildi")
         await msg.edit_text("\n".join(lines), parse_mode="Markdown")
     except Exception as e:
         await msg.edit_text(f"❌ Xato: {e}")
