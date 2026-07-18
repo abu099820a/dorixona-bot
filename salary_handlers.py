@@ -713,7 +713,11 @@ def get_firm_summa(firma_nomi: str) -> dict | None:
         print(f"[FIRMS] Mos firma topilmadi: '{firma_nomi}'")
         return None
     except gspread.exceptions.WorksheetNotFound:
-        logger.error(f"[FIRMS] '{TOLOVLAR_WS_NAME}' varag'i topilmadi (SALARY_SHEET_ID)")
+        try:
+            titles = [w.title for w in client.open_by_key(SALARY_SHEET_ID).worksheets()]
+        except Exception:
+            titles = ["(SALARY_SHEET_ID o'zi ochilmadi)"]
+        logger.error(f"[FIRMS] '{TOLOVLAR_WS_NAME}' varag'i topilmadi. Mavjud varaqlar: {titles}")
         return None
     except Exception as e:
         logger.error(f"[FIRMS] get_firm_summa xato: {e}")
