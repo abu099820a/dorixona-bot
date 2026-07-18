@@ -168,6 +168,7 @@ SAL_COL_SHTRAF_VAQT = 14
 SAL_COL_SHTRAF_SROK = 15
 SAL_COL_JAMI = 16
 SAL_COL_KARTA = 17
+SAL_COL_AKSIYA = 18  # Yangi: Aksiya endi alohida varaq emas, shu ustunda
 
 
 def _sal_normalize_phone(phone) -> str:
@@ -498,6 +499,7 @@ def get_farmatsevt_salary_by_phone(phone: str) -> dict | None:
                 "shtraf_srok": _num(SAL_COL_SHTRAF_SROK),
                 "jami": _num(SAL_COL_JAMI),
                 "karta": _num(SAL_COL_KARTA),
+                "aksiya": _num(SAL_COL_AKSIYA),
             }
         print(f"[MAOSH] '{ws.title}' da mos topilmadi. Ko'rilgan telefon(lar) "
               f"(xom -> normalized), birinchi 15 tasi: {seen_phones[:15]}")
@@ -522,23 +524,12 @@ def get_farmatsevt_salary_by_phone(phone: str) -> dict | None:
         except gspread.exceptions.WorksheetNotFound:
             print(f"[MAOSH] '{SALARY_WS_NAME}' varag'i topilmadi. Mavjudlar: {mavjud_varaqlar}")
 
-        aksiya_data = None
-        try:
-            ws_aksiya = sh.worksheet(AKSIYA_WS_NAME)
-            aksiya_data = _find_row_by_phone(ws_aksiya, target_phone)
-            print(f"[MAOSH] '{AKSIYA_WS_NAME}' da topildimi: {aksiya_data is not None}")
-        except gspread.exceptions.WorksheetNotFound:
-            print(f"[MAOSH] '{AKSIYA_WS_NAME}' varag'i topilmadi. Mavjudlar: {mavjud_varaqlar}")
-
-        if not oylik_data and not aksiya_data:
+        if not oylik_data:
             return None
 
-        base = oylik_data or {}
-        result = dict(base)
-        result["ismi"] = (oylik_data or aksiya_data).get("ismi", "")
-        result["filial"] = (oylik_data or aksiya_data).get("filial", "")
-        result["aksiya_jami"] = aksiya_data["jami"] if aksiya_data else 0
-        result["oylik_jami"] = oylik_data["jami"] if oylik_data else 0
+        result = dict(oylik_data)
+        result["aksiya_jami"] = oylik_data.get("aksiya", 0)
+        result["oylik_jami"] = oylik_data.get("jami", 0)
         result["yakuniy_jami"] = result["oylik_jami"] + result["aksiya_jami"]
         return result
 
