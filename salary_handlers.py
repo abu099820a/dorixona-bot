@@ -55,6 +55,14 @@ FIRM_WAIT_ZIP = 505
 FIRM_REG_NAME = 506
 FIRM_REG_PHONE = 507
 ADMIN_FIRM_LOOKUP = 508
+APPEAL_MENU = 509
+APPEAL_FIRM_MSG = 510
+APPEAL_DORIXONA_MSG = 511
+APPEAL_FIRM_TARGET = 512
+APPEAL_DORIXONA_TARGET = 513
+APPEAL_FIRM_NAMES = 514
+APPEAL_DORIXONA_NAMES = 515
+APPEAL_PASSWORD_STATE = 516
 
 
 # ─── Google Sheets ────────────────────────────────────────────────────────────
@@ -1503,6 +1511,399 @@ async def _send_firm_direct_report(update: Update, ctx: ContextTypes.DEFAULT_TYP
     return REPORTS_MENU
 
 
+def appeal_keyboard(language: str = "uz"):
+    from telegram import ReplyKeyboardMarkup
+    if language == "ru":
+        return ReplyKeyboardMarkup([
+            ["🏢 Фирмам"],
+            ["💊 Аптекам (заведующим)"],
+            ["⬅️ Назад"],
+        ], resize_keyboard=True)
+    return ReplyKeyboardMarkup([
+        ["🏢 Firmalarga"],
+        ["💊 Dorixonalarga (mudirlarga)"],
+        ["⬅️ Orqaga"],
+    ], resize_keyboard=True)
+
+
+def appeal_target_keyboard(language: str = "uz"):
+    from telegram import ReplyKeyboardMarkup
+    back_txt = "⬅️ Назад" if language == "ru" else "⬅️ Orqaga"
+    if language == "ru":
+        return ReplyKeyboardMarkup([
+            ["👥 Всем"],
+            ["☑️ Выбранным"],
+            [back_txt],
+        ], resize_keyboard=True)
+    return ReplyKeyboardMarkup([
+        ["👥 Hammaga"],
+        ["☑️ Bir nechtaga (tanlab)"],
+        [back_txt],
+    ], resize_keyboard=True)
+
+
+APPEAL_PAROL = "офис"  # Davomat/Tolovlar bilan bir xil umumiy parol
+
+
+async def appeal_menu_enter(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """'📩 Murojaat' bosilganda — faqat admin uchun, parol bilan."""
+    from telegram import ReplyKeyboardMarkup
+    language = ctx.user_data.get("lang", "uz")
+    from bot import main_keyboard, get_lang, MENU
+
+    if update.effective_user.id not in ADMIN_IDS:
+        await update.message.reply_text(
+            "❌ Bu bo'lim faqat administrator uchun." if language == "uz"
+            else "❌ Этот раздел только для администратора.",
+            reply_markup=main_keyboard(get_lang(ctx)),
+        )
+        return MENU
+
+    if ctx.user_data.get("appeal_auth"):
+        await update.message.reply_text(
+            "📩 *Murojaat*\n\nKimga xabar yubormoqchisiz?" if language == "uz"
+            else "📩 *Обращение*\n\nКому хотите отправить сообщение?",
+            parse_mode="Markdown",
+            reply_markup=appeal_keyboard(language),
+        )
+        return APPEAL_MENU
+
+    back_txt = "⬅️ Назад" if language == "ru" else "⬅️ Orqaga"
+    await update.message.reply_text(
+        "🔐 Parolni kiriting:" if language == "uz" else "🔐 Введите пароль:",
+        reply_markup=ReplyKeyboardMarkup([[back_txt]], resize_keyboard=True),
+    )
+    return APPEAL_PASSWORD_STATE
+
+
+async def appeal_password_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Murojaat bo'limi uchun parolni tekshiradi."""
+    language = ctx.user_data.get("lang", "uz")
+    back_txt = "⬅️ Назад" if language == "ru" else "⬅️ Orqaga"
+    txt = update.message.text.strip() if update.message.text else ""
+
+    if txt == back_txt:
+        from bot import main_keyboard, get_lang, MENU
+        await update.message.reply_text("📋 Asosiy menyu", reply_markup=main_keyboard(get_lang(ctx)))
+        return MENU
+
+    if txt == APPEAL_PAROL:
+        ctx.user_data["appeal_auth"] = True
+        await update.message.reply_text(
+            "📩 *Murojaat*\n\nKimga xabar yubormoqchisiz?" if language == "uz"
+            else "📩 *Обращение*\n\nКому хотите отправить сообщение?",
+            parse_mode="Markdown",
+            reply_markup=appeal_keyboard(language),
+        )
+        return APPEAL_MENU
+
+    await update.message.reply_text(
+        "❌ Parol noto'g'ri. Qayta urinib ko'ring:" if language == "uz"
+        else "❌ Неверный пароль. Попробуйте снова:",
+    )
+    return APPEAL_PASSWORD_STATE
+
+
+async def appeal_menu_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    language = ctx.user_data.get("lang", "uz")
+    txt = update.message.text.strip() if update.message and update.message.text else ""
+
+    back_txt = "⬅️ Назад" if language == "ru" else "⬅️ Orqaga"
+    firm_txt = "🏢 Фирмам" if language == "ru" else "🏢 Firmalarga"
+    dorixona_txt = "💊 Аптекам (заведующим)" if language == "ru" else "💊 Dorixonalarga (mudirlarga)"
+
+    if txt == back_txt:
+        from bot import main_keyboard, get_lang, MENU
+        await update.message.reply_text("📋 Asosiy menyu", reply_markup=main_keyboard(get_lang(ctx)))
+        return MENU
+
+    if txt == firm_txt:
+        ctx.user_data["appeal_kind"] = "firm"
+        await update.message.reply_text(
+            "🏢 Firmalarga qanday yubormoqchisiz?" if language == "uz"
+            else "🏢 Как хотите отправить фирмам?",
+            reply_markup=appeal_target_keyboard(language),
+        )
+        return APPEAL_FIRM_TARGET
+
+    if txt == dorixona_txt:
+        ctx.user_data["appeal_kind"] = "dorixona"
+        await update.message.reply_text(
+            "💊 Dorixonalarga qanday yubormoqchisiz?" if language == "uz"
+            else "💊 Как хотите отправить аптекам?",
+            reply_markup=appeal_target_keyboard(language),
+        )
+        return APPEAL_DORIXONA_TARGET
+
+    await update.message.reply_text("Iltimos, tugmalardan birini tanlang.", reply_markup=appeal_keyboard(language))
+    return APPEAL_MENU
+
+
+async def appeal_firm_target_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Firmalar uchun: Hammaga yoki tanlab yuborishni so'raydi."""
+    language = ctx.user_data.get("lang", "uz")
+    back_txt = "⬅️ Назад" if language == "ru" else "⬅️ Orqaga"
+    hammaga_txt = "👥 Всем" if language == "ru" else "👥 Hammaga"
+    tanlab_txt = "☑️ Выбранным" if language == "ru" else "☑️ Bir nechtaga (tanlab)"
+    txt = update.message.text.strip() if update.message.text else ""
+
+    if txt == back_txt:
+        await update.message.reply_text(
+            "📩 *Murojaat*\n\nKimga xabar yubormoqchisiz?" if language == "uz"
+            else "📩 *Обращение*\n\nКому хотите отправить сообщение?",
+            parse_mode="Markdown",
+            reply_markup=appeal_keyboard(language),
+        )
+        return APPEAL_MENU
+
+    if txt == hammaga_txt:
+        ctx.user_data["appeal_names"] = None  # None = hammaga
+        await update.message.reply_text(
+            "✍️ Firmalarga yuboriladigan xabar matnini kiriting:"
+            if language == "uz" else
+            "✍️ Введите текст сообщения для фирм:",
+            reply_markup=ReplyKeyboardMarkup_back(back_txt),
+        )
+        return APPEAL_FIRM_MSG
+
+    if txt == tanlab_txt:
+        await update.message.reply_text(
+            "🏢 Firma nomlarini kiriting (har birini yangi qatordan yoki vergul bilan ajratib):"
+            if language == "uz" else
+            "🏢 Введите названия фирм (каждое с новой строки или через запятую):",
+            reply_markup=ReplyKeyboardMarkup_back(back_txt),
+        )
+        return APPEAL_FIRM_NAMES
+
+    await update.message.reply_text("Iltimos, tugmalardan birini tanlang.", reply_markup=appeal_target_keyboard(language))
+    return APPEAL_FIRM_TARGET
+
+
+async def appeal_dorixona_target_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Dorixonalar uchun: Hammaga yoki tanlab yuborishni so'raydi."""
+    language = ctx.user_data.get("lang", "uz")
+    back_txt = "⬅️ Назад" if language == "ru" else "⬅️ Orqaga"
+    hammaga_txt = "👥 Всем" if language == "ru" else "👥 Hammaga"
+    tanlab_txt = "☑️ Выбранным" if language == "ru" else "☑️ Bir nechtaga (tanlab)"
+    txt = update.message.text.strip() if update.message.text else ""
+
+    if txt == back_txt:
+        await update.message.reply_text(
+            "📩 *Murojaat*\n\nKimga xabar yubormoqchisiz?" if language == "uz"
+            else "📩 *Обращение*\n\nКому хотите отправить сообщение?",
+            parse_mode="Markdown",
+            reply_markup=appeal_keyboard(language),
+        )
+        return APPEAL_MENU
+
+    if txt == hammaga_txt:
+        ctx.user_data["appeal_names"] = None
+        await update.message.reply_text(
+            "✍️ Dorixona mudirlariga yuboriladigan xabar matnini kiriting:"
+            if language == "uz" else
+            "✍️ Введите текст сообщения для заведующих:",
+            reply_markup=ReplyKeyboardMarkup_back(back_txt),
+        )
+        return APPEAL_DORIXONA_MSG
+
+    if txt == tanlab_txt:
+        await update.message.reply_text(
+            "💊 Dorixona (filial) nomlarini kiriting (har birini yangi qatordan yoki vergul bilan ajratib):"
+            if language == "uz" else
+            "💊 Введите названия аптек (каждое с новой строки или через запятую):",
+            reply_markup=ReplyKeyboardMarkup_back(back_txt),
+        )
+        return APPEAL_DORIXONA_NAMES
+
+    await update.message.reply_text("Iltimos, tugmalardan birini tanlang.", reply_markup=appeal_target_keyboard(language))
+    return APPEAL_DORIXONA_TARGET
+
+
+def ReplyKeyboardMarkup_back(back_txt: str):
+    from telegram import ReplyKeyboardMarkup
+    return ReplyKeyboardMarkup([[back_txt]], resize_keyboard=True)
+
+
+async def appeal_firm_names_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Tanlangan firma nomlarini qabul qiladi."""
+    language = ctx.user_data.get("lang", "uz")
+    back_txt = "⬅️ Назад" if language == "ru" else "⬅️ Orqaga"
+    txt = update.message.text.strip() if update.message.text else ""
+
+    if txt == back_txt:
+        await update.message.reply_text(
+            "🏢 Firmalarga qanday yubormoqchisiz?" if language == "uz"
+            else "🏢 Как хотите отправить фирмам?",
+            reply_markup=appeal_target_keyboard(language),
+        )
+        return APPEAL_FIRM_TARGET
+
+    names = [n.strip() for n in re.split(r"[,\n]", txt) if n.strip()]
+    if not names:
+        await update.message.reply_text("❌ Kamida bitta nom kiriting:")
+        return APPEAL_FIRM_NAMES
+
+    ctx.user_data["appeal_names"] = names
+    await update.message.reply_text(
+        f"✅ Tanlandi: {', '.join(names)}\n\n✍️ Endi xabar matnini kiriting:"
+        if language == "uz" else
+        f"✅ Выбрано: {', '.join(names)}\n\n✍️ Введите текст сообщения:",
+        reply_markup=ReplyKeyboardMarkup_back(back_txt),
+    )
+    return APPEAL_FIRM_MSG
+
+
+async def appeal_dorixona_names_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Tanlangan dorixona (filial) nomlarini qabul qiladi."""
+    language = ctx.user_data.get("lang", "uz")
+    back_txt = "⬅️ Назад" if language == "ru" else "⬅️ Orqaga"
+    txt = update.message.text.strip() if update.message.text else ""
+
+    if txt == back_txt:
+        await update.message.reply_text(
+            "💊 Dorixonalarga qanday yubormoqchisiz?" if language == "uz"
+            else "💊 Как хотите отправить аптекам?",
+            reply_markup=appeal_target_keyboard(language),
+        )
+        return APPEAL_DORIXONA_TARGET
+
+    names = [n.strip() for n in re.split(r"[,\n]", txt) if n.strip()]
+    if not names:
+        await update.message.reply_text("❌ Kamida bitta nom kiriting:")
+        return APPEAL_DORIXONA_NAMES
+
+    ctx.user_data["appeal_names"] = names
+    await update.message.reply_text(
+        f"✅ Tanlandi: {', '.join(names)}\n\n✍️ Endi xabar matnini kiriting:"
+        if language == "uz" else
+        f"✅ Выбрано: {', '.join(names)}\n\n✍️ Введите текст сообщения:",
+        reply_markup=ReplyKeyboardMarkup_back(back_txt),
+    )
+    return APPEAL_DORIXONA_MSG
+
+
+async def _broadcast_send(update, ctx, ids: list, text: str) -> tuple:
+    """
+    Berilgan TelegramID ro'yxatiga xabar yuboradi. Xabar kimdan
+    kelayotgani aniq ko'rinishi uchun, yuboruvchining Telegram profil
+    ismi (ism + familiya, bo'lmasa username) xabar boshiga qo'shiladi.
+    Qaytaradi: (sent, failed)
+    """
+    user = update.effective_user
+    sender_name = " ".join(filter(None, [user.first_name, user.last_name])).strip()
+    if not sender_name:
+        sender_name = f"@{user.username}" if user.username else "Administrator"
+
+    sent, failed = 0, 0
+    for tid in ids:
+        try:
+            await ctx.bot.send_message(
+                chat_id=int(tid),
+                text=f"📩 *Murojaat*\n👤 Kimdan: {sender_name}\n\n{text}",
+                parse_mode="Markdown",
+            )
+            sent += 1
+        except Exception as e:
+            failed += 1
+            logger.warning(f"[APPEAL] Yuborilmadi ({tid}): {e}")
+    return sent, failed
+
+
+def _resolve_target_ids(name_map: dict, selected_names) -> list:
+    """
+    name_map: {NOM(upper): telegram_id}. selected_names: None (hammaga)
+    yoki tanlangan nomlar ro'yxati. Qisman moslikni ham qidiradi.
+    """
+    if selected_names is None:
+        return list(set(name_map.values()))
+
+    ids = set()
+    for wanted in selected_names:
+        wanted_u = wanted.strip().upper()
+        if wanted_u in name_map:
+            ids.add(name_map[wanted_u])
+            continue
+        for key, tid in name_map.items():
+            if wanted_u in key or key in wanted_u:
+                ids.add(tid)
+                break
+    return list(ids)
+
+
+async def appeal_firm_msg_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Firmalarga yuboriladigan xabar matni qabul qilinadi va yuboriladi."""
+    language = ctx.user_data.get("lang", "uz")
+    back_txt = "⬅️ Назад" if language == "ru" else "⬅️ Orqaga"
+    from bot import main_keyboard, get_lang, MENU
+
+    if update.message.text == back_txt:
+        await update.message.reply_text(
+            "📩 *Murojaat*\n\nKimga xabar yubormoqchisiz?" if language == "uz"
+            else "📩 *Обращение*\n\nКому хотите отправить сообщение?",
+            parse_mode="Markdown",
+            reply_markup=appeal_keyboard(language),
+        )
+        return APPEAL_MENU
+
+    text = update.message.text.strip()
+    if len(text) < 2:
+        await update.message.reply_text("❌ Xabar matnini to'liq kiriting:")
+        return APPEAL_FIRM_MSG
+
+    msg = await update.message.reply_text("⏳ Yuborilmoqda...")
+    firma_map = await run_read(get_firma_map)
+    selected_names = ctx.user_data.get("appeal_names")
+    ids = _resolve_target_ids(firma_map, selected_names) if firma_map else []
+
+    if not ids:
+        await msg.edit_text("❌ Mos firma topilmadi.")
+    else:
+        sent, failed = await _broadcast_send(update, ctx, ids, text)
+        await msg.edit_text(f"✅ Yuborildi: {sent} ta\n❌ Yuborilmadi: {failed} ta")
+
+    ctx.user_data.pop("appeal_names", None)
+    ctx.user_data.pop("appeal_kind", None)
+    await update.message.reply_text("📋 Asosiy menyu", reply_markup=main_keyboard(get_lang(ctx)))
+    return MENU
+
+
+async def appeal_dorixona_msg_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Dorixona mudirlariga yuboriladigan xabar matni qabul qilinadi va yuboriladi."""
+    language = ctx.user_data.get("lang", "uz")
+    back_txt = "⬅️ Назад" if language == "ru" else "⬅️ Orqaga"
+    from bot import main_keyboard, get_lang, MENU
+
+    if update.message.text == back_txt:
+        await update.message.reply_text(
+            "📩 *Murojaat*\n\nKimga xabar yubormoqchisiz?" if language == "uz"
+            else "📩 *Обращение*\n\nКому хотите отправить сообщение?",
+            parse_mode="Markdown",
+            reply_markup=appeal_keyboard(language),
+        )
+        return APPEAL_MENU
+
+    text = update.message.text.strip()
+    if len(text) < 2:
+        await update.message.reply_text("❌ Xabar matnini to'liq kiriting:")
+        return APPEAL_DORIXONA_MSG
+
+    msg = await update.message.reply_text("⏳ Yuborilmoqda...")
+    mudir_map = await run_read(get_mudir_map)
+    selected_names = ctx.user_data.get("appeal_names")
+    ids = _resolve_target_ids(mudir_map, selected_names) if mudir_map else []
+
+    if not ids:
+        await msg.edit_text("❌ Mos dorixona/mudir topilmadi.")
+    else:
+        sent, failed = await _broadcast_send(update, ctx, ids, text)
+        await msg.edit_text(f"✅ Yuborildi: {sent} ta\n❌ Yuborilmadi: {failed} ta")
+
+    ctx.user_data.pop("appeal_names", None)
+    ctx.user_data.pop("appeal_kind", None)
+    await update.message.reply_text("📋 Asosiy menyu", reply_markup=main_keyboard(get_lang(ctx)))
+    return MENU
+
+
 async def admin_firm_lookup_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Admin firma nomini kiritadi — bot shu firmaning faylini va to'lovini topib beradi."""
     language = ctx.user_data.get("lang", "uz")
@@ -1578,5 +1979,29 @@ def get_sal_states():
         ],
         ADMIN_FIRM_LOOKUP: [
             MessageHandler(filters.TEXT & ~filters.COMMAND, admin_firm_lookup_handler),
+        ],
+        APPEAL_MENU: [
+            MessageHandler(filters.TEXT & ~filters.COMMAND, appeal_menu_handler),
+        ],
+        APPEAL_PASSWORD_STATE: [
+            MessageHandler(filters.TEXT & ~filters.COMMAND, appeal_password_handler),
+        ],
+        APPEAL_FIRM_TARGET: [
+            MessageHandler(filters.TEXT & ~filters.COMMAND, appeal_firm_target_handler),
+        ],
+        APPEAL_DORIXONA_TARGET: [
+            MessageHandler(filters.TEXT & ~filters.COMMAND, appeal_dorixona_target_handler),
+        ],
+        APPEAL_FIRM_NAMES: [
+            MessageHandler(filters.TEXT & ~filters.COMMAND, appeal_firm_names_handler),
+        ],
+        APPEAL_DORIXONA_NAMES: [
+            MessageHandler(filters.TEXT & ~filters.COMMAND, appeal_dorixona_names_handler),
+        ],
+        APPEAL_FIRM_MSG: [
+            MessageHandler(filters.TEXT & ~filters.COMMAND, appeal_firm_msg_handler),
+        ],
+        APPEAL_DORIXONA_MSG: [
+            MessageHandler(filters.TEXT & ~filters.COMMAND, appeal_dorixona_msg_handler),
         ],
     }
