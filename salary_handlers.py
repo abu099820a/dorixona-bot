@@ -631,20 +631,28 @@ def get_firma_file_by_telegram_id(telegram_id) -> dict | None:
         return None
 
 
+TOLOVLAR_WS_NAME = "To'lovlar"
+
+
 def get_firm_summa(firma_nomi: str) -> dict | None:
-    """"Firmalar to'lovlari" jadvalidan berilgan firma uchun Summa/Holatini topadi."""
+    """SALARY_SHEET_ID ichidagi "To'lovlar" varag'idan berilgan firma uchun ma'lumotlarini topadi."""
     try:
         client = _get_client()
-        sh = client.open_by_key(FIRMS_SHEET_ID)
-        ws = sh.sheet1
+        sh = client.open_by_key(SALARY_SHEET_ID)
+        ws = sh.worksheet(TOLOVLAR_WS_NAME)
         records = ws.get_all_records()
         for row in records:
             firma = str(row.get("Firma nomi", "")).strip()
             if firma.upper() == firma_nomi.strip().upper():
                 return {
+                    "shartnoma": str(row.get("Shartnoma raqami", "")).strip(),
+                    "inn": str(row.get("INN", "")).strip(),
                     "summa": row.get("Summa", ""),
                     "holati": str(row.get("Holati", "")).strip(),
                 }
+        return None
+    except gspread.exceptions.WorksheetNotFound:
+        logger.error(f"[FIRMS] '{TOLOVLAR_WS_NAME}' varag'i topilmadi (SALARY_SHEET_ID)")
         return None
     except Exception as e:
         logger.error(f"[FIRMS] get_firm_summa xato: {e}")
@@ -656,15 +664,15 @@ def get_firms_report() -> list:
     "Firmalar to'lovlari" Google Sheets'idan (FIRMS_SHEET_ID) barcha
     firmalar ro'yxatini o'qiydi.
 
-    Jadval tuzilishi (bitta oddiy varaq, oy bo'yicha bo'linmagan):
+    Jadval tuzilishi (SALARY_SHEET_ID ichidagi "To'lovlar" varag'i):
         Firma nomi | Summa | Holati
 
     Qaytaradi: [{"firma", "summa", "holati"}, ...]
     """
     try:
         client = _get_client()
-        sh = client.open_by_key(FIRMS_SHEET_ID)
-        ws = sh.sheet1
+        sh = client.open_by_key(SALARY_SHEET_ID)
+        ws = sh.worksheet(TOLOVLAR_WS_NAME)
         records = ws.get_all_records()
 
         result = []
@@ -674,11 +682,16 @@ def get_firms_report() -> list:
                 continue
             result.append({
                 "firma": firma,
+                "shartnoma": str(row.get("Shartnoma raqami", "")).strip(),
+                "inn": str(row.get("INN", "")).strip(),
                 "summa": row.get("Summa", ""),
                 "holati": str(row.get("Holati", "")).strip(),
             })
         return result
 
+    except gspread.exceptions.WorksheetNotFound:
+        logger.error(f"[FIRMS] '{TOLOVLAR_WS_NAME}' varag'i topilmadi (SALARY_SHEET_ID)")
+        return []
     except Exception as e:
         logger.error(f"[FIRMS] get_firms_report xato: {e}")
         return []
@@ -910,10 +923,23 @@ async def reports_menu_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return SALARY_PHONE_WAIT
 
     elif txt == payments_txt:
-        firm_info = await run_read(get_firma_file_by_telegram_id, update.effective_user.id)
+        user_id = update.effective_user.id
+        firm_info = await run_read(get_firma_file_by_telegram_id, user_id)
         if firm_info:
             return await _send_firm_direct_report(update, ctx, firm_info)
-        return await payments_menu_enter(update, ctx)
+        if user_id in ADMIN_IDS:
+            return await payments_menu_enter(update, ctx)
+        await update.message.reply_text(
+            "❌ Siz ro'yxatdan o'tmagansiz.\n\n"
+            "Agar siz firma vakili bo'lsangiz, avval \"📝 Ro'yxatdan o'tish\" → "
+            "\"🏢 Firma uchun ro'yxatdan o'tish\" orqali ro'yxatdan o'ting."
+            if language == "uz" else
+            "❌ Вы не зарегистрированы.\n\n"
+            "Если вы представитель фирмы, сначала зарегистрируйтесь через "
+            "\"📝 Регистрация\" → \"🏢 Регистрация как фирма\".",
+            reply_markup=reports_keyboard(language),
+        )
+        return REPORTS_MENU
 
     # Tanilmagan matn — menyuni qayta ko'rsatamiz
     await update.message.reply_text(
@@ -1350,12 +1376,18 @@ async def _send_firm_direct_report(update: Update, ctx: ContextTypes.DEFAULT_TYP
             belgi = "❌"
         else:
             belgi = "⏳"
-        await update.message.reply_text(
-            f"{belgi} *{firma_nomi}*\n💰 To'lov: {summa_info.get('summa', '')} ({summa_info.get('holati', '')})"
+
+        lines = [f"{belgi} *{firma_nomi}*"]
+        if summa_info.get("shartnoma"):
+            lines.append(f"📄 Shartnoma: {summa_info['shartnoma']}")
+        if summa_info.get("inn"):
+            lines.append(f"🆔 INN: {summa_info['inn']}")
+        lines.append(
+            f"💰 To'lov: {summa_info.get('summa', '')} ({summa_info.get('holati', '')})"
             if language == "uz" else
-            f"{belgi} *{firma_nomi}*\n💰 Оплата: {summa_info.get('summa', '')} ({summa_info.get('holati', '')})",
-            parse_mode="Markdown",
+            f"💰 Оплата: {summa_info.get('summa', '')} ({summa_info.get('holati', '')})"
         )
+        await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
     else:
         await update.message.reply_text(
             f"ℹ️ *{firma_nomi}* uchun joriy oy to'lov ma'lumoti hali kiritilmagan."
