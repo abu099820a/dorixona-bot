@@ -634,12 +634,32 @@ def get_firma_file_by_telegram_id(telegram_id) -> dict | None:
 TOLOVLAR_WS_NAME = "To'lovlar"
 
 
+def _find_worksheet_flexible(sh, target_name: str):
+    """
+    Varaqni nomi bo'yicha topadi — apostrof belgisi turlicha yozilishi
+    ('/'/ʻ/`) va katta-kichik harfga sezgir emas holda qidiradi.
+    Bevosita mos kelmasa, barcha varaq nomlarini "normallashtirib"
+    solishtiradi.
+    """
+    def _norm(s):
+        s = str(s).strip().lower()
+        for ch in ["'", "’", "ʻ", "`", "‘"]:
+            s = s.replace(ch, "'")
+        return s
+
+    target_norm = _norm(target_name)
+    for ws in sh.worksheets():
+        if _norm(ws.title) == target_norm:
+            return ws
+    raise gspread.exceptions.WorksheetNotFound(target_name)
+
+
 def get_firm_summa(firma_nomi: str) -> dict | None:
     """SALARY_SHEET_ID ichidagi "To'lovlar" varag'idan berilgan firma uchun ma'lumotlarini topadi."""
     try:
         client = _get_client()
         sh = client.open_by_key(SALARY_SHEET_ID)
-        ws = sh.worksheet(TOLOVLAR_WS_NAME)
+        ws = _find_worksheet_flexible(sh, TOLOVLAR_WS_NAME)
         records = ws.get_all_records()
         for row in records:
             firma = str(row.get("Firma nomi", "")).strip()
@@ -672,7 +692,7 @@ def get_firms_report() -> list:
     try:
         client = _get_client()
         sh = client.open_by_key(SALARY_SHEET_ID)
-        ws = sh.worksheet(TOLOVLAR_WS_NAME)
+        ws = _find_worksheet_flexible(sh, TOLOVLAR_WS_NAME)
         records = ws.get_all_records()
 
         result = []
@@ -1217,17 +1237,22 @@ async def cmd_send_firm_files(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def firm_receive_zip(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """ZIP faylni qabul qiladi va ro'yxatdan o'tgan firmalarga yuboradi."""
+    """ZIP yoki bitta .xlsx faylni qabul qiladi va ro'yxatdan o'tgan firmalarga yuboradi."""
     if update.effective_user.id not in ADMIN_IDS:
         return
 
     if not update.message.document:
-        await update.message.reply_text("❌ Iltimos, ZIP fayl yuboring.")
+        await update.message.reply_text("❌ Iltimos, ZIP yoki .xlsx fayl yuboring.")
         return FIRM_WAIT_ZIP
 
     doc = update.message.document
-    if not doc.file_name.lower().endswith(".zip"):
-        await update.message.reply_text("❌ Faqat ZIP fayl qabul qilinadi.")
+    fname_lower = doc.file_name.lower()
+
+    if fname_lower.endswith(".xlsx"):
+        return await _firm_receive_single_xlsx(update, ctx, doc)
+
+    if not fname_lower.endswith(".zip"):
+        await update.message.reply_text("❌ Faqat ZIP yoki .xlsx fayl qabul qilinadi.")
         return FIRM_WAIT_ZIP
 
     from bot import main_keyboard, get_lang, MENU
@@ -1324,6 +1349,56 @@ async def firm_receive_zip(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await msg.edit_text(f"❌ Xato: {e}")
         logger.error(f"[FIRMS] Umumiy xato: {e}")
+
+    await update.message.reply_text("📋 Asosiy menyu", reply_markup=main_keyboard(get_lang(ctx)))
+    return MENU
+
+
+async def _firm_receive_single_xlsx(update: Update, ctx: ContextTypes.DEFAULT_TYPE, doc):
+    """
+    Bitta .xlsx fayl to'g'ridan-to'g'ri yuborilganda (ZIP'siz) — fayl
+    nomidan firma nomini topib, o'sha firmaga darhol yuboradi va
+    kelajakda o'zi olishi uchun file_id'ni saqlaydi.
+    """
+    from bot import main_keyboard, get_lang, MENU
+    msg = await update.message.reply_text("⏳ Fayl qayta ishlanmoqda...")
+
+    try:
+        base_name = doc.file_name
+        firma_map = await run_read(get_firma_map)
+        tid = find_telegram_id(base_name, firma_map) if firma_map else None
+
+        if not tid:
+            await msg.edit_text(
+                f"❌ *{base_name}* nomiga mos, ro'yxatdan o'tgan firma topilmadi.\n\n"
+                "Fayl nomi firma nomiga mos bo'lishi va firma avval botda "
+                "ro'yxatdan o'tgan bo'lishi kerak.",
+                parse_mode="Markdown",
+            )
+            await update.message.reply_text("📋 Asosiy menyu", reply_markup=main_keyboard(get_lang(ctx)))
+            return MENU
+
+        file = await doc.get_file()
+        file_bytes = await file.download_as_bytearray()
+        file_io = io.BytesIO(file_bytes)
+        file_io.name = base_name
+
+        sent_msg = await ctx.bot.send_document(
+            chat_id=int(tid),
+            document=file_io,
+            filename=base_name,
+            caption=f"📊 Hisobot\n📁 {base_name}",
+        )
+
+        matched_firma = next((k for k, v in firma_map.items() if v == tid), None)
+        if matched_firma and sent_msg.document:
+            await run_write(save_firma_file, matched_firma, sent_msg.document.file_id, base_name)
+
+        await msg.edit_text(f"✅ *{matched_firma or base_name}* ga yuborildi va saqlandi!", parse_mode="Markdown")
+
+    except Exception as e:
+        logger.error(f"[FIRMS] Bitta fayl yuborish xato: {e}")
+        await msg.edit_text(f"❌ Xato: {e}")
 
     await update.message.reply_text("📋 Asosiy menyu", reply_markup=main_keyboard(get_lang(ctx)))
     return MENU
