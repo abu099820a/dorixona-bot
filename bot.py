@@ -733,7 +733,6 @@ def main():
         # avtomatik "/start" bosilgandek qayta tiklanadi.
         entry_points=[
             CommandHandler("start", start),
-            MessageHandler(filters.ALL, start),
         ],
         states={
             LANG: [CallbackQueryHandler(set_lang, pattern="^lang_")],
