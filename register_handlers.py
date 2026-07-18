@@ -401,26 +401,33 @@ def _add_to_salary_sheet(ws_name: str, ismi: str, filial_nomi: str, telefon: str
 
         all_values = ws.get_all_values()
         filial_kod = _filial_kod(filial_nomi)
-        first_row = None
         last_row = 1  # sarlavha qatoridan keyin, default
 
+        # MUHIM: A ustuni bo'sh bo'lgan qatorlarni ham hisobga olamiz
+        # (masalan ilgari merge qilingan katakchalar tufayli) — yuqoridagi
+        # oxirgi ko'rilgan filial nomini "forward-fill" qilib davom
+        # ettiramiz, aks holda oxirgi qatorni noto'g'ri aniqlab, xodimni
+        # boshqa filial guruhiga qo'shib qo'yishimiz mumkin.
+        effective_filial = ""
         for i, row in enumerate(all_values):
             if i == 0:
                 continue  # sarlavha qatori
-            if not row or not row[0]:
-                continue
-            row_filial = str(row[0]).strip()
-            if _filial_kod(row_filial) == filial_kod:
-                if first_row is None:
-                    first_row = i + 1
+            if row and row[0]:
+                effective_filial = str(row[0]).strip()
+            if not row or (len(row) < 2 or not row[1]):
+                continue  # bo'sh qator yoki Ismi yo'q — xodim emas
+            if _filial_kod(effective_filial) == filial_kod:
                 last_row = i + 1
 
         insert_row = last_row + 1
         ws.insert_row([filial_nomi, ismi, telefon], index=insert_row, value_input_option="USER_ENTERED")
         print(f"[REG] {ws_name} ga qo'shildi: {filial_nomi} | {ismi} | {telefon} | qator {insert_row}")
 
-        if first_row is not None:
-            _merge_filial_column(ws, first_row, insert_row)
+        # MUHIM: endi merge QILMAYMIZ — Google Sheets merge qilinganda
+        # guruhning birinchi qatoridan boshqa barcha qatorlardagi qiymatni
+        # HAQIQATAN o'chirib tashlaydi (API orqali o'qiganda ham bo'sh
+        # chiqadi) — bu boshqa xodimlarning "yo'qolib qolishiga" olib
+        # kelgan edi.
 
     except Exception as e:
         print(f"[REG] {ws_name} yangilash xato: {e}")

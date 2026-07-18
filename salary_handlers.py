@@ -229,6 +229,22 @@ def _sync_one_sheet(ws, farmatsevtlar: list) -> dict:
 
     data_rows = [_pad(r) for r in data_rows]
 
+    # TA'MIRLASH: A ustuni (Filial) bo'sh qolgan qatorlarni (avvalgi
+    # buzilgan "merge" operatsiyasi tufayli) yuqoridagi oxirgi ko'ringan
+    # filial nomi bilan to'ldiramiz ("forward-fill"). Bu shu safargi
+    # sinxronizatsiya davomida barcha eski yo'qolgan xodimlarni ham
+    # tiklab beradi, chunki keyinroq bu ma'lumot qaytadan yozib qo'yiladi.
+    effective_filial = ""
+    repaired_count = 0
+    for row in data_rows:
+        if row[0]:
+            effective_filial = row[0]
+        elif row[1] and effective_filial:
+            row[0] = effective_filial
+            repaired_count += 1
+    if repaired_count:
+        print(f"[MAOSH] {ws.title}: {repaired_count} ta qatorda bo'sh Filial katagi tiklandi")
+
     # Mavjud telefon raqamlari
     existing_phones = set()
     for row in data_rows:
@@ -246,12 +262,6 @@ def _sync_one_sheet(ws, farmatsevtlar: list) -> dict:
         to_add_by_filial.setdefault(kod, []).append(f)
         existing_phones.add(phone_norm)
         added.append(f["ismi"])
-
-    # DIQQAT: bu yerda "if not added: return" QILMAYMIZ — chunki merge
-    # (birlashtirish) qadami har doim ishlashi kerak, hatto yangi xodim
-    # qo'shilmasa ham (masalan qayta ishga tushirilganda). Avvalgi
-    # versiyada shu yerda erta chiqib ketilardi va shu sabab merge hech
-    # qachon bajarilmay qolgan edi.
 
     # Yangi ro'yxatni original tartibni SAQLAGAN holda quramiz: mavjud
     # qatorlar orasidan, har bir filial guruhi TUGAGAN joyda, o'sha
@@ -276,10 +286,10 @@ def _sync_one_sheet(ws, farmatsevtlar: list) -> dict:
         for f in flist:
             new_rows.append(_pad([f["filial"], f["ismi"], f["telefon"]]))
 
-    # 1) Agar yangi xodim qo'shilgan bo'lsa — butun ma'lumotni BITTA
-    #    so'rov bilan yozib qo'yamiz (aks holda yozish shart emas —
-    #    kvota tejash uchun)
-    if added:
+    # Butun ma'lumotni (ta'mirlangan + yangi qo'shilganlar bilan) BITTA
+    # so'rov bilan yozib qo'yamiz — bu HAR DOIM bajariladi (yangi xodim
+    # bo'lsin-bo'lmasin), chunki ta'mirlash har safar kerak bo'lishi mumkin
+    if new_rows:
         needed_rows = 1 + len(new_rows)
         if ws.row_count < needed_rows:
             ws.resize(rows=needed_rows)
@@ -288,9 +298,11 @@ def _sync_one_sheet(ws, farmatsevtlar: list) -> dict:
             new_rows, value_input_option="USER_ENTERED"
         )
 
-    # 2) Filial ustunini (A) guruhlar bo'ylab BITTA so'rovda qayta merge
-    #    qilamiz — bu HAR DOIM bajariladi, yangi xodim bo'lsin-bo'lmasin
-    _merge_all_filial_groups(ws, new_rows)
+    # MUHIM: endi katakchalarni MERGE qilmaymiz — chunki Google Sheets
+    # merge qilinganda guruhning birinchi qatoridan boshqa barcha
+    # qatorlardagi qiymatni HAQIQATAN o'chirib tashlaydi (API orqali
+    # o'qiganda ham bo'sh chiqadi), bu esa filialning boshqa xodimlari
+    # "yo'qolib qolishiga" olib kelgan edi.
 
     return {"added": added, "skipped": len(farmatsevtlar) - len(added)}
 
@@ -440,9 +452,12 @@ def get_farmatsevt_salary_by_phone(phone: str) -> dict | None:
     def _find_row_by_phone(ws, target_phone):
         all_values = ws.get_all_values()
         seen_phones = []
+        effective_filial = ""
         for row in all_values[1:]:
-            if not row or not row[0]:
-                continue
+            if row and row[0]:
+                effective_filial = str(row[0]).strip()
+            if not row or len(row) < 2 or not row[1]:
+                continue  # bo'sh qator yoki Ismi yo'q — xodim emas
 
             def _cell(col, _row=row):
                 idx = col - 1
@@ -450,7 +465,7 @@ def get_farmatsevt_salary_by_phone(phone: str) -> dict | None:
 
             telefon_cell = str(_cell(SAL_COL_TELEFON)).strip()
             if not telefon_cell:
-                continue  # bo'sh (sarlavha) qator — xodim emas
+                continue
             norm = _sal_normalize_phone(telefon_cell)
             seen_phones.append((telefon_cell, norm))
             if norm != target_phone:
@@ -468,7 +483,7 @@ def get_farmatsevt_salary_by_phone(phone: str) -> dict | None:
 
             return {
                 "ismi": str(_cell(SAL_COL_ISMI)).strip(),
-                "filial": str(_cell(SAL_COL_FILIAL)).strip(),
+                "filial": effective_filial,
                 "reja_keyingi": _num(SAL_COL_REJA_KEYINGI),
                 "reja_joriy": _num(SAL_COL_REJA_JORIY),
                 "savdo": _num(SAL_COL_SAVDO),
