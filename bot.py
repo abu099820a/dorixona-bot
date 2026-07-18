@@ -5,6 +5,7 @@ from register_handlers import register_enter, get_reg_states
 from salary_handlers import (
     cmd_send_salaries, get_sal_states, SAL_WAIT_ZIP,
     reports_menu_enter, reports_menu_handler, REPORTS_MENU,
+    cmd_sync_oylik,
 )
 from attendance_handlers import (
     att_enter, get_att_states,
@@ -770,6 +771,7 @@ def main():
     app.add_handler(CmdHandler("fix_latlon", cmd_fix_latlon))
     app.add_handler(CmdHandler("fill_phones", cmd_fill_phones))
     app.add_handler(CmdHandler("send_salaries", cmd_send_salaries))
+    app.add_handler(CmdHandler("sync_oylik", cmd_sync_oylik))
     app.run_polling()
 
 if __name__ == "__main__":

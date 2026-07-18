@@ -196,6 +196,117 @@ def _get_phone_by_telegram_id(telegram_id) -> str:
         return ""
 
 
+def _filial_kod(filial: str) -> str:
+    """'6 - ЮНУСАБАД 7' → '6'"""
+    m = re.match(r"^(\d+)", str(filial).strip())
+    return m.group(1) if m else ""
+
+
+def _sync_one_sheet(ws, farmatsevtlar: list) -> dict:
+    """
+    Berilgan varaqqa (Oylik yoki Aksiya) Farmatsevtlar ro'yxatidagi
+    xodimlardan hali mavjud bo'lmaganlarini qo'shadi.
+    Qaytaradi: {"added": [...], "skipped": int}
+    """
+    all_values = ws.get_all_values()
+
+    # Allaqachon mavjud telefon raqamlari
+    existing_phones = set()
+    for row in all_values[1:]:
+        if len(row) > 2 and row[2]:
+            existing_phones.add(_sal_normalize_phone(row[2]))
+
+    added = []
+    for f in farmatsevtlar:
+        phone_norm = _sal_normalize_phone(f["telefon"])
+        if not phone_norm or phone_norm in existing_phones:
+            continue
+
+        # Filial guruhidagi oxirgi qatorni qayta hisoblaymiz (har safar
+        # yangilanadi, chunki oldingi qo'shishlar qator raqamlarini suradi)
+        all_values = ws.get_all_values()
+        filial_kod = _filial_kod(f["filial"])
+        last_row = 1
+        for i, row in enumerate(all_values):
+            if i == 0 or not row or not row[0]:
+                continue
+            if _filial_kod(str(row[0]).strip()) == filial_kod:
+                last_row = i + 1
+
+        insert_row = last_row + 1
+        ws.insert_row(
+            [f["filial"], f["ismi"], f["telefon"]],
+            index=insert_row, value_input_option="USER_ENTERED"
+        )
+        existing_phones.add(phone_norm)
+        added.append(f["ismi"])
+
+    return {"added": added, "skipped": len(farmatsevtlar) - len(added)}
+
+
+def sync_oylik_sheet() -> dict:
+    """
+    Farmatsevtlar jadvalidagi BARCHA xodimlarni "Oylik" va "Aksiya"
+    varaqlariga (hali mavjud bo'lmaganlarini, telefon raqami bo'yicha)
+    qo'shib chiqadi. Admin buyrug'i orqali (masalan bir martalik
+    "orqaga qoldirilgan" ro'yxatdan o'tganlarni to'ldirish uchun) ishga
+    tushiriladi.
+    """
+    result = {"oylik": {"added": [], "skipped": 0}, "aksiya": {"added": [], "skipped": 0}, "error": None}
+    try:
+        client = _get_client()
+
+        ph_ws = client.open_by_key(PHARMACY_SHEET_ID).worksheet("Farmatsevtlar")
+        records = ph_ws.get_all_records()
+        farmatsevtlar = []
+        for row in records:
+            ismi = str(row.get("Ismi", "")).strip()
+            filial = str(row.get("Filial", "")).strip()
+            telefon = str(row.get("Telefon", "")).strip()
+            if ismi and filial and telefon:
+                farmatsevtlar.append({"ismi": ismi, "filial": filial, "telefon": telefon})
+
+        sh = client.open_by_key(SALARY_SHEET_ID)
+
+        try:
+            ws_oylik = sh.worksheet(SALARY_WS_NAME)
+            result["oylik"] = _sync_one_sheet(ws_oylik, farmatsevtlar)
+        except gspread.exceptions.WorksheetNotFound:
+            result["error"] = f"'{SALARY_WS_NAME}' varag'i topilmadi"
+
+        try:
+            ws_aksiya = sh.worksheet(AKSIYA_WS_NAME)
+            result["aksiya"] = _sync_one_sheet(ws_aksiya, farmatsevtlar)
+        except gspread.exceptions.WorksheetNotFound:
+            pass
+
+        return result
+
+    except Exception as e:
+        logger.error(f"[MAOSH] sync_oylik_sheet xato: {e}")
+        result["error"] = str(e)
+        return result
+
+
+async def cmd_sync_oylik(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """/sync_oylik — Farmatsevtlar ro'yxatidagi hammani Oylik/Aksiya varaqlariga qo'shadi (admin)."""
+    if update.effective_user.id not in ADMIN_IDS:
+        await update.message.reply_text("❌ Ruxsat yo'q.")
+        return
+    msg = await update.message.reply_text("⏳ Sinxronizatsiya boshlanmoqda...")
+    try:
+        res = await run_write(sync_oylik_sheet)
+        if res.get("error"):
+            await msg.edit_text(f"❌ Xato: {res['error']}")
+            return
+        lines = ["✅ *Sinxronizatsiya tugadi!*\n"]
+        lines.append(f"📄 Oylik: +{len(res['oylik']['added'])} ta qo'shildi")
+        lines.append(f"🎁 Aksiya: +{len(res['aksiya']['added'])} ta qo'shildi")
+        await msg.edit_text("\n".join(lines), parse_mode="Markdown")
+    except Exception as e:
+        await msg.edit_text(f"❌ Xato: {e}")
+
+
 def get_farmatsevt_salary(telegram_id) -> dict | None:
     """
     Xodimning TelegramID'si orqali telefon raqamini topadi, so'ng
