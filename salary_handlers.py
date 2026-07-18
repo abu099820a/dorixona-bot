@@ -660,16 +660,21 @@ def get_firm_summa(firma_nomi: str) -> dict | None:
         client = _get_client()
         sh = client.open_by_key(SALARY_SHEET_ID)
         ws = _find_worksheet_flexible(sh, TOLOVLAR_WS_NAME)
+        print(f"[FIRMS] '{TOLOVLAR_WS_NAME}' varag'i topildi: '{ws.title}'")
         records = ws.get_all_records()
+        print(f"[FIRMS] Qidirilayotgan firma: '{firma_nomi}' | Jadvaldagi firmalar: "
+              f"{[str(r.get('Firma nomi','')) for r in records]}")
         for row in records:
             firma = str(row.get("Firma nomi", "")).strip()
             if firma.upper() == firma_nomi.strip().upper():
+                print(f"[FIRMS] MOS TOPILDI: qator={row}")
                 return {
                     "shartnoma": str(row.get("Shartnoma raqami", "")).strip(),
                     "inn": str(row.get("INN", "")).strip(),
                     "summa": row.get("Summa", ""),
                     "holati": str(row.get("Holati", "")).strip(),
                 }
+        print(f"[FIRMS] Mos firma topilmadi: '{firma_nomi}'")
         return None
     except gspread.exceptions.WorksheetNotFound:
         logger.error(f"[FIRMS] '{TOLOVLAR_WS_NAME}' varag'i topilmadi (SALARY_SHEET_ID)")
