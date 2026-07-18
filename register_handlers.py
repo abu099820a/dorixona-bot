@@ -39,10 +39,13 @@ SALARY_SHEET_ID     = os.getenv("SALARY_SHEET_ID", "")
 FILIALLAR_SHEET_ID  = os.getenv("FILIALLAR_SHEET_ID", "")
 
 # Conversation states
+REG_TYPE    = 399  # Dorixona / Firma tanlash
 REG_PHONE   = 400
 REG_NAME    = 401
 REG_FILIAL  = 402
 REG_LAVOZIM = 403
+FIRM2_PHONE = 407
+FIRM2_NAME  = 408
 
 # Ustun raqamlari (1-indexed)
 COL_FILIAL    = 1  # A
@@ -464,18 +467,138 @@ def _lavozim_kb():
 # ─── Handlerlar ───────────────────────────────────────────────────────────────
 
 async def register_enter(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """'📝 Ro'yxatdan o'tish' bosilganda."""
-    ctx.user_data.pop("reg_phone", None)
-    ctx.user_data.pop("reg_ismi", None)
-    ctx.user_data.pop("reg_filial_info", None)
-
+    """'📝 Ro'yxatdan o'tish' bosilganda — turini so'raydi."""
     await update.message.reply_text(
-        "📝 *Ro'yxatdan o'tish*\n\n"
-        "📱 Telefon raqamingizni yuboring:",
+        "📝 *Ro'yxatdan o'tish*\n\nKimsiz?",
         parse_mode="Markdown",
-        reply_markup=_phone_kb(),
+        reply_markup=ReplyKeyboardMarkup([
+            ["💊 Dorixonadan ro'yxatdan o'tish"],
+            ["🏢 Firma uchun ro'yxatdan o'tish"],
+            ["⬅️ Orqaga"],
+        ], resize_keyboard=True),
     )
-    return REG_PHONE
+    return REG_TYPE
+
+
+async def reg_type_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Ro'yxatdan o'tish turi tanlanadi: Dorixona yoki Firma."""
+    txt = update.message.text.strip() if update.message.text else ""
+
+    if txt == "⬅️ Orqaga":
+        from bot import main_keyboard, get_lang, MENU
+        await update.message.reply_text("📋 Asosiy menyu", reply_markup=main_keyboard(get_lang(ctx)))
+        return MENU
+
+    if txt == "💊 Dorixonadan ro'yxatdan o'tish":
+        ctx.user_data.pop("reg_phone", None)
+        ctx.user_data.pop("reg_ismi", None)
+        ctx.user_data.pop("reg_filial_info", None)
+        await update.message.reply_text(
+            "📝 *Dorixonadan ro'yxatdan o'tish*\n\n"
+            "📱 Telefon raqamingizni yuboring:",
+            parse_mode="Markdown",
+            reply_markup=_phone_kb(),
+        )
+        return REG_PHONE
+
+    if txt == "🏢 Firma uchun ro'yxatdan o'tish":
+        await update.message.reply_text(
+            "🏢 *Firma uchun ro'yxatdan o'tish*\n\n"
+            "📱 Telefon raqamingizni yuboring:",
+            parse_mode="Markdown",
+            reply_markup=_phone_kb(),
+        )
+        return FIRM2_PHONE
+
+    await update.message.reply_text("Iltimos, tugmalardan birini tanlang.")
+    return REG_TYPE
+
+
+async def firm2_phone_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Firma ro'yxatdan o'tishi: telefon qabul qilinadi."""
+    if update.message.text == "⬅️ Orqaga":
+        return await register_enter(update, ctx)
+
+    contact = update.message.contact
+    if not contact:
+        await update.message.reply_text("❌ Iltimos, tugma orqali telefon yuboring.", reply_markup=_phone_kb())
+        return FIRM2_PHONE
+
+    ctx.user_data["firm2_phone"] = normalize_phone(contact.phone_number)
+    await update.message.reply_text(
+        "🏢 Firmangiz nomini kiriting:",
+        reply_markup=ReplyKeyboardMarkup([["⬅️ Orqaga"]], resize_keyboard=True),
+    )
+    return FIRM2_NAME
+
+
+async def firm2_name_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Firma ro'yxatdan o'tishi: firma nomi qabul qilinadi va saqlanadi."""
+    from bot import main_keyboard, get_lang, MENU
+
+    if update.message.text == "⬅️ Orqaga":
+        await update.message.reply_text(
+            "🏢 *Firma uchun ro'yxatdan o'tish*\n\n📱 Telefon raqamingizni yuboring:",
+            parse_mode="Markdown", reply_markup=_phone_kb(),
+        )
+        return FIRM2_PHONE
+
+    firma_nomi = update.message.text.strip()
+    if len(firma_nomi) < 2:
+        await update.message.reply_text("❌ Firma nomini to'liq kiriting:")
+        return FIRM2_NAME
+
+    user_id = update.effective_user.id
+    phone = ctx.user_data.get("firm2_phone", "")
+
+    ok = save_firma(firma_nomi, phone, user_id)
+
+    if ok:
+        await update.message.reply_text(
+            f"🎉 *Muvaffaqiyatli ro'yxatdan o'tdingiz!*\n\n"
+            f"🏢 {firma_nomi}\n📱 {phone}\n\n"
+            f"Hisobotlaringiz shu hisobingizga yuboriladi.",
+            parse_mode="Markdown",
+        )
+    else:
+        await update.message.reply_text("⚠️ Xatolik yuz berdi. Qayta urinib ko'ring.")
+
+    await update.message.reply_text("📋 Asosiy menyu", reply_markup=main_keyboard(get_lang(ctx)))
+    return MENU
+
+
+FIRMALAR_WS_NAME = "Firmalar"
+
+
+def _get_firmalar_ws():
+    """PHARMACY_SHEET_ID ichidagi "Firmalar" varag'ini qaytaradi (bo'lmasa yaratadi)."""
+    client = _get_client()
+    sh = client.open_by_key(PHARMACY_SHEET_ID)
+    try:
+        return sh.worksheet(FIRMALAR_WS_NAME)
+    except Exception:
+        ws = sh.add_worksheet(title=FIRMALAR_WS_NAME, rows=200, cols=5)
+        ws.update("A1:E1", [["Firma nomi", "Telefon", "TelegramID", "FileID", "FileName"]])
+        return ws
+
+
+def save_firma(firma_nomi: str, phone: str, user_id: int) -> bool:
+    """Firmani "Firmalar" varag'iga saqlaydi (yangi qator, yoki mavjud bo'lsa yangilaydi)."""
+    try:
+        ws = _get_firmalar_ws()
+        all_values = ws.get_all_values()
+
+        for i, row in enumerate(all_values[1:], start=2):
+            if row and str(row[0]).strip().upper() == firma_nomi.strip().upper():
+                ws.update_cell(i, 2, phone)
+                ws.update_cell(i, 3, str(user_id))
+                return True
+
+        ws.append_row([firma_nomi, phone, str(user_id), "", ""])
+        return True
+    except Exception as e:
+        print(f"[FIRM2] Saqlash xato: {e}")
+        return False
 
 
 async def reg_phone_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -695,6 +818,9 @@ async def reg_lavozim_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 def get_reg_states():
     return {
+        REG_TYPE: [
+            MessageHandler(filters.TEXT & ~filters.COMMAND, reg_type_handler),
+        ],
         REG_PHONE: [
             MessageHandler(filters.CONTACT, reg_phone_handler),
             MessageHandler(filters.TEXT & ~filters.COMMAND, reg_phone_handler),
@@ -707,5 +833,12 @@ def get_reg_states():
         ],
         REG_LAVOZIM: [
             MessageHandler(filters.TEXT & ~filters.COMMAND, reg_lavozim_handler),
+        ],
+        FIRM2_PHONE: [
+            MessageHandler(filters.CONTACT, firm2_phone_handler),
+            MessageHandler(filters.TEXT & ~filters.COMMAND, firm2_phone_handler),
+        ],
+        FIRM2_NAME: [
+            MessageHandler(filters.TEXT & ~filters.COMMAND, firm2_name_handler),
         ],
     }
