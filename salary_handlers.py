@@ -246,8 +246,11 @@ def _sync_one_sheet(ws, farmatsevtlar: list) -> dict:
         existing_phones.add(phone_norm)
         added.append(f["ismi"])
 
-    if not added:
-        return {"added": [], "skipped": len(farmatsevtlar)}
+    # DIQQAT: bu yerda "if not added: return" QILMAYMIZ — chunki merge
+    # (birlashtirish) qadami har doim ishlashi kerak, hatto yangi xodim
+    # qo'shilmasa ham (masalan qayta ishga tushirilganda). Avvalgi
+    # versiyada shu yerda erta chiqib ketilardi va shu sabab merge hech
+    # qachon bajarilmay qolgan edi.
 
     # Yangi ro'yxatni original tartibni SAQLAGAN holda quramiz: mavjud
     # qatorlar orasidan, har bir filial guruhi TUGAGAN joyda, o'sha
@@ -272,8 +275,10 @@ def _sync_one_sheet(ws, farmatsevtlar: list) -> dict:
         for f in flist:
             new_rows.append(_pad([f["filial"], f["ismi"], f["telefon"]]))
 
-    # 1) Butun ma'lumotni BITTA so'rov bilan yozib qo'yamiz
-    if new_rows:
+    # 1) Agar yangi xodim qo'shilgan bo'lsa — butun ma'lumotni BITTA
+    #    so'rov bilan yozib qo'yamiz (aks holda yozish shart emas —
+    #    kvota tejash uchun)
+    if added:
         needed_rows = 1 + len(new_rows)
         if ws.row_count < needed_rows:
             ws.resize(rows=needed_rows)
@@ -282,7 +287,8 @@ def _sync_one_sheet(ws, farmatsevtlar: list) -> dict:
             new_rows, value_input_option="USER_ENTERED"
         )
 
-    # 2) Filial ustunini (A) guruhlar bo'ylab BITTA so'rovda qayta merge qilamiz
+    # 2) Filial ustunini (A) guruhlar bo'ylab BITTA so'rovda qayta merge
+    #    qilamiz — bu HAR DOIM bajariladi, yangi xodim bo'lsin-bo'lmasin
     _merge_all_filial_groups(ws, new_rows)
 
     return {"added": added, "skipped": len(farmatsevtlar) - len(added)}
