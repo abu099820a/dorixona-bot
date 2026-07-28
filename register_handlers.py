@@ -1101,6 +1101,129 @@ def add_filial_headers_by_gid(sheet_id: str, gid: int) -> dict:
 
 
 
+def _get_all_lavozim_map() -> dict:
+    """Butun Farmatsevtlar jadvalidan Ismi -> Lavozim lug'atini (barcha filiallar) qaytaradi."""
+    try:
+        client = _get_client()
+        ws = client.open_by_key(PHARMACY_SHEET_ID).worksheet("Farmatsevtlar")
+        all_values = ws.get_all_values()
+        result = {}
+        for row in all_values[1:]:
+            if not row or len(row) < 2 or not row[1]:
+                continue
+            ismi = str(row[1]).strip().upper()
+            lavozim = str(row[4]).strip() if len(row) > 4 else ""
+            result[ismi] = lavozim
+        return result
+    except Exception as e:
+        print(f"[FIX] _get_all_lavozim_map xato: {e}")
+        return {}
+
+
+def _reorder_ws_by_lavozim(ws) -> dict:
+    """
+    Berilgan varaqdagi mavjud xodimlarni HAR BIR filial guruhi ichida
+    Lavozim tartibi bo'yicha (Dorixona mudiri → Farmatsevt → Stajyor)
+    qayta saralaydi. Sarlavha (bo'sh Ismi) qatorlari har doim guruh
+    boshida qoladi. Filiallarning o'zaro tartibi (guruhlar ketma-ketligi)
+    o'zgarmaydi — faqat har bir guruh ICHIDAGI xodimlar saralanadi.
+    """
+    result = {"reordered_groups": 0, "error": None}
+    try:
+        all_values = ws.get_all_values()
+        if not all_values:
+            result["error"] = "Jadval bo'sh"
+            return result
+
+        header = all_values[0]
+        ncols = len(header)
+        data_rows = [list(r) + [""] * (ncols - len(r)) for r in all_values[1:]]
+
+        lavozim_map = _get_all_lavozim_map()
+
+        # Guruhlarga ajratamiz (filial kodi bo'yicha, ketma-ketlikni saqlab)
+        groups = []  # [(filial_kod, [rows])]
+        cur_kod = None
+        cur_group = []
+        for row in data_rows:
+            filial_val = row[0].strip() if row[0] else ""
+            kod = _filial_kod(filial_val) if filial_val else cur_kod
+            if kod != cur_kod and cur_group:
+                groups.append((cur_kod, cur_group))
+                cur_group = []
+            cur_kod = kod
+            cur_group.append(row)
+        if cur_group:
+            groups.append((cur_kod, cur_group))
+
+        new_rows = []
+        reordered_groups = 0
+
+        for kod, group_rows in groups:
+            headers_sub = [r for r in group_rows if not (len(r) > 1 and r[1].strip())]
+            employees = [r for r in group_rows if len(r) > 1 and r[1].strip()]
+
+            def _priority(row):
+                ismi = row[1].strip().upper()
+                lav = lavozim_map.get(ismi, "")
+                return _lavozim_priority(lav) if lav else 2
+
+            sorted_employees = sorted(employees, key=_priority)
+            if [r[1] for r in sorted_employees] != [r[1] for r in employees]:
+                reordered_groups += 1
+
+            new_rows.extend(headers_sub)
+            new_rows.extend(sorted_employees)
+
+        if reordered_groups:
+            needed_rows = 1 + len(new_rows)
+            if ws.row_count < needed_rows:
+                ws.resize(rows=needed_rows)
+            ws.update(f"A2:{_col_letter(ncols)}{needed_rows}", new_rows, value_input_option="USER_ENTERED")
+
+        result["reordered_groups"] = reordered_groups
+        return result
+
+    except Exception as e:
+        print(f"[FIX] _reorder_ws_by_lavozim xato: {e}")
+        result["error"] = str(e)
+        return result
+
+
+def reorder_by_lavozim_by_gid(sheet_id: str, gid: int) -> dict:
+    """Berilgan Google Sheet ID va gid bo'yicha xodimlarni Lavozim tartibida qayta saralaydi."""
+    try:
+        client = _get_client()
+        sh = client.open_by_key(sheet_id)
+        ws = None
+        for w in sh.worksheets():
+            if w.id == gid:
+                ws = w
+                break
+        if ws is None:
+            return {"reordered_groups": 0, "error": f"gid={gid} bo'lgan varaq topilmadi"}
+        return _reorder_ws_by_lavozim(ws)
+    except Exception as e:
+        return {"reordered_groups": 0, "error": str(e)}
+
+
+async def cmd_reorder_by_lavozim_salary(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """/reorder_lavozim_salary — SALARY_SHEET_ID dagi gid=0 varag'ini Lavozim tartibida qayta saralaydi (admin)."""
+    if update.effective_user.id not in ADMIN_IDS:
+        await update.message.reply_text("❌ Ruxsat yo'q.")
+        return
+    msg = await update.message.reply_text("⏳ Xodimlar tartiblanmoqda...")
+    try:
+        from attendance import run_write
+        res = await run_write(reorder_by_lavozim_by_gid, SALARY_SHEET_ID, 0)
+        if res.get("error"):
+            await msg.edit_text(f"❌ Xato: {res['error']}")
+        else:
+            await msg.edit_text(f"✅ Tayyor! {res['reordered_groups']} ta filial guruhi qayta tartiblandi.")
+    except Exception as e:
+        await msg.edit_text(f"❌ Xato: {e}")
+
+
 async def cmd_add_filial_headers(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """/add_filial_headers — Farmatsevtlar jadvaliga filial sarlavha qatorlarini qo'shadi (admin)."""
     if update.effective_user.id not in ADMIN_IDS:
