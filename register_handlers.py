@@ -231,6 +231,37 @@ def get_filial_info(filial_kod: str) -> dict | None:
         return None
 
 
+def _find_numeric_insert_position(rows: list, filial_kod: str) -> int:
+    """
+    Filial guruhi hali mavjud bo'lmagan holatda, uni RAQAMLI tartibda
+    to'g'ri o'rniga (masalan 13 va 15 orasiga, agar 14 yetishmasa)
+    joylashtirish uchun eng mos qator INDEKSINI (0-based, `rows`
+    ro'yxati ichida) qaytaradi. Agar raqamlarni solishtirib bo'lmasa
+    (masalan kod raqam emas) — ro'yxat oxirini qaytaradi.
+    """
+    try:
+        target_num = int(filial_kod)
+    except (ValueError, TypeError):
+        return len(rows)
+
+    last_smaller_end = 0
+    for i, row in enumerate(rows):
+        if not row or not row[0]:
+            continue
+        kod = _filial_kod(str(row[0]).strip())
+        if not kod:
+            continue
+        try:
+            num = int(kod)
+        except ValueError:
+            continue
+        if num < target_num:
+            last_smaller_end = i + 1
+        elif num > target_num:
+            return last_smaller_end
+    return last_smaller_end
+
+
 def _lavozim_priority(lavozim: str) -> int:
     """
     Xodim tartibini aniqlaydi: Dorixona mudiri (1) → Farmatsevt (2) →
@@ -374,6 +405,7 @@ def _add_to_attendance(ismi: str, filial_nomi: str, telefon: str = "", lavozim: 
 
         last_row = 2  # default
         target_row = None
+        found_any = False
 
         # Jadval: A=Filial, B=Ismi
         for i, row in enumerate(all_values):
@@ -384,6 +416,7 @@ def _add_to_attendance(ismi: str, filial_nomi: str, telefon: str = "", lavozim: 
             row_filial = str(row[0]).strip()
             if _filial_kod(row_filial) != filial_kod:
                 continue
+            found_any = True
             last_row = i + 1  # zaxira (guruhning oxirgi qatori)
 
             row_ismi = str(row[1]).strip().upper() if len(row) > 1 else ""
@@ -392,7 +425,14 @@ def _add_to_attendance(ismi: str, filial_nomi: str, telefon: str = "", lavozim: 
             if row_priority <= new_priority:
                 target_row = i + 1
 
-        insert_row = (target_row if target_row is not None else last_row) + 1
+        if not found_any:
+            # MUHIM: bu filial guruhi Davomat jadvalida UMUMAN topilmadi —
+            # jadval oxiriga emas, RAQAMLI TARTIBDA to'g'ri o'rniga
+            # (masalan 13 va 15 orasiga, agar 14 yetishmasa) qo'shamiz.
+            pos = _find_numeric_insert_position(all_values[2:], filial_kod)
+            insert_row = 2 + pos + 1
+        else:
+            insert_row = (target_row if target_row is not None else last_row) + 1
         # A=Filial, B=Ismi, C=Telefon tartibida qo'shish
         ws.insert_row([filial_nomi, ismi, telefon], index=insert_row)
         print(f"[REG] Davomat ga qo'shildi: {filial_nomi} | {ismi} | {lavozim} | qator {insert_row}")
@@ -486,6 +526,7 @@ def _add_to_salary_sheet(ws_name: str, ismi: str, filial_nomi: str, telefon: str
 
         last_row = 1  # sarlavha qatoridan keyin, default
         target_row = None
+        found_any = False
 
         # MUHIM: A ustuni bo'sh bo'lgan qatorlarni ham hisobga olamiz
         # (masalan ilgari merge qilingan katakchalar tufayli) — yuqoridagi
@@ -502,6 +543,7 @@ def _add_to_salary_sheet(ws_name: str, ismi: str, filial_nomi: str, telefon: str
                 continue  # bo'sh qator yoki Ismi yo'q — xodim emas
             if _filial_kod(effective_filial) != filial_kod:
                 continue
+            found_any = True
             last_row = i + 1
 
             row_ismi = str(row[1]).strip().upper()
@@ -510,7 +552,15 @@ def _add_to_salary_sheet(ws_name: str, ismi: str, filial_nomi: str, telefon: str
             if row_priority <= new_priority:
                 target_row = i + 1
 
-        insert_row = (target_row if target_row is not None else last_row) + 1
+        if not found_any:
+            # MUHIM: bu filial guruhi jadvalda UMUMAN topilmadi (masalan
+            # hali hech kim shu filialdan ro'yxatdan o'tmagan). Bunday
+            # holda RAQAMLI TARTIBDA to'g'ri o'rniga (masalan 13 va 15
+            # orasiga, agar 14 yetishmasa) qo'shamiz.
+            pos = _find_numeric_insert_position(all_values[1:], filial_kod)
+            insert_row = 1 + pos + 1
+        else:
+            insert_row = (target_row if target_row is not None else last_row) + 1
         ws.insert_row([filial_nomi, ismi, telefon], index=insert_row, value_input_option="USER_ENTERED")
         print(f"[REG] {ws_name} ga qo'shildi: {filial_nomi} | {ismi} | {lavozim} | qator {insert_row}")
 
@@ -1057,6 +1107,17 @@ def _add_filial_headers_to_ws(ws) -> dict:
             new_rows.append(row)
 
         if added or repaired:
+            # XAVFSIZLIK TO'SIG'I: yangi qatorlar soni asl holatidan (yoki
+            # qo'shilishi kutilgan sondan) kam bo'lib qolsa — yozishni
+            # to'xtatamiz, ma'lumot yo'qolib ketmasligi uchun.
+            expected_min = len(data_rows) + added
+            if len(new_rows) < expected_min:
+                result["error"] = (
+                    f"XAVFSIZLIK: qayta qurilgan qatorlar soni ({len(new_rows)}) "
+                    f"kutilganidan ({expected_min}) kam — yozish BEKOR QILINDI."
+                )
+                return result
+
             needed_rows = 1 + len(new_rows)
             if ws.row_count < needed_rows:
                 ws.resize(rows=needed_rows)
@@ -1176,6 +1237,18 @@ def _reorder_ws_by_lavozim(ws) -> dict:
             new_rows.extend(sorted_employees)
 
         if reordered_groups:
+            # XAVFSIZLIK TO'SIG'I: agar biror sababdan qayta qurilgan
+            # ma'lumot asl qatorlar sonidan KAM bo'lib qolsa — bu real
+            # ma'lumot yo'qolganini bildiradi. Bunday holda YOZISHNI
+            # BUTUNLAY TO'XTATAMIZ, xatolik qaytaramiz.
+            if len(new_rows) < len(data_rows):
+                result["error"] = (
+                    f"XAVFSIZLIK: qayta qurilgan qatorlar soni ({len(new_rows)}) "
+                    f"asl holatidan ({len(data_rows)}) kam — yozish BEKOR QILINDI, "
+                    f"ma'lumot yo'qolmasligi uchun."
+                )
+                return result
+
             needed_rows = 1 + len(new_rows)
             if ws.row_count < needed_rows:
                 ws.resize(rows=needed_rows)
@@ -1220,6 +1293,151 @@ async def cmd_reorder_by_lavozim_salary(update: Update, ctx: ContextTypes.DEFAUL
             await msg.edit_text(f"❌ Xato: {res['error']}")
         else:
             await msg.edit_text(f"✅ Tayyor! {res['reordered_groups']} ta filial guruhi qayta tartiblandi.")
+    except Exception as e:
+        await msg.edit_text(f"❌ Xato: {e}")
+
+
+def _get_all_filials_from_farmatsevtlar() -> list:
+    """
+    "Farmatsevtlar" jadvalidan (PHARMACY_SHEET_ID) BARCHA filiallarning
+    to'liq ro'yxatini qaytaradi — xodimi bo'lsin-bo'lmasin, chunki bu
+    jadvalda xodimsiz filiallar ham sarlavha (yoki hech bo'lmasa Lat/Lon
+    bilan) qator sifatida mavjud.
+
+    Qaytaradi: [(kod, to'liq_nom), ...] — jadvaldagi tartibda, dublikatsiz.
+    """
+    try:
+        client = _get_client()
+        ws = client.open_by_key(PHARMACY_SHEET_ID).worksheet("Farmatsevtlar")
+        all_values = ws.get_all_values()
+        seen = set()
+        result = []
+        for row in all_values[1:]:
+            if not row or not row[0]:
+                continue
+            filial_val = str(row[0]).strip()
+            kod = _filial_kod(filial_val)
+            if not kod or kod in seen:
+                continue
+            seen.add(kod)
+            result.append((kod, filial_val))
+        return result
+    except Exception as e:
+        print(f"[FIX] _get_all_filials_from_farmatsevtlar xato: {e}")
+        return []
+
+
+def _sync_all_filials_to_ws(ws) -> dict:
+    """
+    Berilgan varaqni Farmatsevtlar jadvalidagi filiallar RAQAMLI
+    TARTIBIGA mos ravishda qayta quradi: mavjud xodimlar o'z guruhida
+    saqlanadi, yetishmayotgan filiallar esa o'zining TO'G'RI raqamli
+    o'rniga (masalan 13 va 15 orasiga, agar 14 yetishmasa) bo'sh
+    sarlavha qatori sifatida qo'shiladi.
+    """
+    result = {"added": 0, "error": None}
+    try:
+        all_filials = _get_all_filials_from_farmatsevtlar()  # (kod, nom), Farmatsevtlar tartibida
+        if not all_filials:
+            result["error"] = "Farmatsevtlar jadvalidan filiallar topilmadi"
+            return result
+
+        all_values = ws.get_all_values()
+        if not all_values:
+            result["error"] = "Jadval bo'sh"
+            return result
+
+        header = all_values[0]
+        ncols = len(header)
+        data_rows = [list(r) + [""] * (ncols - len(r)) for r in all_values[1:]]
+
+        # Mavjud qatorlarni filial kodi bo'yicha guruhlaymiz (o'z ichidagi
+        # tartibni saqlab), forward-fill bilan (bo'sh A ustuniga chidamli)
+        groups_by_kod = {}
+        unmatched_rows = []  # kod aniqlanmagan qatorlar (juda kam uchraydi)
+        cur_kod = None
+        for row in data_rows:
+            filial_val = row[0].strip() if row[0] else ""
+            kod = _filial_kod(filial_val) if filial_val else cur_kod
+            if kod:
+                cur_kod = kod
+                groups_by_kod.setdefault(kod, []).append(row)
+            else:
+                unmatched_rows.append(row)
+
+        new_rows = []
+        added = 0
+
+        # Farmatsevtlar tartibida (raqamli ketma-ketlikda) qayta quramiz
+        for kod, nom in all_filials:
+            if kod in groups_by_kod:
+                new_rows.extend(groups_by_kod.pop(kod))
+            else:
+                header_row = [""] * ncols
+                header_row[0] = nom
+                new_rows.append(header_row)
+                added += 1
+
+        # Ehtiyot uchun: Farmatsevtlar ro'yxatida yo'q, lekin bu jadvalda
+        # mavjud bo'lgan filiallar bo'lsa (masalan qo'lda kiritilgan) —
+        # ularni OXIRIGA qo'shamiz, hech narsa yo'qotmaslik uchun
+        for kod, rows in groups_by_kod.items():
+            new_rows.extend(rows)
+        new_rows.extend(unmatched_rows)
+
+        # XAVFSIZLIK TO'SIG'I: umumiy ma'lumot qatorlari hech qachon
+        # kamaymasligi kerak
+        if len(new_rows) < len(data_rows):
+            result["error"] = (
+                f"XAVFSIZLIK: qayta qurilgan qatorlar soni ({len(new_rows)}) "
+                f"asl holatidan ({len(data_rows)}) kam — yozish bekor qilindi."
+            )
+            return result
+
+        needed_rows = 1 + len(new_rows)
+        if ws.row_count < needed_rows:
+            ws.resize(rows=needed_rows)
+        ws.update(f"A2:{_col_letter(ncols)}{needed_rows}", new_rows, value_input_option="USER_ENTERED")
+
+        result["added"] = added
+        return result
+
+    except Exception as e:
+        print(f"[FIX] _sync_all_filials_to_ws xato: {e}")
+        result["error"] = str(e)
+        return result
+
+
+def sync_all_filials_by_gid(sheet_id: str, gid: int) -> dict:
+    """Berilgan Google Sheet ID va gid bo'yicha barcha filiallarni (Farmatsevtlar asosida) sinxronlaydi."""
+    try:
+        client = _get_client()
+        sh = client.open_by_key(sheet_id)
+        ws = None
+        for w in sh.worksheets():
+            if w.id == gid:
+                ws = w
+                break
+        if ws is None:
+            return {"added": 0, "error": f"gid={gid} bo'lgan varaq topilmadi"}
+        return _sync_all_filials_to_ws(ws)
+    except Exception as e:
+        return {"added": 0, "error": str(e)}
+
+
+async def cmd_sync_all_filials_salary(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """/sync_all_filials_salary — SALARY_SHEET_ID gid=0 varag'iga yetishmayotgan barcha filiallarni qo'shadi (admin)."""
+    if update.effective_user.id not in ADMIN_IDS:
+        await update.message.reply_text("❌ Ruxsat yo'q.")
+        return
+    msg = await update.message.reply_text("⏳ Filiallar tekshirilmoqda...")
+    try:
+        from attendance import run_write
+        res = await run_write(sync_all_filials_by_gid, SALARY_SHEET_ID, 0)
+        if res.get("error"):
+            await msg.edit_text(f"❌ Xato: {res['error']}")
+        else:
+            await msg.edit_text(f"✅ Tayyor! {res['added']} ta yetishmayotgan filial qo'shildi.")
     except Exception as e:
         await msg.edit_text(f"❌ Xato: {e}")
 
