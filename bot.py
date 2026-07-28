@@ -1,7 +1,7 @@
 import math, io, re
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 import pandas as pd
-from register_handlers import register_enter, get_reg_states, cmd_add_filial_headers
+from register_handlers import register_enter, get_reg_states, cmd_add_filial_headers, cmd_add_filial_headers_salary
 from salary_handlers import (
     cmd_send_salaries, get_sal_states, SAL_WAIT_ZIP,
     reports_menu_enter, reports_menu_handler, REPORTS_MENU,
@@ -815,6 +815,7 @@ def main():
     app.add_handler(CmdHandler("send_salaries", cmd_send_salaries))
     app.add_handler(CmdHandler("sync_oylik", cmd_sync_oylik))
     app.add_handler(CmdHandler("add_filial_headers", cmd_add_filial_headers))
+    app.add_handler(CmdHandler("add_filial_headers_salary", cmd_add_filial_headers_salary))
     app.run_polling()
 
 if __name__ == "__main__":

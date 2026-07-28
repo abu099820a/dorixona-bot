@@ -898,24 +898,19 @@ def _col_letter(n: int) -> str:
     return result
 
 
-def add_filial_headers() -> dict:
+def _add_filial_headers_to_ws(ws) -> dict:
     """
-    "Farmatsevtlar" jadvalida har bir filial guruhi uchun, agar hali
-    bo'lmasa, sarlavha (header) qatorini qo'shadi — bu qatorda FAQAT
-    filial nomi bo'ladi, hech qanday xodim (Ismi/Telefon) bo'lmaydi.
+    Berilgan varaqda har bir filial guruhi uchun, agar hali bo'lmasa,
+    sarlavha (header) qatorini qo'shadi — bu qatorda FAQAT filial nomi
+    bo'ladi, hech qanday xodim (Ismi/Telefon) bo'lmaydi.
 
     MUHIM: mavjud xodim qatorlari (ularning Filial ustunidagi qiymati
     ham) o'zgarmaydi — faqat YANGI, bo'sh sarlavha qatorlari qo'shiladi.
     Butun jadval xotirada qayta quriladi va BITTA so'rov bilan yoziladi
-    (kvota va tartib buzilishining oldini olish uchun — avvalgi
-    tajribamizdan saboq olib).
+    (kvota va tartib buzilishining oldini olish uchun).
     """
     result = {"added": 0, "error": None}
     try:
-        client = _get_client()
-        sh = client.open_by_key(PHARMACY_SHEET_ID)
-        ws = sh.worksheet("Farmatsevtlar")
-
         all_values = ws.get_all_values()
         if not all_values:
             result["error"] = "Jadval bo'sh"
@@ -961,6 +956,35 @@ def add_filial_headers() -> dict:
         return result
 
 
+def add_filial_headers() -> dict:
+    """"Farmatsevtlar" jadvaliga (PHARMACY_SHEET_ID) sarlavha qatorlarini qo'shadi."""
+    try:
+        client = _get_client()
+        sh = client.open_by_key(PHARMACY_SHEET_ID)
+        ws = sh.worksheet("Farmatsevtlar")
+        return _add_filial_headers_to_ws(ws)
+    except Exception as e:
+        return {"added": 0, "error": str(e)}
+
+
+def add_filial_headers_by_gid(sheet_id: str, gid: int) -> dict:
+    """Berilgan Google Sheet ID va gid (varaq ID) bo'yicha sarlavha qatorlarini qo'shadi."""
+    try:
+        client = _get_client()
+        sh = client.open_by_key(sheet_id)
+        ws = None
+        for w in sh.worksheets():
+            if w.id == gid:
+                ws = w
+                break
+        if ws is None:
+            return {"added": 0, "error": f"gid={gid} bo'lgan varaq topilmadi"}
+        return _add_filial_headers_to_ws(ws)
+    except Exception as e:
+        return {"added": 0, "error": str(e)}
+
+
+
 async def cmd_add_filial_headers(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """/add_filial_headers — Farmatsevtlar jadvaliga filial sarlavha qatorlarini qo'shadi (admin)."""
     if update.effective_user.id not in ADMIN_IDS:
@@ -970,6 +994,23 @@ async def cmd_add_filial_headers(update: Update, ctx: ContextTypes.DEFAULT_TYPE)
     try:
         from attendance import run_write
         res = await run_write(add_filial_headers)
+        if res.get("error"):
+            await msg.edit_text(f"❌ Xato: {res['error']}")
+        else:
+            await msg.edit_text(f"✅ Tayyor! {res['added']} ta yangi sarlavha qatori qo'shildi.")
+    except Exception as e:
+        await msg.edit_text(f"❌ Xato: {e}")
+
+
+async def cmd_add_filial_headers_salary(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """/add_filial_headers_salary — SALARY_SHEET_ID dagi gid=0 varag'iga sarlavha qatorlarini qo'shadi (admin)."""
+    if update.effective_user.id not in ADMIN_IDS:
+        await update.message.reply_text("❌ Ruxsat yo'q.")
+        return
+    msg = await update.message.reply_text("⏳ Sarlavha qatorlari tekshirilmoqda...")
+    try:
+        from attendance import run_write
+        res = await run_write(add_filial_headers_by_gid, SALARY_SHEET_ID, 0)
         if res.get("error"):
             await msg.edit_text(f"❌ Xato: {res['error']}")
         else:
