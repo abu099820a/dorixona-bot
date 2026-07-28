@@ -539,12 +539,20 @@ def _add_to_salary_sheet(ws_name: str, ismi: str, filial_nomi: str, telefon: str
                 continue  # sarlavha qatori
             if row and row[0]:
                 effective_filial = str(row[0]).strip()
-            if not row or (len(row) < 2 or not row[1]):
-                continue  # bo'sh qator yoki Ismi yo'q — xodim emas
+            if not row or not effective_filial:
+                continue  # umuman bo'sh qator — hisobga olmaymiz
             if _filial_kod(effective_filial) != filial_kod:
                 continue
             found_any = True
             last_row = i + 1
+
+            if len(row) < 2 or not row[1]:
+                # Bu — filial SARLAVHA qatori (xodimi yo'q). Guruh
+                # mavjudligini bildiradi, va agar guruhda hali boshqa
+                # xodim bo'lmasa, yangi xodim shu sarlavhadan KEYIN
+                # joylashishi kerak.
+                target_row = i + 1
+                continue
 
             row_ismi = str(row[1]).strip().upper()
             row_lavozim = lavozim_map.get(row_ismi, "")
