@@ -231,6 +231,47 @@ def get_filial_info(filial_kod: str) -> dict | None:
         return None
 
 
+def _lavozim_priority(lavozim: str) -> int:
+    """
+    Xodim tartibini aniqlaydi: Dorixona mudiri (1) → Farmatsevt (2) →
+    Stajyor (3). Har bir filial guruhi ichida xodimlar shu tartibda
+    turishi kerak.
+    """
+    l = str(lavozim).strip().lower()
+    if "mudir" in l:
+        return 1
+    if "stajyor" in l or "стажер" in l or "стажёр" in l:
+        return 3
+    return 2  # Farmatsevt va aniqlanmagan lavozimlar — o'rtada
+
+
+def _get_group_lavozim_map(filial_kod: str) -> dict:
+    """
+    Farmatsevtlar jadvalidan berilgan filial guruhidagi xodimlarning
+    Ismi -> Lavozim lug'atini qaytaradi (Davomat/Oylik/Aksiya
+    varaqlarida tartibni aniqlash uchun ishlatiladi, chunki ular
+    Lavozim ustunini o'z ichiga olmaydi).
+    """
+    try:
+        client = _get_client()
+        ws = client.open_by_key(PHARMACY_SHEET_ID).worksheet("Farmatsevtlar")
+        all_values = ws.get_all_values()
+        result = {}
+        for row in all_values[1:]:
+            if not row or not row[0]:
+                continue
+            if _filial_kod(str(row[0]).strip()) != filial_kod:
+                continue
+            ismi = str(row[1]).strip().upper() if len(row) > 1 else ""
+            lavozim = str(row[4]).strip() if len(row) > 4 else ""
+            if ismi:
+                result[ismi] = lavozim
+        return result
+    except Exception as e:
+        print(f"[REG] _get_group_lavozim_map xato: {e}")
+        return {}
+
+
 def add_new_farmatsevt(
     ismi: str, telefon: str, filial_nomi: str,
     lavozim: str, lat: str, lon: str,
@@ -238,15 +279,38 @@ def add_new_farmatsevt(
 ) -> bool:
     """
     Yangi farmatsevtni Sheets ga qo'shadi.
-    after_row: shu qatordan KEYIN (bir pastga) qo'shiladi.
-    Davomat Sheets ga ham avtomatik qo'shiladi.
+    MUHIM: after_row parametri endi faqat ZAXIRA sifatida ishlatiladi
+    (agar biror sabab bilan tartiblab joylashtirish muvaffaqiyatsiz
+    bo'lsa). Asosiy holatda, filial guruhi ICHIDA to'g'ri tartib bilan
+    (Dorixona mudiri → Farmatsevt → Stajyor) joylashtiriladi — yangi
+    xodim o'z lavozimiga mos joyga, tegishli guruhning oxiriga qo'shiladi.
+    Davomat va Oylik/Aksiya Sheets ga ham avtomatik, xuddi shu tartibda
+    qo'shiladi.
     """
     try:
         client = _get_client()
         ws = client.open_by_key(PHARMACY_SHEET_ID).worksheet("Farmatsevtlar")
 
-        # Qatorni after_row dan keyin qo'shish
-        insert_row = after_row + 1
+        filial_kod = _filial_kod(filial_nomi)
+        new_priority = _lavozim_priority(lavozim)
+
+        insert_row = after_row + 1  # zaxira (agar pastdagi hisoblash ishlamasa)
+        try:
+            all_values = ws.get_all_values()
+            target_row = None
+            for i, row in enumerate(all_values):
+                if i == 0 or not row or not row[0]:
+                    continue
+                if _filial_kod(str(row[0]).strip()) != filial_kod:
+                    continue
+                row_lavozim = str(row[4]).strip() if len(row) > 4 else ""
+                row_priority = _lavozim_priority(row_lavozim)
+                if row_priority <= new_priority:
+                    target_row = i + 1  # shu qatordan keyin qo'shamiz (hozircha)
+            if target_row is not None:
+                insert_row = target_row + 1
+        except Exception as e:
+            print(f"[REG] Tartib hisoblashda xato, zaxira joy ishlatiladi: {e}")
 
         # Qator qo'shish (pastki qatorlarni surish)
         ws.insert_row(
@@ -255,13 +319,13 @@ def add_new_farmatsevt(
             value_input_option="USER_ENTERED"
         )
 
-        print(f"[REG] Yangi farmatsevt qo'shildi: {ismi} | {filial_nomi} | qator {insert_row}")
+        print(f"[REG] Yangi farmatsevt qo'shildi: {ismi} | {filial_nomi} | {lavozim} | qator {insert_row}")
 
-        # Davomat Sheets ga ham qo'shish
-        _add_to_attendance(ismi, filial_nomi, telefon)
+        # Davomat Sheets ga ham qo'shish (tartib bilan)
+        _add_to_attendance(ismi, filial_nomi, telefon, lavozim)
 
-        # "Oylik" (Maosh) Sheets ga ham qo'shish
-        _add_to_oylik(ismi, filial_nomi, telefon)
+        # "Oylik" (Maosh) Sheets ga ham qo'shish (tartib bilan)
+        _add_to_oylik(ismi, filial_nomi, telefon, lavozim)
 
         return True
     except Exception as e:
@@ -269,11 +333,14 @@ def add_new_farmatsevt(
         return False
 
 
-def _add_to_attendance(ismi: str, filial_nomi: str, telefon: str = ""):
+def _add_to_attendance(ismi: str, filial_nomi: str, telefon: str = "", lavozim: str = ""):
     """
     Davomat Sheets dagi joriy oy listiga yangi farmatsevtni qo'shadi.
     Jadval: A=Filial, B=Ismi
-    Shu filialdagi oxirgi xodimdan keyin qo'shadi.
+    Filial guruhi ICHIDA tartib bilan qo'shadi: Dorixona mudiri →
+    Farmatsevt → Stajyor. Davomat jadvalining o'zida Lavozim ustuni
+    bo'lmagani uchun, guruhdagi mavjud xodimlarning lavozimi
+    Farmatsevtlar jadvalidan (Ismi orqali) aniqlanadi.
     """
     try:
         if not ATTENDANCE_SHEET_ID:
@@ -302,24 +369,33 @@ def _add_to_attendance(ismi: str, filial_nomi: str, telefon: str = ""):
 
         all_values = ws.get_all_values()
         filial_kod = _filial_kod(filial_nomi)
+        new_priority = _lavozim_priority(lavozim)
+        lavozim_map = _get_group_lavozim_map(filial_kod)
+
         last_row = 2  # default
+        target_row = None
 
         # Jadval: A=Filial, B=Ismi
-        # Shu filialdagi OXIRGI qatorni topish (sarlavha + xodimlar ichida)
         for i, row in enumerate(all_values):
             if i < 2:
                 continue
             if not row or not row[0]:
                 continue
-            # A ustun = Filial
             row_filial = str(row[0]).strip()
-            if _filial_kod(row_filial) == filial_kod:
-                last_row = i + 1  # 1-indexed
+            if _filial_kod(row_filial) != filial_kod:
+                continue
+            last_row = i + 1  # zaxira (guruhning oxirgi qatori)
 
-        insert_row = last_row + 1
+            row_ismi = str(row[1]).strip().upper() if len(row) > 1 else ""
+            row_lavozim = lavozim_map.get(row_ismi, "")
+            row_priority = _lavozim_priority(row_lavozim) if row_lavozim else 2
+            if row_priority <= new_priority:
+                target_row = i + 1
+
+        insert_row = (target_row if target_row is not None else last_row) + 1
         # A=Filial, B=Ismi, C=Telefon tartibida qo'shish
         ws.insert_row([filial_nomi, ismi, telefon], index=insert_row)
-        print(f"[REG] Davomat ga qo'shildi: {filial_nomi} | {ismi} | {telefon} | qator {insert_row}")
+        print(f"[REG] Davomat ga qo'shildi: {filial_nomi} | {ismi} | {lavozim} | qator {insert_row}")
 
         # Yangi qatorni oq rangga qaytarish (filial sarlavha rangini olmasa)
         try:
@@ -382,14 +458,14 @@ def _merge_filial_column(ws, first_row: int, last_row: int):
         print(f"[REG] Merge xato: {e}")
 
 
-def _add_to_salary_sheet(ws_name: str, ismi: str, filial_nomi: str, telefon: str = ""):
+def _add_to_salary_sheet(ws_name: str, ismi: str, filial_nomi: str, telefon: str = "", lavozim: str = ""):
     """
     "Oylik" yoki "Aksiya" Sheets'ga (SALARY_SHEET_ID) yangi xodimni
     qo'shadi. Jadval endi Davomat bilan bir xil formatda:
         A=Filial (raqam bilan, masalan "1 - ТАШМИ-1") | B=Ismi | C=Telefon
-    Shu filialdagi oxirgi xodimdan keyin qo'shiladi (raqamli kod bo'yicha
-    aniqlanadi — Farmatsevtlar/Davomat bilan bir xil mantiq), so'ng A
-    ustunidagi filial katagi butun guruh bo'ylab qayta birlashtiriladi.
+    Filial guruhi ICHIDA tartib bilan qo'shiladi: Dorixona mudiri →
+    Farmatsevt → Stajyor (Lavozim ma'lumoti Farmatsevtlar jadvalidan
+    Ismi orqali aniqlanadi, chunki bu varaqda Lavozim ustuni yo'q).
     """
     try:
         if not SALARY_SHEET_ID:
@@ -405,7 +481,11 @@ def _add_to_salary_sheet(ws_name: str, ismi: str, filial_nomi: str, telefon: str
 
         all_values = ws.get_all_values()
         filial_kod = _filial_kod(filial_nomi)
+        new_priority = _lavozim_priority(lavozim)
+        lavozim_map = _get_group_lavozim_map(filial_kod)
+
         last_row = 1  # sarlavha qatoridan keyin, default
+        target_row = None
 
         # MUHIM: A ustuni bo'sh bo'lgan qatorlarni ham hisobga olamiz
         # (masalan ilgari merge qilingan katakchalar tufayli) — yuqoridagi
@@ -420,12 +500,19 @@ def _add_to_salary_sheet(ws_name: str, ismi: str, filial_nomi: str, telefon: str
                 effective_filial = str(row[0]).strip()
             if not row or (len(row) < 2 or not row[1]):
                 continue  # bo'sh qator yoki Ismi yo'q — xodim emas
-            if _filial_kod(effective_filial) == filial_kod:
-                last_row = i + 1
+            if _filial_kod(effective_filial) != filial_kod:
+                continue
+            last_row = i + 1
 
-        insert_row = last_row + 1
+            row_ismi = str(row[1]).strip().upper()
+            row_lavozim = lavozim_map.get(row_ismi, "")
+            row_priority = _lavozim_priority(row_lavozim) if row_lavozim else 2
+            if row_priority <= new_priority:
+                target_row = i + 1
+
+        insert_row = (target_row if target_row is not None else last_row) + 1
         ws.insert_row([filial_nomi, ismi, telefon], index=insert_row, value_input_option="USER_ENTERED")
-        print(f"[REG] {ws_name} ga qo'shildi: {filial_nomi} | {ismi} | {telefon} | qator {insert_row}")
+        print(f"[REG] {ws_name} ga qo'shildi: {filial_nomi} | {ismi} | {lavozim} | qator {insert_row}")
 
         # MUHIM: endi merge QILMAYMIZ — Google Sheets merge qilinganda
         # guruhning birinchi qatoridan boshqa barcha qatorlardagi qiymatni
@@ -437,10 +524,10 @@ def _add_to_salary_sheet(ws_name: str, ismi: str, filial_nomi: str, telefon: str
         print(f"[REG] {ws_name} yangilash xato: {e}")
 
 
-def _add_to_oylik(ismi: str, filial_nomi: str, telefon: str = ""):
-    """Xodimni "Oylik" va "Aksiya" varaqlarining ikkalasiga ham qo'shadi."""
-    _add_to_salary_sheet("Oylik", ismi, filial_nomi, telefon)
-    _add_to_salary_sheet("Aksiya", ismi, filial_nomi, telefon)
+def _add_to_oylik(ismi: str, filial_nomi: str, telefon: str = "", lavozim: str = ""):
+    """Xodimni "Oylik" va "Aksiya" varaqlarining ikkalasiga ham, tartib bilan qo'shadi."""
+    _add_to_salary_sheet("Oylik", ismi, filial_nomi, telefon, lavozim)
+    _add_to_salary_sheet("Aksiya", ismi, filial_nomi, telefon, lavozim)
 
 
 # ─── Klaviaturalar ────────────────────────────────────────────────────────────
@@ -904,12 +991,19 @@ def _add_filial_headers_to_ws(ws) -> dict:
     sarlavha (header) qatorini qo'shadi — bu qatorda FAQAT filial nomi
     bo'ladi, hech qanday xodim (Ismi/Telefon) bo'lmaydi.
 
-    MUHIM: mavjud xodim qatorlari (ularning Filial ustunidagi qiymati
-    ham) o'zgarmaydi — faqat YANGI, bo'sh sarlavha qatorlari qo'shiladi.
-    Butun jadval xotirada qayta quriladi va BITTA so'rov bilan yoziladi
-    (kvota va tartib buzilishining oldini olish uchun).
+    MUHIM: avval A ustunidagi BARCHA eski "merge" (birlashtirilgan)
+    katakchalar bekor qilinadi — chunki merge qilingan katakka yozilgan
+    qiymat faqat birinchi (yuqori-chap) katakda saqlanib, qolganlari
+    bo'sh ko'rinib qolgan edi. So'ng, filial qiymati yo'qolib qolgan
+    (lekin Ismi bor) qatorlar yuqoridagi oxirgi ko'ringan filial nomi
+    bilan "forward-fill" qilib tiklanadi. Faqat shundan keyin yangi
+    sarlavha qatorlari qo'shiladi.
+
+    Butun jadval xotirada qayta quriladi va yozish ham merge ham
+    ma'lumot BITTA-BITTA so'rov bilan bajariladi (kvota va tartib
+    buzilishining oldini olish uchun).
     """
-    result = {"added": 0, "error": None}
+    result = {"added": 0, "repaired": 0, "error": None}
     try:
         all_values = ws.get_all_values()
         if not all_values:
@@ -919,7 +1013,30 @@ def _add_filial_headers_to_ws(ws) -> dict:
         header = all_values[0]
         ncols = len(header)
         data_rows = [list(r) + [""] * (ncols - len(r)) for r in all_values[1:]]
+        n = len(data_rows)
 
+        # 1) A ustunidagi barcha eski merge'larni bekor qilamiz
+        if n:
+            try:
+                ws.spreadsheet.batch_update({"requests": [{"unmergeCells": {"range": {
+                    "sheetId": ws.id,
+                    "startRowIndex": 1, "endRowIndex": 1 + n,
+                    "startColumnIndex": 0, "endColumnIndex": 1,
+                }}}]})
+            except Exception as e:
+                print(f"[FIX] Unmerge xato (davom etamiz): {e}")
+
+        # 2) Filial qiymati yo'qolgan (lekin Ismi bor) qatorlarni tiklaymiz
+        effective_filial = ""
+        repaired = 0
+        for row in data_rows:
+            if row[0].strip():
+                effective_filial = row[0].strip()
+            elif len(row) > 1 and row[1].strip() and effective_filial:
+                row[0] = effective_filial
+                repaired += 1
+
+        # 3) Har bir filial guruhi uchun sarlavha qatorini qo'shamiz
         new_rows = []
         last_kod = None
         added = 0
@@ -930,9 +1047,7 @@ def _add_filial_headers_to_ws(ws) -> dict:
             cur_kod = _filial_kod(filial_val) if filial_val else None
 
             if cur_kod and cur_kod != last_kod:
-                # Bu filialning ro'yxatdagi birinchi qatori
                 if ismi_val:
-                    # Xodim bilan boshlanyapti — hali sarlavhasi yo'q, qo'shamiz
                     header_row = [""] * ncols
                     header_row[0] = filial_val
                     new_rows.append(header_row)
@@ -941,13 +1056,14 @@ def _add_filial_headers_to_ws(ws) -> dict:
 
             new_rows.append(row)
 
-        if added:
+        if added or repaired:
             needed_rows = 1 + len(new_rows)
             if ws.row_count < needed_rows:
                 ws.resize(rows=needed_rows)
             ws.update(f"A2:{_col_letter(ncols)}{needed_rows}", new_rows, value_input_option="USER_ENTERED")
 
         result["added"] = added
+        result["repaired"] = repaired
         return result
 
     except Exception as e:
@@ -997,7 +1113,7 @@ async def cmd_add_filial_headers(update: Update, ctx: ContextTypes.DEFAULT_TYPE)
         if res.get("error"):
             await msg.edit_text(f"❌ Xato: {res['error']}")
         else:
-            await msg.edit_text(f"✅ Tayyor! {res['added']} ta yangi sarlavha qatori qo'shildi.")
+            await msg.edit_text(f"✅ Tayyor! {res['added']} ta yangi sarlavha qatori qoshildi, {res.get('repaired',0)} ta yoqolgan filial qiymati tiklandi.")
     except Exception as e:
         await msg.edit_text(f"❌ Xato: {e}")
 
@@ -1014,6 +1130,6 @@ async def cmd_add_filial_headers_salary(update: Update, ctx: ContextTypes.DEFAUL
         if res.get("error"):
             await msg.edit_text(f"❌ Xato: {res['error']}")
         else:
-            await msg.edit_text(f"✅ Tayyor! {res['added']} ta yangi sarlavha qatori qo'shildi.")
+            await msg.edit_text(f"✅ Tayyor! {res['added']} ta yangi sarlavha qatori qoshildi, {res.get('repaired',0)} ta yoqolgan filial qiymati tiklandi.")
     except Exception as e:
         await msg.edit_text(f"❌ Xato: {e}")
