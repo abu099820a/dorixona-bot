@@ -37,6 +37,7 @@ PHARMACY_SHEET_ID   = os.getenv("PHARMACY_SHEET_ID", "")
 ATTENDANCE_SHEET_ID = os.getenv("ATTENDANCE_SHEET_ID", "")
 SALARY_SHEET_ID     = os.getenv("SALARY_SHEET_ID", "")
 FILIALLAR_SHEET_ID  = os.getenv("FILIALLAR_SHEET_ID", "")
+ADMIN_IDS = [709544046]
 
 # Conversation states
 REG_TYPE    = 399  # Dorixona / Firma tanlash
@@ -551,14 +552,25 @@ async def firm2_name_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     phone = ctx.user_data.get("firm2_phone", "")
 
-    ok = save_firma(firma_nomi, phone, user_id)
+    result = save_firma(firma_nomi, phone, user_id)
 
-    if ok:
+    if result == "ok":
         await update.message.reply_text(
             f"🎉 *Muvaffaqiyatli ro'yxatdan o'tdingiz!*\n\n"
             f"🏢 {firma_nomi}\n📱 {phone}\n\n"
             f"Hisobotlaringiz shu hisobingizga yuboriladi.",
             parse_mode="Markdown",
+        )
+    elif result == "firma_taken":
+        await update.message.reply_text(
+            f"❌ *{firma_nomi}* firmasi allaqachon ro'yxatdan o'tgan.\n\n"
+            "Agar bu xato deb hisoblasangiz, administratorga murojaat qiling.",
+            parse_mode="Markdown",
+        )
+    elif result == "phone_taken":
+        await update.message.reply_text(
+            "❌ Bu telefon raqami allaqachon boshqa firma uchun ro'yxatdan o'tgan.\n\n"
+            "Agar bu xato deb hisoblasangiz, administratorga murojaat qiling."
         )
     else:
         await update.message.reply_text("⚠️ Xatolik yuz berdi. Qayta urinib ko'ring.")
@@ -588,23 +600,51 @@ def _norm_firma_nomi(s: str) -> str:
     return s.strip().upper()
 
 
-def save_firma(firma_nomi: str, phone: str, user_id: int) -> bool:
-    """Firmani "Firmalar" varag'iga saqlaydi (yangi qator, yoki mavjud bo'lsa yangilaydi)."""
+def save_firma(firma_nomi: str, phone: str, user_id: int) -> str:
+    """
+    Firmani "Firmalar" varag'iga saqlaydi.
+
+    XAVFSIZLIK QOIDASI: bitta firma nomi va bitta telefon raqami faqat
+    BIR MARTA ro'yxatdan o'tishi mumkin. Agar firma nomi allaqachon
+    (TelegramID bilan) ro'yxatdan o'tgan bo'lsa yoki shu telefon raqami
+    boshqa firma uchun ishlatilgan bo'lsa — rad etiladi.
+
+    Qaytaradi: "ok" | "firma_taken" | "phone_taken" | "error"
+    """
     try:
         ws = _get_firmalar_ws()
         all_values = ws.get_all_values()
+        target_firma = _norm_firma_nomi(firma_nomi)
+        target_phone = normalize_phone(phone)
+
+        empty_row_idx = None  # admin oldindan qo'shib qo'ygan, hali bo'sh qator
 
         for i, row in enumerate(all_values[1:], start=2):
-            if row and _norm_firma_nomi(row[0]) == _norm_firma_nomi(firma_nomi):
-                ws.update_cell(i, 2, phone)
-                ws.update_cell(i, 3, str(user_id))
-                return True
+            if not row:
+                continue
+            row_firma = _norm_firma_nomi(row[0]) if len(row) > 0 else ""
+            row_phone = normalize_phone(row[1]) if len(row) > 1 else ""
+            row_tid = str(row[2]).strip() if len(row) > 2 else ""
+
+            if row_firma == target_firma:
+                if row_tid:
+                    return "firma_taken"
+                empty_row_idx = i
+                continue
+
+            if row_phone and row_phone == target_phone and row_tid:
+                return "phone_taken"
+
+        if empty_row_idx:
+            ws.update_cell(empty_row_idx, 2, phone)
+            ws.update_cell(empty_row_idx, 3, str(user_id))
+            return "ok"
 
         ws.append_row([firma_nomi, phone, str(user_id), "", ""])
-        return True
+        return "ok"
     except Exception as e:
         print(f"[FIRM2] Saqlash xato: {e}")
-        return False
+        return "error"
 
 
 async def reg_phone_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -848,3 +888,91 @@ def get_reg_states():
             MessageHandler(filters.TEXT & ~filters.COMMAND, firm2_name_handler),
         ],
     }
+
+
+def _col_letter(n: int) -> str:
+    result = ""
+    while n > 0:
+        n, r = divmod(n - 1, 26)
+        result = chr(65 + r) + result
+    return result
+
+
+def add_filial_headers() -> dict:
+    """
+    "Farmatsevtlar" jadvalida har bir filial guruhi uchun, agar hali
+    bo'lmasa, sarlavha (header) qatorini qo'shadi — bu qatorda FAQAT
+    filial nomi bo'ladi, hech qanday xodim (Ismi/Telefon) bo'lmaydi.
+
+    MUHIM: mavjud xodim qatorlari (ularning Filial ustunidagi qiymati
+    ham) o'zgarmaydi — faqat YANGI, bo'sh sarlavha qatorlari qo'shiladi.
+    Butun jadval xotirada qayta quriladi va BITTA so'rov bilan yoziladi
+    (kvota va tartib buzilishining oldini olish uchun — avvalgi
+    tajribamizdan saboq olib).
+    """
+    result = {"added": 0, "error": None}
+    try:
+        client = _get_client()
+        sh = client.open_by_key(PHARMACY_SHEET_ID)
+        ws = sh.worksheet("Farmatsevtlar")
+
+        all_values = ws.get_all_values()
+        if not all_values:
+            result["error"] = "Jadval bo'sh"
+            return result
+
+        header = all_values[0]
+        ncols = len(header)
+        data_rows = [list(r) + [""] * (ncols - len(r)) for r in all_values[1:]]
+
+        new_rows = []
+        last_kod = None
+        added = 0
+
+        for row in data_rows:
+            filial_val = row[0].strip() if row[0] else ""
+            ismi_val = row[1].strip() if len(row) > 1 and row[1] else ""
+            cur_kod = _filial_kod(filial_val) if filial_val else None
+
+            if cur_kod and cur_kod != last_kod:
+                # Bu filialning ro'yxatdagi birinchi qatori
+                if ismi_val:
+                    # Xodim bilan boshlanyapti — hali sarlavhasi yo'q, qo'shamiz
+                    header_row = [""] * ncols
+                    header_row[0] = filial_val
+                    new_rows.append(header_row)
+                    added += 1
+                last_kod = cur_kod
+
+            new_rows.append(row)
+
+        if added:
+            needed_rows = 1 + len(new_rows)
+            if ws.row_count < needed_rows:
+                ws.resize(rows=needed_rows)
+            ws.update(f"A2:{_col_letter(ncols)}{needed_rows}", new_rows, value_input_option="USER_ENTERED")
+
+        result["added"] = added
+        return result
+
+    except Exception as e:
+        print(f"[FIX] add_filial_headers xato: {e}")
+        result["error"] = str(e)
+        return result
+
+
+async def cmd_add_filial_headers(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """/add_filial_headers — Farmatsevtlar jadvaliga filial sarlavha qatorlarini qo'shadi (admin)."""
+    if update.effective_user.id not in ADMIN_IDS:
+        await update.message.reply_text("❌ Ruxsat yo'q.")
+        return
+    msg = await update.message.reply_text("⏳ Sarlavha qatorlari tekshirilmoqda...")
+    try:
+        from attendance import run_write
+        res = await run_write(add_filial_headers)
+        if res.get("error"):
+            await msg.edit_text(f"❌ Xato: {res['error']}")
+        else:
+            await msg.edit_text(f"✅ Tayyor! {res['added']} ta yangi sarlavha qatori qo'shildi.")
+    except Exception as e:
+        await msg.edit_text(f"❌ Xato: {e}")
