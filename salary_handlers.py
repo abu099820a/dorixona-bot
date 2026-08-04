@@ -219,22 +219,29 @@ def _filial_kod(filial: str) -> str:
 def _sync_one_sheet(ws, farmatsevtlar: list) -> dict:
     """
     Berilgan varaqqa (Oylik yoki Aksiya) Farmatsevtlar ro'yxatidagi
-    xodimlardan hali mavjud bo'lmaganlarini qo'shadi.
+    xodimlardan hali mavjud bo'lmaganlarini qo'shadi, ishdan bo'shaganlarni
+    (Farmatsevtlar jadvalida endi topilmaydiganlarni) qatorini butunlay
+    o'chiradi, va har bir xodim ismini krilcha "Familya Ism" formatiga
+    o'tkazadi (name_utils.normalize_name — allaqachon jadvalda bo'lgan
+    eski yozuvlarga ham qo'llanadi, faqat yangilariga emas).
 
     MUHIM: bu funksiya BUTUN jadval mazmunini XOTIRADA (Python ichida)
     qayta quradi va faqat OXIRIDA 1-2 ta Google Sheets so'rovi yuboradi
-    (bitta "yozish" + bitta "merge"). Avvalgi versiya har bir xodim
-    uchun alohida-alohida so'rov yuborar edi — bu ko'p xodimda Google'ning
-    "daqiqasiga so'rov" kvotasidan (429 xato) oshib ketishga va, jarayon
-    yarim yo'lda uzilib qolsa, jadval tartibi buzilib qolishiga sabab
-    bo'lgan edi.
+    (bitta "yozish" + kerak bo'lsa bitta "tozalash"). Avvalgi versiya
+    har bir xodim uchun alohida-alohida so'rov yuborar edi — bu ko'p
+    xodimda Google'ning "daqiqasiga so'rov" kvotasidan (429 xato) oshib
+    ketishga va, jarayon yarim yo'lda uzilib qolsa, jadval tartibi
+    buzilib qolishiga sabab bo'lgan edi.
 
-    Qaytaradi: {"added": [...], "skipped": int}
+    Qaytaradi: {"added": [...], "removed": [...], "skipped": int}
     """
+    from name_utils import normalize_name
+
     all_values = ws.get_all_values()
     header = all_values[0] if all_values else []
     data_rows = [list(r) for r in all_values[1:]]
     ncols = max(len(header), 17)
+    original_row_count = len(data_rows)
 
     def _pad(row):
         row = list(row) + [""] * (ncols - len(row))
@@ -258,7 +265,48 @@ def _sync_one_sheet(ws, farmatsevtlar: list) -> dict:
     if repaired_count:
         print(f"[MAOSH] {ws.title}: {repaired_count} ta qatorda bo'sh Filial katagi tiklandi")
 
-    # Mavjud telefon raqamlari
+    # ISHDAN BO'SHAGANLARNI O'CHIRISH: Farmatsevtlar jadvalida endi
+    # topilmaydigan (telefon raqami bo'yicha) xodimlar qatorini butunlay
+    # olib tashlaymiz.
+    #
+    # XAVFSIZLIK: agar `farmatsevtlar` ro'yxati bo'sh yoki jadvaldagi
+    # xodimlar sonidan kutilmaganda ancha kam bo'lib qolsa (masalan
+    # Google Sheets/API vaqtinchalik xato qaytargani uchun) — bu HAQIQIY
+    # ommaviy ishdan bo'shash emas, balki uzilish belgisi bo'lishi mumkin.
+    # Bunday holatda o'chirish UMUMAN bajarilmaydi (faqat qo'shish davom
+    # etadi) — aks holda hammaning qatori xato bilan o'chirilib ketishi
+    # mumkin edi.
+    current_employee_rows = sum(1 for r in data_rows if r[1])
+    safe_to_remove = bool(farmatsevtlar) and (
+        current_employee_rows == 0
+        or len(farmatsevtlar) >= current_employee_rows * 0.5
+    )
+
+    removed = []
+    if safe_to_remove:
+        active_phones = {
+            _sal_normalize_phone(f["telefon"]) for f in farmatsevtlar if f.get("telefon")
+        }
+        kept = []
+        for row in data_rows:
+            ismi = row[1].strip() if row[1] else ""
+            phone_cell = row[2].strip() if row[2] else ""
+            if ismi and phone_cell:
+                phone_norm = _sal_normalize_phone(phone_cell)
+                if phone_norm and phone_norm not in active_phones:
+                    removed.append(ismi)
+                    continue
+            kept.append(row)
+        data_rows = kept
+        if removed:
+            print(f"[MAOSH] {ws.title}: {len(removed)} ta ishdan bo'shagan xodim qatori o'chirildi: {removed}")
+    elif farmatsevtlar or current_employee_rows:
+        logger.warning(
+            f"[MAOSH] {ws.title}: xavfsizlik uchun o'chirish o'tkazib yuborildi "
+            f"(Farmatsevtlar: {len(farmatsevtlar)} ta, jadvalda: {current_employee_rows} ta xodim)"
+        )
+
+    # Mavjud telefon raqamlari (o'chirishdan KEYINGI ro'yxat bo'yicha)
     existing_phones = set()
     for row in data_rows:
         if row[2]:
@@ -291,28 +339,43 @@ def _sync_one_sheet(ws, farmatsevtlar: list) -> dict:
             next_kod = _filial_kod(data_rows[i + 1][0])
         if cur_kod and cur_kod != next_kod and cur_kod in to_add_by_filial:
             for f in to_add_by_filial.pop(cur_kod):
-                new_rows.append(_pad([f["filial"], f["ismi"], f["telefon"]]))
+                new_rows.append(_pad([f["filial"], normalize_name(f["ismi"]), f["telefon"]]))
         i += 1
 
     # Jadvalda umuman topilmagan filiallar (masalan yangi filial) — oxiriga
     for kod, flist in to_add_by_filial.items():
         for f in flist:
-            new_rows.append(_pad([f["filial"], f["ismi"], f["telefon"]]))
+            new_rows.append(_pad([f["filial"], normalize_name(f["ismi"]), f["telefon"]]))
 
-    # Butun ma'lumotni (ta'mirlangan + yangi qo'shilganlar bilan) BITTA
-    # so'rov bilan yozib qo'yamiz — bu HAR DOIM bajariladi (yangi xodim
-    # bo'lsin-bo'lmasin), chunki ta'mirlash har safar kerak bo'lishi mumkin
+    # NOM-FORMATLASH: nafaqat yangi qo'shilgan, balki ALLAQACHON jadvalda
+    # bo'lgan barcha xodimlar ismini ham krilcha "Familya Ism" formatiga
+    # o'tkazamiz (allaqachon to'g'ri formatdagilar o'zgarishsiz qoladi).
+    renamed = 0
+    for row in new_rows:
+        if row[1]:
+            fixed = normalize_name(row[1])
+            if fixed and fixed != row[1]:
+                row[1] = fixed
+                renamed += 1
+    if renamed:
+        print(f"[MAOSH] {ws.title}: {renamed} ta xodim ismi krilcha 'Familya Ism' formatiga o'tkazildi")
+
+    # Butun ma'lumotni (ta'mirlangan + o'chirilgan + yangi qo'shilgan +
+    # nom-formatlangan) BITTA so'rov bilan yozib qo'yamiz — bu HAR DOIM
+    # bajariladi, chunki ta'mirlash/nom-formatlash har safar kerak bo'lishi
+    # mumkin, hatto yangi/o'chirilgan xodim bo'lmasa ham.
     if new_rows:
-        # XAVFSIZLIK TO'SIG'I: yangi qatorlar soni asl holatidan (+ qo'shilgan
-        # xodimlar sonidan) kam bo'lib qolsa — ma'lumot yo'qolib ketmasligi
-        # uchun yozishni to'xtatamiz.
+        # XAVFSIZLIK TO'SIG'I: yangi qatorlar soni (o'chirishdan keyingi
+        # asl holatidan + qo'shilgan xodimlar sonidan) kam bo'lib qolsa —
+        # ma'lumot kutilmaganda yo'qolib ketmasligi uchun yozishni
+        # to'xtatamiz.
         expected_min = len(data_rows) + len(added)
         if len(new_rows) < expected_min:
             logger.error(
                 f"[MAOSH] XAVFSIZLIK: qatorlar soni ({len(new_rows)}) kutilganidan "
                 f"({expected_min}) kam — yozish bekor qilindi."
             )
-            return {"added": [], "skipped": len(farmatsevtlar), "error": "xavfsizlik to'sig'i ishga tushdi"}
+            return {"added": [], "removed": [], "skipped": len(farmatsevtlar), "error": "xavfsizlik to'sig'i ishga tushdi"}
 
         needed_rows = 1 + len(new_rows)
         if ws.row_count < needed_rows:
@@ -322,13 +385,24 @@ def _sync_one_sheet(ws, farmatsevtlar: list) -> dict:
             new_rows, value_input_option="USER_ENTERED"
         )
 
+        # Agar yangi ro'yxat (o'chirishlar tufayli) ASL jadvaldan QISQA
+        # bo'lib qolgan bo'lsa — ortib qolgan eski qatorlarni tozalaymiz,
+        # aks holda ular jadval oxirida "arvoh" yozuv sifatida qolib ketadi.
+        old_last_row = 1 + original_row_count
+        new_last_row = needed_rows
+        if old_last_row > new_last_row:
+            ws.batch_clear([f"A{new_last_row + 1}:{col_letter(ncols)}{old_last_row}"])
+    elif original_row_count > 0:
+        # Barcha qatorlar o'chirilgan (juda kam ehtimol) — baribir tozalaymiz.
+        ws.batch_clear([f"A2:{col_letter(ncols)}{1 + original_row_count}"])
+
     # MUHIM: endi katakchalarni MERGE qilmaymiz — chunki Google Sheets
     # merge qilinganda guruhning birinchi qatoridan boshqa barcha
     # qatorlardagi qiymatni HAQIQATAN o'chirib tashlaydi (API orqali
     # o'qiganda ham bo'sh chiqadi), bu esa filialning boshqa xodimlari
     # "yo'qolib qolishiga" olib kelgan edi.
 
-    return {"added": added, "skipped": len(farmatsevtlar) - len(added)}
+    return {"added": added, "removed": removed, "skipped": len(farmatsevtlar) - len(added)}
 
 
 def col_letter(n: int) -> str:
@@ -453,11 +527,17 @@ async def cmd_sync_oylik(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             await msg.edit_text(f"❌ Xato: {res['error']}")
             return
         lines = ["✅ *Sinxronizatsiya tugadi!*\n"]
-        lines.append(f"📄 Oylik: +{len(res['oylik']['added'])} ta qo'shildi")
+        lines.append(
+            f"📄 Oylik: +{len(res['oylik']['added'])} qo'shildi, "
+            f"-{len(res['oylik'].get('removed', []))} o'chirildi"
+        )
         if res.get("aksiya_error"):
             lines.append(f"⚠️ Aksiya: {res['aksiya_error']}")
         else:
-            lines.append(f"🎁 Aksiya: +{len(res['aksiya']['added'])} ta qo'shildi")
+            lines.append(
+                f"🎁 Aksiya: +{len(res['aksiya']['added'])} qo'shildi, "
+                f"-{len(res['aksiya'].get('removed', []))} o'chirildi"
+            )
         await msg.edit_text("\n".join(lines), parse_mode="Markdown")
     except Exception as e:
         await msg.edit_text(f"❌ Xato: {e}")
