@@ -739,9 +739,19 @@ def main():
         # buni "bilmay qolar edi", va keyingi bosilgan tugma (masalan til
         # tanlash) hech kim tomonidan qabul qilinmay, botning "qotib
         # qolishi"ga sabab bo'lgan edi.
+        # MUHIM: bu yerda faqat CommandHandler("start") qoladi. Suhbat
+        # holatini avtomatik tiklash ("qaysidir tugma bosilsa /start
+        # bosilgandek ishlasin") funksiyasini IKKI XIL usulda sinab
+        # ko'rdik (avval alohida guruh orqali, keyin to'g'ridan-to'g'ri
+        # entry_points orqali) — ikkalasi ham botni "faqat tilni
+        # tanlang" degan cheksiz tsiklga tushirib qo'ydi. Shuning uchun
+        # bu funksiyadan BUTUNLAY voz kechildi — botning barqaror
+        # ishlashi bu "qulaylik"dan ancha muhimroq. Endi, agar bot
+        # qayta ishga tushsa (redeploy), foydalanuvchi shunchaki "/start"
+        # bosishi kerak bo'ladi — bu kichik va kamdan-kam uchraydigan
+        # noqulaylik.
         entry_points=[
             CommandHandler("start", start),
-            MessageHandler(filters.ALL & ~filters.COMMAND, start),
         ],
         states={
             LANG: [CallbackQueryHandler(set_lang, pattern="^lang_")],
