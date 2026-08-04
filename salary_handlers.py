@@ -1539,11 +1539,13 @@ def appeal_keyboard(language: str = "uz"):
         return ReplyKeyboardMarkup([
             ["🏢 Фирмам"],
             ["💊 Аптекам (заведующим)"],
+            ["📋 Неотвеченные обращения"],
             ["⬅️ Назад"],
         ], resize_keyboard=True)
     return ReplyKeyboardMarkup([
         ["🏢 Firmalarga"],
         ["💊 Dorixonalarga (mudirlarga)"],
+        ["📋 Javob berilmagan murojaatlar"],
         ["⬅️ Orqaga"],
     ], resize_keyboard=True)
 
@@ -1633,11 +1635,36 @@ async def appeal_menu_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     back_txt = "⬅️ Назад" if language == "ru" else "⬅️ Orqaga"
     firm_txt = "🏢 Фирмам" if language == "ru" else "🏢 Firmalarga"
     dorixona_txt = "💊 Аптекам (заведующим)" if language == "ru" else "💊 Dorixonalarga (mudirlarga)"
+    pending_txt = "📋 Неотвеченные обращения" if language == "ru" else "📋 Javob berilmagan murojaatlar"
 
     if txt == back_txt:
         from bot import main_keyboard, get_lang, MENU
         await update.message.reply_text("📋 Asosiy menyu", reply_markup=main_keyboard(get_lang(ctx)))
         return MENU
+
+    if txt == pending_txt:
+        pending_list = await run_read(get_pending_murojaatlar)
+        if not pending_list:
+            await update.message.reply_text(
+                "✅ Hozircha javob berilmagan murojaatlar yo'q." if language == "uz"
+                else "✅ Нет необращённых обращений.",
+                reply_markup=appeal_keyboard(language),
+            )
+            return APPEAL_MENU
+
+        lines = ["📋 *Javob berilmagan murojaatlar:*\n"] if language == "uz" else ["📋 *Необращённые обращения:*\n"]
+        for r in pending_list[:30]:
+            sana = r.get("Sana", "")
+            tid = r.get("TelegramID", "")
+            xabar = str(r.get("Xabar", ""))[:60]
+            lines.append(f"🕐 {sana} | 🆔 {tid}\n📝 {xabar}\n")
+        if len(pending_list) > 30:
+            lines.append(f"... va yana {len(pending_list) - 30} ta")
+
+        await update.message.reply_text(
+            "\n".join(lines), parse_mode="Markdown", reply_markup=appeal_keyboard(language)
+        )
+        return APPEAL_MENU
 
     if txt == firm_txt:
         ctx.user_data["appeal_kind"] = "firm"
@@ -1804,6 +1831,72 @@ async def appeal_dorixona_names_handler(update: Update, ctx: ContextTypes.DEFAUL
     return APPEAL_DORIXONA_MSG
 
 
+MUROJAATLAR_WS_NAME = "Murojaatlar"
+
+
+def _get_murojaatlar_ws():
+    """PHARMACY_SHEET_ID ichidagi "Murojaatlar" jurnalini qaytaradi (bo'lmasa yaratadi)."""
+    client = _get_client()
+    sh = client.open_by_key(PHARMACY_SHEET_ID)
+    try:
+        return sh.worksheet(MUROJAATLAR_WS_NAME)
+    except Exception:
+        ws = sh.add_worksheet(title=MUROJAATLAR_WS_NAME, rows=500, cols=7)
+        ws.update("A1:G1", [["Sana", "TelegramID", "Xabar", "Holati", "Javob", "JavobSana", "JavobBerdi"]])
+        return ws
+
+
+def log_murojaat(telegram_id, xabar: str) -> int:
+    """
+    Yangi yuborilgan murojaatni jurnalga "Kutilmoqda" holatida yozadi.
+    Qaytaradi: yozilgan qator raqami (kelajakda shu qatorni yangilash
+    uchun), yoki xato bo'lsa -1.
+    """
+    try:
+        from datetime import datetime
+        from attendance import UZ_TZ
+        ws = _get_murojaatlar_ws()
+        now_str = datetime.now(UZ_TZ).strftime("%d.%m.%Y %H:%M")
+        ws.append_row(
+            [now_str, str(telegram_id), xabar[:300], "Kutilmoqda", "", "", ""],
+            value_input_option="USER_ENTERED"
+        )
+        return len(ws.get_all_values())
+    except Exception as e:
+        logger.error(f"[MUROJAAT] log_murojaat xato: {e}")
+        return -1
+
+
+def mark_murojaat_answered(row_index: int, javob: str, javob_berdi: str, holati_label: str) -> bool:
+    """Berilgan jurnal qatorini javob bilan yangilaydi (Kutilmoqda -> javob berilgan)."""
+    try:
+        from datetime import datetime
+        from attendance import UZ_TZ
+        if not row_index or row_index < 2:
+            return False
+        ws = _get_murojaatlar_ws()
+        now_str = datetime.now(UZ_TZ).strftime("%d.%m.%Y %H:%M")
+        ws.update_cell(row_index, 4, holati_label)
+        ws.update_cell(row_index, 5, javob)
+        ws.update_cell(row_index, 6, now_str)
+        ws.update_cell(row_index, 7, javob_berdi)
+        return True
+    except Exception as e:
+        logger.error(f"[MUROJAAT] mark_murojaat_answered xato: {e}")
+        return False
+
+
+def get_pending_murojaatlar() -> list:
+    """Hali javob berilmagan ("Kutilmoqda" holatidagi) murojaatlar ro'yxatini qaytaradi."""
+    try:
+        ws = _get_murojaatlar_ws()
+        records = ws.get_all_records()
+        return [r for r in records if str(r.get("Holati", "")).strip() == "Kutilmoqda"]
+    except Exception as e:
+        logger.error(f"[MUROJAAT] get_pending_murojaatlar xato: {e}")
+        return []
+
+
 async def _broadcast_send(update, ctx, ids: list, text: str) -> tuple:
     """
     Berilgan TelegramID ro'yxatiga xabar yuboradi. Xabar kimdan
@@ -1830,6 +1923,7 @@ async def _broadcast_send(update, ctx, ids: list, text: str) -> tuple:
     ]])
 
     sent, failed = 0, 0
+    log_rows = ctx.bot_data.setdefault("appeal_log_rows", {})
     for tid in ids:
         try:
             await ctx.bot.send_message(
@@ -1838,6 +1932,9 @@ async def _broadcast_send(update, ctx, ids: list, text: str) -> tuple:
                 reply_markup=kb,
             )
             sent += 1
+            row_idx = await run_write(log_murojaat, tid, text)
+            if row_idx and row_idx > 0:
+                log_rows[int(tid)] = row_idx
         except Exception as e:
             failed += 1
             logger.warning(f"[APPEAL] Yuborilmadi ({tid}): {e}")
@@ -1871,11 +1968,13 @@ async def appeal_response_button(update: Update, ctx: ContextTypes.DEFAULT_TYPE)
         responder_name = f"@{user.username}" if user.username else "Noma'lum"
 
     pending = ctx.bot_data.setdefault("appeal_pending", {})
+    row_idx = ctx.bot_data.get("appeal_log_rows", {}).get(user.id)
     pending[user.id] = {
         "admin_chat_id": int(admin_chat_id),
         "action": action,
         "label": label,
         "responder_name": responder_name,
+        "row_index": row_idx,
     }
 
     try:
@@ -1925,6 +2024,9 @@ async def appeal_comment_catcher(update: Update, ctx: ContextTypes.DEFAULT_TYPE)
         )
     except Exception as e:
         logger.warning(f"[APPEAL] Admin ga yuborishda xato: {e}")
+
+    if info.get("row_index"):
+        await run_write(mark_murojaat_answered, info["row_index"], comment, info["responder_name"], info["label"])
 
     # MUHIM: shu yerda to'xtatamiz — aks holda xabar yana asosiy
     # ConversationHandler tomonidan ham qayta ishlanib, ikki marta
