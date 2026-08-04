@@ -10,6 +10,13 @@ import json
 import re
 from google.oauth2.service_account import Credentials
 
+# Yozish amallarini NAVBAT bilan (bir vaqtning o'zida bittadan) bajarish uchun —
+# attendance.py dagi umumiy WRITE_LOCK dan foydalanamiz. Aks holda ikki kishi
+# bir vaqtda ro'yxatdan o'tsa, ikkisi ham bir xil "bo'sh joy"ni ko'rib, bir xil
+# qatorga/o'ringa yozib, DUBLIKAT yoki bir-birini bosib yuborilgan yozuv hosil
+# bo'lishi mumkin (Google Sheets o'zida qulflash mexanizmi yo'q).
+from attendance import run_read, run_write
+
 # ─── Sozlamalar ───────────────────────────────────────────────────────────────
 
 SCOPES = [
@@ -88,27 +95,37 @@ def get_filiallar():
         return {}
 
 
+# save_registration() har doim [filial, ismi, tel, uid, lavozim] tartibida
+# yozadi (A=Filial, B=Ismi, C=Telefon, D=TelegramID, E=Lavozim). Tekshirishda
+# ham AYNAN shu ustun tartibiga (pozitsiya bo'yicha) tayanamiz — chunki bu
+# varaq "guruhlangan" formatda (har filial uchun bosh qator + pastida
+# xodimlar), shu sababli ws.get_all_records() sarlavha nomlariga bog'liq
+# bo'lib, agar sarlavhalarda bo'sh/takroriy katak bo'lsa (masalan
+# formatlash uchun birlashtirilgan kataklar) xatolik berib, tekshirish
+# HAR DOIM "ro'yxatdan o'tmagan" deb noto'g'ri javob qaytarishi va shu orqali
+# DUBLIKAT yozuvlar paydo bo'lishiga sabab bo'lishi mumkin edi.
+COL_TELEFON = 2   # C ustun (0-based index)
+COL_TELEGRAM_ID = 3  # D ustun (0-based index)
+
+
 def is_already_registered(phone: str, user_id: int) -> bool:
-    """Allaqachon ro'yxatdan o'tganmi tekshiradi"""
-    try:
-        client = get_client()
-        sh = client.open_by_key(PHARMACY_SHEET_ID)
-        ws = sh.sheet1
-        records = ws.get_all_records()
-        norm = normalize_phone(phone)
-        for row in records:
-            # Telefon tekshirish
-            tel = row.get("Telefon", "")
-            if isinstance(tel, float): tel = str(int(tel))
-            if normalize_phone(str(tel)) == norm:
-                return True
-            # TelegramID tekshirish
-            if str(row.get("TelegramID", "")).strip() == str(user_id):
-                return True
-        return False
-    except Exception as e:
-        print(f"[REG] Tekshirish xato: {e}")
-        return False
+    """Allaqachon ro'yxatdan o'tganmi tekshiradi (pozitsiya bo'yicha, sarlavha nomiga bog'liq emas)."""
+    client = get_client()
+    sh = client.open_by_key(PHARMACY_SHEET_ID)
+    ws = sh.sheet1
+    all_values = ws.get_all_values()
+    norm = normalize_phone(phone)
+    uid_str = str(user_id)
+    for i, row in enumerate(all_values):
+        if i == 0:
+            continue  # sarlavha qatori
+        tel = row[COL_TELEFON] if len(row) > COL_TELEFON else ""
+        tid = row[COL_TELEGRAM_ID] if len(row) > COL_TELEGRAM_ID else ""
+        if tel and normalize_phone(str(tel)) == norm:
+            return True
+        if tid and str(tid).strip() == uid_str:
+            return True
+    return False
 
 
 def save_registration(user_id: int, ismi: str, phone: str, filial: str, lavozim: str) -> bool:
@@ -179,6 +196,26 @@ def save_registration(user_id: int, ismi: str, phone: str, filial: str, lavozim:
     except Exception as e:
         print(f"[REG] Saqlash xato: {e}")
         return False
+
+
+def check_and_save_registration(user_id: int, ismi: str, phone: str, filial: str, lavozim: str):
+    """
+    "Ro'yxatdan o'tganmi?" tekshiruvi va saqlashni BIR AMAL sifatida bajaradi.
+
+    MUHIM: bu funksiya faqat run_write() orqali, WRITE_LOCK ushlab turilgan
+    holda chaqirilishi kerak. Aks holda ikki kishi (yoki bir kishining ikki
+    marta tez-tez bosgan tugmasi) bir vaqtda tekshirib, ikkisi ham
+    "ro'yxatda yo'q" deb topib, ikkisi ham saqlashga o'tishi va DUBLIKAT
+    qator yozilishi mumkin. Tekshirish va saqlash orasida boshqa hech qanday
+    yozuv amali kirmasligi uchun ikkisi shu bir funksiya ichida, bitta
+    run_write() chaqiruvi ostida ketma-ket bajariladi.
+
+    Qaytaradi: (already_registered: bool, saved: bool)
+    """
+    if is_already_registered(phone, user_id):
+        return True, False
+    ok = save_registration(user_id, ismi, phone, filial, lavozim)
+    return False, ok
 
 
 # ─── Klaviaturalar ─────────────────────────────────────────────────────────────
@@ -266,8 +303,17 @@ async def reg_phone_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     phone = normalize_phone(contact.phone_number)
     user_id = update.effective_user.id
 
-    # Allaqachon ro'yxatdan o'tganmi?
-    if is_already_registered(phone, user_id):
+    # Allaqachon ro'yxatdan o'tganmi? (bu — tezkor, oldindan ogohlantirish uchun
+    # tekshiruv; yakuniy va asosiy tekshiruv reg_lavozim_handler'da saqlash
+    # bilan BIR VAQTDA, qulflangan holda amalga oshiriladi — shu sababli bu
+    # yerda xatolik yuz bersa ham foydalanuvchini bloklamaymiz, davom ettiramiz)
+    try:
+        already = await run_read(is_already_registered, phone, user_id)
+    except Exception as e:
+        print(f"[REG] Tekshirish xato (reg_phone_handler): {e}")
+        already = False
+
+    if already:
         await update.message.reply_text(
             f"⚠️ *{phone}* raqami allaqachon tizimda mavjud!\n"
             "Administratorga murojaat qiling.",
@@ -373,22 +419,38 @@ async def reg_lavozim_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     lavozim = lavozim_map[txt]
     ctx.user_data["reg_lavozim"] = lavozim
 
-    # Saqlash
-    ok = save_registration(
-        user_id=update.effective_user.id,
-        ismi=ctx.user_data.get("reg_ismi", ""),
-        phone=ctx.user_data.get("reg_phone", ""),
-        filial=ctx.user_data.get("reg_filial", ""),
-        lavozim=lavozim,
-    )
+    # DIQQAT: bu yerda ataylab reg_done bayrog'iga TAYANMAYMIZ (u faqat
+    # xotirada, bot qayta ishga tushsa yo'qolib qoladi). O'rniga tekshirish
+    # va saqlashni BIR run_write() chaqiruvi ostida, qulflangan holda birga
+    # bajaramiz — shu orqali ikkita registratsiya bir vaqtda (yoki tugma
+    # ikki marta tez bosilganda) DUBLIKAT qator yozib qo'ymasligi kafolatlanadi.
+    ismi = ctx.user_data.get("reg_ismi", "")
+    phone = ctx.user_data.get("reg_phone", "")
+    filial = ctx.user_data.get("reg_filial", "")
 
-    if ok:
+    try:
+        already, ok = await run_write(
+            check_and_save_registration, update.effective_user.id, ismi, phone, filial, lavozim
+        )
+    except Exception as e:
+        print(f"[REG] check_and_save_registration xato: {e}")
+        already, ok = False, False
+
+    if already:
+        ctx.user_data["reg_done"] = True
+        await update.message.reply_text(
+            f"⚠️ *{phone}* raqami allaqachon tizimda mavjud!\n"
+            "Administratorga murojaat qiling.",
+            parse_mode="Markdown",
+            reply_markup=ReplyKeyboardMarkup([["⬅️ Orqaga"]], resize_keyboard=True),
+        )
+    elif ok:
         ctx.user_data["reg_done"] = True
         await update.message.reply_text(
             f"🎉 *Ro'yxatdan o'tdingiz!*\n\n"
-            f"👤 {ctx.user_data.get('reg_ismi', '')}\n"
-            f"📱 {ctx.user_data.get('reg_phone', '')}\n"
-            f"🏪 {ctx.user_data.get('reg_filial', '')}\n"
+            f"👤 {ismi}\n"
+            f"📱 {phone}\n"
+            f"🏪 {filial}\n"
             f"👔 {lavozim}",
             parse_mode="Markdown",
             reply_markup=ReplyKeyboardMarkup([["⬅️ Asosiy menyu"]], resize_keyboard=True),
