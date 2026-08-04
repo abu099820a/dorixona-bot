@@ -303,6 +303,17 @@ def _sync_one_sheet(ws, farmatsevtlar: list) -> dict:
     # so'rov bilan yozib qo'yamiz — bu HAR DOIM bajariladi (yangi xodim
     # bo'lsin-bo'lmasin), chunki ta'mirlash har safar kerak bo'lishi mumkin
     if new_rows:
+        # XAVFSIZLIK TO'SIG'I: yangi qatorlar soni asl holatidan (+ qo'shilgan
+        # xodimlar sonidan) kam bo'lib qolsa — ma'lumot yo'qolib ketmasligi
+        # uchun yozishni to'xtatamiz.
+        expected_min = len(data_rows) + len(added)
+        if len(new_rows) < expected_min:
+            logger.error(
+                f"[MAOSH] XAVFSIZLIK: qatorlar soni ({len(new_rows)}) kutilganidan "
+                f"({expected_min}) kam — yozish bekor qilindi."
+            )
+            return {"added": [], "skipped": len(farmatsevtlar), "error": "xavfsizlik to'sig'i ishga tushdi"}
+
         needed_rows = 1 + len(new_rows)
         if ws.row_count < needed_rows:
             ws.resize(rows=needed_rows)
@@ -381,7 +392,15 @@ def sync_oylik_sheet() -> dict:
         client = _get_client()
 
         ph_ws = client.open_by_key(PHARMACY_SHEET_ID).worksheet("Farmatsevtlar")
+        all_ph_values = ph_ws.get_all_values()
+        ph_headers = all_ph_values[0] if all_ph_values else []
+        print(f"[SYNC] Farmatsevtlar sarlavhalari: {ph_headers}")
+
         records = ph_ws.get_all_records()
+        print(f"[SYNC] Jami qatorlar (get_all_records): {len(records)}")
+        if records:
+            print(f"[SYNC] Birinchi qator namunasi: {records[0]}")
+
         farmatsevtlar = []
         for row in records:
             ismi = str(row.get("Ismi", "")).strip()
@@ -389,6 +408,9 @@ def sync_oylik_sheet() -> dict:
             telefon = str(row.get("Telefon", "")).strip()
             if ismi and filial and telefon:
                 farmatsevtlar.append({"ismi": ismi, "filial": filial, "telefon": telefon})
+
+        print(f"[SYNC] Filtrlangandan keyin: {len(farmatsevtlar)} ta xodim. "
+              f"Birinchi 3 tasi: {farmatsevtlar[:3]}")
 
         sh = client.open_by_key(SALARY_SHEET_ID)
         mavjud_varaqlar = [w.title for w in sh.worksheets()]
@@ -1787,12 +1809,25 @@ async def _broadcast_send(update, ctx, ids: list, text: str) -> tuple:
     Berilgan TelegramID ro'yxatiga xabar yuboradi. Xabar kimdan
     kelayotgani aniq ko'rinishi uchun, yuboruvchining Telegram profil
     ismi (ism + familiya, bo'lmasa username) xabar boshiga qo'shiladi.
+
+    Har bir xabarga "✅ Bajarildi" / "❌ Bekor qilish" inline tugmalari
+    biriktiriladi — qabul qiluvchi bosganda izoh yozishi so'raladi, va
+    bu izoh yuboruvchi admin(ga qaytariladi (ikki tomonlama aloqa).
+
     Qaytaradi: (sent, failed)
     """
+    from telegram import InlineKeyboardMarkup, InlineKeyboardButton
+
     user = update.effective_user
     sender_name = " ".join(filter(None, [user.first_name, user.last_name])).strip()
     if not sender_name:
         sender_name = f"@{user.username}" if user.username else "Administrator"
+    admin_chat_id = update.effective_chat.id
+
+    kb = InlineKeyboardMarkup([[
+        InlineKeyboardButton("✅ Bajarildi", callback_data=f"appealresp:done:{admin_chat_id}"),
+        InlineKeyboardButton("❌ Bekor qilish", callback_data=f"appealresp:cancel:{admin_chat_id}"),
+    ]])
 
     sent, failed = 0, 0
     for tid in ids:
@@ -1800,12 +1835,103 @@ async def _broadcast_send(update, ctx, ids: list, text: str) -> tuple:
             await ctx.bot.send_message(
                 chat_id=int(tid),
                 text=f"📩 Murojaat\n👤 Kimdan: {sender_name}\n\n{text}",
+                reply_markup=kb,
             )
             sent += 1
         except Exception as e:
             failed += 1
             logger.warning(f"[APPEAL] Yuborilmadi ({tid}): {e}")
     return sent, failed
+
+
+# ─── Murojaatga ikki tomonlama javob (Bajarildi/Bekor qilish + izoh) ──────────
+#
+# MUHIM: bu ikki handler ConversationHandler'ning ICHIGA emas, balki
+# bot.py'da ALOHIDA, YUQORI ustuvorlikdagi guruhga qo'shiladi. Sabab —
+# avvalgi tajribamiz shuni ko'rsatdiki, asosiy suhbat oqimiga aralashtirib
+# qo'yilgan handlerlar butun botning ishlashini buzishi mumkin. Bu yerda
+# holat ctx.user_data (suhbat holati) orqali EMAS, balki ctx.bot_data
+# (butun bot uchun umumiy, vaqtinchalik xotira) orqali kuzatiladi — bu
+# hech qanday foydalanuvchi suhbat holatiga ta'sir qilmaydi.
+
+async def appeal_response_button(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Qabul qiluvchi 'Bajarildi'/'Bekor qilish' tugmasini bosganda — izoh so'raydi."""
+    query = update.callback_query
+    await query.answer()
+
+    try:
+        _, action, admin_chat_id = query.data.split(":")
+    except Exception:
+        return
+
+    label = "✅ Bajarildi" if action == "done" else "❌ Bekor qilish"
+    user = update.effective_user
+    responder_name = " ".join(filter(None, [user.first_name, user.last_name])).strip()
+    if not responder_name:
+        responder_name = f"@{user.username}" if user.username else "Noma'lum"
+
+    pending = ctx.bot_data.setdefault("appeal_pending", {})
+    pending[user.id] = {
+        "admin_chat_id": int(admin_chat_id),
+        "action": action,
+        "label": label,
+        "responder_name": responder_name,
+    }
+
+    try:
+        await query.edit_message_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+
+    await ctx.bot.send_message(
+        chat_id=user.id,
+        text=f"{label}\n\n✍️ Izohingizni yozing (yoki \"-\" deb o'tkazib yuboring):",
+    )
+
+
+async def appeal_comment_catcher(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """
+    Foydalanuvchi 'Bajarildi'/'Bekor qilish' bosgandan keyingi birinchi
+    xabarini ushlab, izoh sifatida admin(lar)ga yuboradi. Agar bu
+    foydalanuvchi uchun kutilayotgan murojaat javobi bo'lmasa — hech
+    narsa qilmaydi, va xabar ODATDAGIDEK botning asosiy oqimiga o'tadi.
+    """
+    if not update.message or not update.message.text:
+        return
+
+    pending = ctx.bot_data.get("appeal_pending", {})
+    user_id = update.effective_user.id
+    info = pending.get(user_id)
+    if not info:
+        return  # kutilayotgan murojaat javobi yo'q — oddiy xabar, aralashmaymiz
+
+    del pending[user_id]
+
+    comment = update.message.text.strip()
+    if comment == "-":
+        comment = "(izohsiz)"
+
+    await update.message.reply_text("✅ Javobingiz yuborildi. Rahmat!")
+
+    try:
+        await ctx.bot.send_message(
+            chat_id=info["admin_chat_id"],
+            text=(
+                f"📩 *Murojaatga javob*\n\n"
+                f"👤 Kimdan: {info['responder_name']}\n"
+                f"{info['label']}\n"
+                f"💬 Izoh: {comment}"
+            ),
+            parse_mode="Markdown",
+        )
+    except Exception as e:
+        logger.warning(f"[APPEAL] Admin ga yuborishda xato: {e}")
+
+    # MUHIM: shu yerda to'xtatamiz — aks holda xabar yana asosiy
+    # ConversationHandler tomonidan ham qayta ishlanib, ikki marta
+    # javob berish xatosiga olib kelishi mumkin edi (avvalgi tajriba).
+    from telegram.ext import ApplicationHandlerStop
+    raise ApplicationHandlerStop
 
 
 def _resolve_target_ids(name_map: dict, selected_names) -> list:
