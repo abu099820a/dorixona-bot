@@ -1652,12 +1652,22 @@ async def appeal_menu_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             )
             return APPEAL_MENU
 
+        # TelegramID o'rniga Filial + Ismi ko'rsatish uchun — barcha kerakli
+        # ID lar bo'yicha BITTA so'rov bilan (Farmatsevtlar jadvalidan) topamiz.
+        tids = [str(r.get("TelegramID", "")).strip() for r in pending_list[:30]]
+        info_map = await run_read(get_farmatsevt_info_by_ids, tids)
+
         lines = ["📋 *Javob berilmagan murojaatlar:*\n"] if language == "uz" else ["📋 *Необращённые обращения:*\n"]
         for r in pending_list[:30]:
             sana = r.get("Sana", "")
-            tid = r.get("TelegramID", "")
+            tid = str(r.get("TelegramID", "")).strip()
             xabar = str(r.get("Xabar", ""))[:60]
-            lines.append(f"🕐 {sana} | 🆔 {tid}\n📝 {xabar}\n")
+            info = info_map.get(tid)
+            if info and (info.get("filial") or info.get("ismi")):
+                who = f"🏪 {info.get('filial','')} — 👤 {info.get('ismi','')}".strip(" —")
+            else:
+                who = f"🆔 {tid}"
+            lines.append(f"🕐 {sana} | {who}\n📝 {xabar}\n")
         if len(pending_list) > 30:
             lines.append(f"... va yana {len(pending_list) - 30} ta")
 
@@ -1895,6 +1905,37 @@ def get_pending_murojaatlar() -> list:
     except Exception as e:
         logger.error(f"[MUROJAAT] get_pending_murojaatlar xato: {e}")
         return []
+
+
+def get_farmatsevt_info_by_ids(telegram_ids: list) -> dict:
+    """
+    Berilgan TelegramID lar ro'yxati uchun Farmatsevtlar jadvalidan
+    Ismi va Filial ma'lumotini BITTA so'rov bilan (hammasi uchun birga)
+    topib qaytaradi: {"123456789": {"ismi": "...", "filial": "..."}}.
+
+    Har bir murojaat uchun alohida-alohida Sheets so'rovi yubormaslik
+    uchun ishlatiladi (masalan 30 ta murojaat bo'lsa ham — bitta so'rov).
+    Topilmagan TelegramID lar natijada umuman bo'lmaydi.
+    """
+    try:
+        wanted = {str(t).strip() for t in telegram_ids if str(t).strip()}
+        if not wanted:
+            return {}
+        client = _get_client()
+        ws = client.open_by_key(PHARMACY_SHEET_ID).worksheet("Farmatsevtlar")
+        records = ws.get_all_records()
+        result = {}
+        for row in records:
+            tid = str(row.get("TelegramID", "")).strip()
+            if tid and tid in wanted:
+                result[tid] = {
+                    "ismi": str(row.get("Ismi", "")).strip(),
+                    "filial": str(row.get("Filial", "")).strip(),
+                }
+        return result
+    except Exception as e:
+        logger.error(f"[MUROJAAT] get_farmatsevt_info_by_ids xato: {e}")
+        return {}
 
 
 async def _broadcast_send(update, ctx, ids: list, text: str) -> tuple:
