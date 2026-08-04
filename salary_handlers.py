@@ -1917,12 +1917,11 @@ async def appeal_comment_catcher(update: Update, ctx: ContextTypes.DEFAULT_TYPE)
         await ctx.bot.send_message(
             chat_id=info["admin_chat_id"],
             text=(
-                f"📩 *Murojaatga javob*\n\n"
+                f"📩 Murojaatga javob\n\n"
                 f"👤 Kimdan: {info['responder_name']}\n"
                 f"{info['label']}\n"
                 f"💬 Izoh: {comment}"
             ),
-            parse_mode="Markdown",
         )
     except Exception as e:
         logger.warning(f"[APPEAL] Admin ga yuborishda xato: {e}")
