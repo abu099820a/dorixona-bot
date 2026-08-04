@@ -49,7 +49,7 @@ VILOYATLAR = {
     "Toshkent shahri": [
         "Алмазарский район","Мирабадский район","Мирзо Улугбекский район",
         "Сергелийский район","Учтепинский район","Чиланзарский район",
-        "Шайхантахурский район","шайхантахурский район","Юнусабадский район",
+        "Шайхантахурский район","Юнусабадский район",
         "Яккасарайский район","Янгихаётский район","Яшнободский район"
     ],
     "Toshkent viloyati": ["Зангиота","Кибрай","Куйичирчик","Паркент","Тошкент тумани"],
@@ -700,24 +700,92 @@ async def select_district(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     return SELECT_RESULT
 
 
+# Necha daqiqada bir marta avtomatik sinxronlansin (Railway'da
+# AUTO_SYNC_MINUTES environment o'zgaruvchisi orqali o'zgartirish mumkin,
+# kod qayta yozilmasin uchun).
+AUTO_SYNC_MINUTES = int(os.getenv("AUTO_SYNC_MINUTES", "5"))
+
+
 async def auto_sync_job():
-    """Har kuni soat 00:00 da farmatsevtlarni sinxronlashtiradi."""
+    """
+    Har AUTO_SYNC_MINUTES daqiqada (standart: 5) ishga tushadi.
+
+    "Farmatsevtlar" varag'idagi o'zgarishlarni (yangi xodim, filial/lavozim
+    almashishi, ishdan bo'shash) ikkala joyga ham ko'chiradi:
+    1) joriy oy "Davomat" varag'i — sync_pharmacists() (attendance.py)
+    2) "Oylik" va "Aksiya" varaqlari — sync_oylik_sheet() (salary_handlers.py)
+
+    MUHIM: avval bu funksiya yozilgan edi, lekin hech qayerda chaqirilmas
+    edi (APScheduler import qilingan, lekin ishga tushirilmagan) — shuning
+    uchun avtomatik sinxronizatsiya amalda HECH QACHON ishlamas edi.
+    Endi main()dagi _post_init() orqali ishga tushiriladi.
+    """
     from datetime import datetime, timezone, timedelta
     UZ_TZ = timezone(timedelta(hours=5))
     now = datetime.now(UZ_TZ)
-    print(f"[AUTO SYNC] Boshlandi: {now.strftime('%d.%m.%Y %H:%M')}")
+    print(f"[AUTO SYNC] Boshlandi: {now.strftime('%d.%m.%Y %H:%M:%S')}")
+
     try:
         from attendance import sync_pharmacists, run_write
         results = await run_write(sync_pharmacists)
-        added = len(results.get('added', []))
-        updated = len(results.get('updated', []))
-        removed = len(results.get('removed', []))
-        print(f"[AUTO SYNC] +{added} yangi, ~{updated} o'zgardi, -{removed} o'chirildi")
+        if results.get("error"):
+            print(f"[AUTO SYNC] Davomat xato: {results['error']}")
+        else:
+            added = len(results.get('added', []))
+            updated = len(results.get('updated', []))
+            removed = len(results.get('removed', []))
+            print(f"[AUTO SYNC] Davomat: +{added} yangi, ~{updated} o'zgardi, -{removed} o'chirildi")
     except Exception as e:
-        print(f"[AUTO SYNC] Xato: {e}")
+        print(f"[AUTO SYNC] Davomat xato: {e}")
+
+    try:
+        from salary_handlers import sync_oylik_sheet
+        res2 = await run_write(sync_oylik_sheet)
+        if res2.get("error"):
+            print(f"[AUTO SYNC] Oylik xato: {res2['error']}")
+        else:
+            oylik_added = len(res2.get('oylik', {}).get('added', []))
+            aksiya_added = len(res2.get('aksiya', {}).get('added', []))
+            print(f"[AUTO SYNC] Oylik: +{oylik_added} ta, Aksiya: +{aksiya_added} ta")
+            if res2.get("aksiya_error"):
+                print(f"[AUTO SYNC] Aksiya xato: {res2['aksiya_error']}")
+    except Exception as e:
+        print(f"[AUTO SYNC] Oylik xato: {e}")
+
+    print(f"[AUTO SYNC] Tugadi: {datetime.now(UZ_TZ).strftime('%d.%m.%Y %H:%M:%S')}")
+
+
+async def _post_init(app: Application):
+    """
+    Application.initialize() dan keyin, TO'G'RI ishga tushgan asyncio
+    event loop ICHIDA chaqiriladi (buni main() ichida to'g'ridan-to'g'ri
+    qilib bo'lmaydi — u yerda run_polling() hali loop'ni boshlamagan
+    bo'ladi, va AsyncIOScheduler noto'g'ri/mavjud bo'lmagan loop'ga
+    ulanib qolishi mumkin edi).
+    """
+    scheduler = AsyncIOScheduler()
+    scheduler.add_job(
+        auto_sync_job,
+        "interval",
+        minutes=AUTO_SYNC_MINUTES,
+        id="auto_sync_job",
+        misfire_grace_time=60,
+        coalesce=True,
+        max_instances=1,
+    )
+    scheduler.start()
+    app.bot_data["scheduler"] = scheduler
+    print(f"✅ Avto-sinxronizatsiya ishga tushdi (har {AUTO_SYNC_MINUTES} daqiqada)")
+
 
 def main():
-    app = Application.builder().token(TOKEN).concurrent_updates(256).build()
+    app = (
+        Application.builder()
+        .token(TOKEN)
+        .concurrent_updates(256)
+        .post_init(_post_init)
+        .build()
+    )
     conv = ConversationHandler(
         # MUHIM: MessageHandler(filters.ALL, start) ham entry_points ga
         # qo'shilgan. Sabab: ConversationHandler holati xotirada (RAM)
