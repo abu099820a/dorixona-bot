@@ -6,6 +6,7 @@ from salary_handlers import (
     cmd_send_salaries, get_sal_states, SAL_WAIT_ZIP,
     reports_menu_enter, reports_menu_handler, REPORTS_MENU,
     cmd_sync_oylik, appeal_menu_enter,
+    appeal_response_button, appeal_comment_catcher,
 )
 from attendance_handlers import (
     att_enter, get_att_states,
@@ -768,6 +769,29 @@ def main():
         allow_reentry=True,
     )
     app.add_handler(conv)
+
+    # ── Murojaatga "Bajarildi/Bekor qilish" javobi (XAVFSIZ, alohida) ──
+    # Bu ikkalasi ham ConversationHandler'dan MUSTAQIL ishlaydi — hech
+    # qanday foydalanuvchi suhbat holatiga (ctx.user_data/conv state)
+    # tegmaydi, faqat ctx.bot_data (vaqtinchalik, umumiy xotira) orqali
+    # ishlaydi. Shu sababli asosiy botning ishlashiga hech qanday xavf
+    # yo'q (avvalgi holatlardan farqli o'laroq).
+    #
+    # 1) Inline tugma bosilishi — pattern orqali aniq mos keladi, boshqa
+    #    hech narsaga aralashmaydi, shuning uchun conv bilan bir xil
+    #    guruhda (0), undan KEYIN qo'shiladi.
+    app.add_handler(CallbackQueryHandler(appeal_response_button, pattern="^appealresp:"))
+
+    # 2) Izohni "ushlab olish" — bu esa CONV DAN OLDIN (group=-1) ishga
+    #    tushishi kerak, chunki oddiy matn xabari. Agar bu foydalanuvchi
+    #    uchun "kutilayotgan murojaat javobi" bo'lmasa, hech narsa
+    #    qilmasdan xabarni ConversationHandler'ga o'tkazib yuboradi
+    #    (ApplicationHandlerStop chaqirilmaydi). Faqat haqiqatan ham
+    #    kutilayotgan bo'lsa — javobni ushlab, ConversationHandler'ga
+    #    yetib bormasligi uchun ApplicationHandlerStop chaqiradi (bu —
+    #    "ikki marta javob" xatosining oldini oladi, avvalgi tajribamiz
+    #    asosida).
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, appeal_comment_catcher), group=-1)
 
     # ── Redeploy'dan keyingi sessiya tiklash (XAVFSIZ usul) ──
     # MUHIM: bu handler ConversationHandler'ning ICHIGA emas, balki
