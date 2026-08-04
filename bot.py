@@ -729,8 +729,19 @@ def main():
         # bilan tanilmagani uchun bot HECH NARSA javob bermay qolar edi.
         # Endi har qanday xabar — hatto suhbat holati topilmasa ham —
         # avtomatik "/start" bosilgandek qayta tiklanadi.
+        # MUHIM: MessageHandler(filters.ALL & ~filters.COMMAND, start) shu
+        # yerda, entry_points ICHIDA turishi SHART. Buning sababi: faqat
+        # ConversationHandler'ning O'Z mexanizmi orqali chaqirilgan entry
+        # point handler natijasi (qaytargan holat) to'g'ri "eslab qolinadi"
+        # (conv._conversations ichiga yoziladi). Avval bu funksiyani
+        # ALOHIDA guruh (group=1) orqali to'g'ridan-to'g'ri chaqirib
+        # ko'rgan edik — bu holat EKRANDA ko'rinsa ham, ConversationHandler
+        # buni "bilmay qolar edi", va keyingi bosilgan tugma (masalan til
+        # tanlash) hech kim tomonidan qabul qilinmay, botning "qotib
+        # qolishi"ga sabab bo'lgan edi.
         entry_points=[
             CommandHandler("start", start),
+            MessageHandler(filters.ALL & ~filters.COMMAND, start),
         ],
         states={
             LANG: [CallbackQueryHandler(set_lang, pattern="^lang_")],
@@ -793,40 +804,6 @@ def main():
     #    asosida).
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, appeal_comment_catcher), group=-1)
 
-    # ── Redeploy'dan keyingi sessiya tiklash (XAVFSIZ usul) ──
-    # MUHIM: bu handler ConversationHandler'ning ICHIGA emas, balki
-    # ALOHIDA, PASTROQ ustuvorlikdagi guruhga (group=1) qo'shiladi.
-    # PTB avval group=0 dagi ConversationHandler'ni tekshiradi — agar u
-    # xabarni "o'zimga tegishli" deb hisoblasa (faol suhbat davom
-    # etayotgan bo'lsa, entry_point yoki fallback mos kelsa), shu yerda
-    # to'xtaydi va bu pastdagi handler UMUMAN ishga tushmaydi. Faqat
-    # ConversationHandler HECH NARSANI qo'lga OLA OLMAGANDA (ya'ni bot
-    # qayta ishga tushib, foydalanuvchi uchun suhbat holati butunlay
-    # yo'qolganda) — shu handler ishga tushib, "/start" bosilgandek
-    # sessiyani qayta tiklaydi.
-    #
-    # Avvalgi urinishda bu mantiq ConversationHandler'ning o'z
-    # entry_points/fallbacks ichiga joylashtirilgan edi — bu esa
-    # suhbat holatini kuzatishga aralashib, foydalanuvchilarni doim
-    # tilni tanlashga qaytarib yuborish xatosiga sabab bo'lgan edi.
-    # Alohida guruh sifatida bu xavf yo'q, chunki ConversationHandler
-    # o'z holatini hech qachon bu handler orqali "bilib olmaydi".
-    async def _recover_session(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-        if not update.message:
-            return
-        key = (update.effective_chat.id, update.effective_user.id)
-        try:
-            if key in conv._conversations:
-                return
-        except Exception as e:
-            # Ichki atribut kutilmagan formatda bo'lsa — xavfsizlik uchun
-            # hech narsa qilmaymiz (aks holda ikki marta javob xatosi
-            # qaytarilishi mumkin edi)
-            print(f"[RECOVER] _conversations tekshiruvida xato: {e}")
-            return
-        await start(update, ctx)
-
-    app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, _recover_session), group=1)
 
     print("✅ Vaksin Med bot ishga tushdi!")
     from telegram.ext import CommandHandler as CmdHandler
