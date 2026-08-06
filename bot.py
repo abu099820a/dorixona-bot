@@ -1,13 +1,15 @@
 import math, io, re
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 import pandas as pd
-from register_handlers import register_enter, get_reg_states, cmd_add_filial_headers, cmd_add_filial_headers_salary, cmd_reorder_by_lavozim_salary, cmd_sync_all_filials_salary
+from registration_handlers import reg_enter as register_enter, get_reg_states
 from salary_handlers import (
     cmd_send_salaries, get_sal_states, SAL_WAIT_ZIP,
     reports_menu_enter, reports_menu_handler, REPORTS_MENU,
     cmd_sync_oylik, appeal_menu_enter,
     appeal_response_button, appeal_comment_catcher,
+    ADMIN_IDS,
 )
+from exclusive_handlers import cmd_eksklyuziv, get_eks_states
 from attendance_handlers import (
     att_enter, get_att_states,
     ATT_PHONE, ATT_MENU, ATT_LOCATION,
@@ -113,6 +115,7 @@ T = {
         "register_btn": "📝 Ro'yxatdan o'tish",
         "reports_btn": "📊 Hisobotlar va to'lovlar",
         "appeal_btn": "📩 Murojaat",
+        "eksklyuziv_btn": "📦 Eksklyuziv dori",
         "back": "⬅️ Orqaga",
         "enter_number": "🔢 Filial raqamini kiriting:\n_(masalan: 1, 5, 23)_",
         "enter_name": "🔤 Dorixona nomini kiriting:",
@@ -154,6 +157,7 @@ T = {
         "register_btn": "📝 Регистрация",
         "reports_btn": "📊 Отчёты и оплаты",
         "appeal_btn": "📩 Обращение",
+        "eksklyuziv_btn": "📦 Эксклюзив товар",
         "back": "⬅️ Назад",
         "enter_number": "🔢 Введите номер филиала:\n_(например: 1, 5, 23)_",
         "enter_name": "🔤 Введите название аптеки:",
@@ -294,14 +298,24 @@ def haversine(lat1, lon1, lat2, lon2):
     a = math.sin(dlat/2)**2+math.cos(math.radians(lat1))*math.cos(math.radians(lat2))*math.sin(dlon/2)**2
     return R*2*math.asin(math.sqrt(a))
 
-def main_keyboard(language):
-    return ReplyKeyboardMarkup([
+def main_keyboard(language, is_admin=False):
+    # MUHIM: is_admin default False — bu funksiya boshqa fayllarda
+    # (salary_handlers.py, attendance_handlers.py, registration_handlers.py)
+    # 30+ joyda faqat main_keyboard(til) deb (bitta argument bilan)
+    # chaqiriladi. Default qiymat shu chaqiruvlarning birontasini
+    # o'zgartirmasdan, orqaga mos (backward-compatible) ishlashini
+    # ta'minlaydi — faqat shu faylda (bot.py) admin uchun ataylab
+    # is_admin=True uzatilgan joylardagina qo'shimcha tugma ko'rinadi.
+    rows = [
         [T[language]["search_btn"]],
         [T[language]["attendance_btn"], T[language]["register_btn"]],
         [T[language]["reports_btn"], T[language]["appeal_btn"]],
         [T[language]["chat_btn"], T[language]["channel_btn"]],
-        [T[language]["lang_btn"]],
-    ], resize_keyboard=True)
+    ]
+    if is_admin:
+        rows.append([T[language]["eksklyuziv_btn"]])
+    rows.append([T[language]["lang_btn"]])
+    return ReplyKeyboardMarkup(rows, resize_keyboard=True)
 
 def search_keyboard(language):
     return ReplyKeyboardMarkup([
@@ -347,7 +361,8 @@ async def set_lang(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await q.answer()
     language = q.data.split("_")[1]
     ctx.user_data["lang"] = language
-    await q.message.reply_text(T[language]["menu"], reply_markup=main_keyboard(language), parse_mode="Markdown")
+    is_admin = update.effective_user.id in ADMIN_IDS
+    await q.message.reply_text(T[language]["menu"], reply_markup=main_keyboard(language, is_admin), parse_mode="Markdown")
     return MENU
 
 async def menu_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -355,9 +370,10 @@ async def menu_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not ctx.user_data.get("lang"):
         ctx.user_data["lang"] = "uz"
     language = get_lang(ctx)
+    is_admin = update.effective_user.id in ADMIN_IDS
     txt = update.message.text
     if txt is None:
-        await update.message.reply_text(T[language]["menu"], reply_markup=main_keyboard(language), parse_mode="Markdown")
+        await update.message.reply_text(T[language]["menu"], reply_markup=main_keyboard(language, is_admin), parse_mode="Markdown")
         return MENU
 
     if txt == T[language]["lang_btn"]:
@@ -385,6 +401,9 @@ async def menu_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     elif txt == T[language]["appeal_btn"]:
         return await appeal_menu_enter(update, ctx)
 
+    elif is_admin and txt == T[language]["eksklyuziv_btn"]:
+        return await cmd_eksklyuziv(update, ctx)
+
     elif txt == T[language]["chat_btn"]:
         kb = InlineKeyboardMarkup([[InlineKeyboardButton("💬 Chat", url=TELEGRAM_CHAT_LINK)]])
         await update.message.reply_text("💬 Telegram chatimizga xush kelibsiz!" if language == "uz" else "💬 Добро пожаловать в наш Telegram чат!", reply_markup=kb)
@@ -402,7 +421,8 @@ async def search_menu_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     txt = update.message.text
 
     if txt == T[language]["back"]:
-        await update.message.reply_text(T[language]["menu"], reply_markup=main_keyboard(language), parse_mode="Markdown")
+        is_admin = update.effective_user.id in ADMIN_IDS
+        await update.message.reply_text(T[language]["menu"], reply_markup=main_keyboard(language, is_admin), parse_mode="Markdown")
         return MENU
 
     elif txt == T[language]["nearest"]:
@@ -520,7 +540,8 @@ async def list_page_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await send_list_page(q.message, ctx, language)
         return LIST_PAGE
     elif q.data == "listpage_back":
-        await q.message.reply_text(T[language]["menu"], reply_markup=main_keyboard(language), parse_mode="Markdown")
+        is_admin = update.effective_user.id in ADMIN_IDS
+        await q.message.reply_text(T[language]["menu"], reply_markup=main_keyboard(language, is_admin), parse_mode="Markdown")
         return MENU
     elif q.data.startswith("list_"):
         idx = int(q.data.split("_")[1])
@@ -745,8 +766,10 @@ async def auto_sync_job():
             print(f"[AUTO SYNC] Oylik xato: {res2['error']}")
         else:
             oylik_added = len(res2.get('oylik', {}).get('added', []))
+            oylik_removed = len(res2.get('oylik', {}).get('removed', []))
             aksiya_added = len(res2.get('aksiya', {}).get('added', []))
-            print(f"[AUTO SYNC] Oylik: +{oylik_added} ta, Aksiya: +{aksiya_added} ta")
+            aksiya_removed = len(res2.get('aksiya', {}).get('removed', []))
+            print(f"[AUTO SYNC] Oylik: +{oylik_added}/-{oylik_removed} ta, Aksiya: +{aksiya_added}/-{aksiya_removed} ta")
             if res2.get("aksiya_error"):
                 print(f"[AUTO SYNC] Aksiya xato: {res2['aksiya_error']}")
     except Exception as e:
@@ -843,6 +866,7 @@ def main():
             **get_att_states(),
             **get_reg_states(),
             **get_sal_states(),
+            **get_eks_states(),
         },
         fallbacks=[
             CommandHandler("start", start),
@@ -892,11 +916,14 @@ def main():
     app.add_handler(CmdHandler("fix_latlon", cmd_fix_latlon))
     app.add_handler(CmdHandler("fill_phones", cmd_fill_phones))
     app.add_handler(CmdHandler("send_salaries", cmd_send_salaries))
+    app.add_handler(CmdHandler("eksklyuziv", cmd_eksklyuziv))
     app.add_handler(CmdHandler("sync_oylik", cmd_sync_oylik))
-    app.add_handler(CmdHandler("add_filial_headers", cmd_add_filial_headers))
-    app.add_handler(CmdHandler("add_filial_headers_salary", cmd_add_filial_headers_salary))
-    app.add_handler(CmdHandler("reorder_lavozim_salary", cmd_reorder_by_lavozim_salary))
-    app.add_handler(CmdHandler("sync_all_filials_salary", cmd_sync_all_filials_salary))
+    # MUHIM: /add_filial_headers, /add_filial_headers_salary,
+    # /reorder_lavozim_salary, /sync_all_filials_salary — bu 4 eski,
+    # bir martalik buyruqning asl kodi loyihada topilmadi (register_handlers.py
+    # boshqa fayl bilan adashib nusxalangan edi), shuning uchun ular BOTGA
+    # QAYTA ULANMADI. Botning asosiy ishlashiga (registratsiya, davomat,
+    # maosh, hisobotlar, murojaatlar, sinxronizatsiya) bu ta'sir qilmaydi.
     app.run_polling()
 
 if __name__ == "__main__":
