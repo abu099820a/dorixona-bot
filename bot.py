@@ -19,7 +19,7 @@ from attendance_handlers import (
 )
 from thefuzz import process as fuzz_process
 from telegram import (
-    Update, ReplyKeyboardMarkup, KeyboardButton,
+    Update, ReplyKeyboardMarkup, ReplyKeyboardRemove, KeyboardButton,
     InlineKeyboardMarkup, InlineKeyboardButton
 )
 from telegram.ext import (
@@ -354,9 +354,22 @@ async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     # til tanlash tugmasi va asosiy menyuni ko'rsatib yuborishi mumkin edi
     # — bu shaxsiy ma'lumot (ro'yxatdan o'tish, maosh) bilan ishlaydigan
     # botda GURUHDA ko'rinishi noto'g'ri. Shu sababli bot faqat SHAXSIY
-    # (private) chatda javob beradi; guruh/kanalda /start bosilsa hech
-    # narsa qilmasdan e'tiborsiz qoldiradi.
+    # (private) chatda javob beradi.
+    #
+    # DIQQAT: shu tuzatishdan OLDIN /start bosilgan guruh/kanal-muhokama
+    # chatlarida ReplyKeyboardMarkup (pastdagi tugmalar) allaqachon shu
+    # chatga "yopishib" qolgan bo'lishi mumkin — Telegram bunday
+    # klaviaturani avtomatik olib tashlamaydi, uni FAQAT ReplyKeyboardRemove
+    # bilan birga xabar yuborib tozalash mumkin. Shu sababli faqat "hech
+    # narsa qilmaslik" YETARLI EMAS — eski, allaqachon ko'rinib turgan
+    # tugmalarni ham faol ravishda tozalaymiz.
     if update.effective_chat and update.effective_chat.type != "private":
+        if update.message:
+            await update.message.reply_text(
+                "ℹ️ Ushbu bot faqat shaxsiy (private) xabar orqali ishlaydi.\n"
+                "Iltimos, botga shaxsan yozing.",
+                reply_markup=ReplyKeyboardRemove(),
+            )
         return ConversationHandler.END
 
     ctx.user_data.clear()
