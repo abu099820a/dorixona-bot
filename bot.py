@@ -348,6 +348,17 @@ async def send_card(msg, row, language):
             await msg.reply_text(text, parse_mode="Markdown")
 
 async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    # MUHIM: bot GURUH/KANAL chatiga qo'shilganda ham /start (yoki
+    # ConversationHandler'ning "istalgan xabar /start bosilgandek qayta
+    # tiklansin" fallback'i) o'sha yerda ham ishga tushib, guruh ichida
+    # til tanlash tugmasi va asosiy menyuni ko'rsatib yuborishi mumkin edi
+    # — bu shaxsiy ma'lumot (ro'yxatdan o'tish, maosh) bilan ishlaydigan
+    # botda GURUHDA ko'rinishi noto'g'ri. Shu sababli bot faqat SHAXSIY
+    # (private) chatda javob beradi; guruh/kanalda /start bosilsa hech
+    # narsa qilmasdan e'tiborsiz qoldiradi.
+    if update.effective_chat and update.effective_chat.type != "private":
+        return ConversationHandler.END
+
     ctx.user_data.clear()
     kb = InlineKeyboardMarkup([[
         InlineKeyboardButton("🇺🇿 O'zbek", callback_data="lang_uz"),
