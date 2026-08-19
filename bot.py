@@ -329,6 +329,32 @@ def search_keyboard(language):
 def back_keyboard(language):
     return ReplyKeyboardMarkup([[T[language]["back"]]], resize_keyboard=True)
 
+async def safe_markdown_reply(msg, text, **kwargs):
+    """
+    Ba'zi filiallarning nomi/manzili/orientiri/koordinator kabi
+    maydonlarida Markdown'ga xos belgilar (*, _, [, ], ( , ) va h.k.)
+    muvozanatsiz kelib qolishi mumkin — bunday holda Telegram
+    parse_mode="Markdown" bilan matnni butunlay RAD ETADI (BadRequest:
+    "Can't parse entities"). Bu xato hech qayerda ushlanmagani sababli,
+    foydalanuvchiga oldin yuborilgan LOKATSIYA ko'rinadi-yu, MA'LUMOTLAR
+    matni esa umuman yetib bormay qoladi ("faqat lokatsiya chiqyapti"
+    degan holat aynan shundan kelib chiqadi).
+
+    Shu funksiya avval Markdown bilan urinadi; xato chiqsa, formatlashsiz
+    (parse_mode'siz) oddiy matn sifatida DARHOL qayta yuboradi — shunda
+    ma'lumot HAR DOIM yetib boradi, faqat qalin/link formatlash
+    ko'rinmasligi mumkin (bu ancha yaxshi, chunki hech narsa yo'qolmaydi).
+    """
+    try:
+        return await msg.reply_text(text, parse_mode="Markdown", **kwargs)
+    except Exception as e:
+        print(f"[SAFE_MARKDOWN] Markdown xato, oddiy matn bilan qayta yuborilmoqda: {e}")
+        try:
+            return await msg.reply_text(text, **kwargs)
+        except Exception as e2:
+            print(f"[SAFE_MARKDOWN] Oddiy matn ham yuborilmadi: {e2}")
+            return None
+
 async def send_card(msg, row, language):
     text = format_card(row, language)
     lat = str(row.get("Latitude","")).strip()
@@ -339,13 +365,13 @@ async def send_card(msg, row, language):
     if has_coords:
         loc_msg = await msg.reply_location(latitude=float(lat), longitude=float(lon))
         kb = get_map_buttons(lat, lon, language, phone)
-        await loc_msg.reply_text(text, parse_mode="Markdown", reply_markup=kb)
+        await safe_markdown_reply(loc_msg, text, reply_markup=kb)
     else:
         kb = get_buttons_no_map(language, phone)
         if kb:
-            await msg.reply_text(text, parse_mode="Markdown", reply_markup=kb)
+            await safe_markdown_reply(msg, text, reply_markup=kb)
         else:
-            await msg.reply_text(text, parse_mode="Markdown")
+            await safe_markdown_reply(msg, text)
 
 async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     # MUHIM: bot GURUH/KANAL chatiga qo'shilganda ham /start (yoki
@@ -678,8 +704,10 @@ async def location_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         text = format_card(r, language) + f"\n📏 {row['_dist']:.1f} {T[language]['km']}"
         lat, lon = str(row["_lat"]), str(row["_lon"])
         kb = get_map_buttons(lat, lon, language)
-        await update.message.reply_text(text, parse_mode="Markdown", reply_markup=kb)
-        await update.message.reply_location(latitude=row["_lat"], longitude=row["_lon"])
+        # AVVAL lokatsiya, KEYIN ma'lumotlar (matn) chiqishi kerak — foydalanuvchi
+        # so'roviga ko'ra tartib o'zgartirildi (send_card()dagi tartib bilan bir xil).
+        loc_msg = await update.message.reply_location(latitude=row["_lat"], longitude=row["_lon"])
+        await safe_markdown_reply(loc_msg, text, reply_markup=kb)
 
     await update.message.reply_text(T[language]["search_menu"], reply_markup=search_keyboard(language), parse_mode="Markdown")
     return SEARCH_MENU
