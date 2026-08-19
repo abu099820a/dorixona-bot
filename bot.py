@@ -221,18 +221,45 @@ def clean_number(text):
     if m: return m.group(1)
     return text
 
+def escape_md(text):
+    """
+    Telegram eski "Markdown" (parse_mode="Markdown") rejimida *, _, `, [
+    belgilari MAXSUS ma'noga ega (qalin matn, kursiv, kod, link). Agar
+    filial nomi/manzili/orientiri kabi Google Sheets'dan kelayotgan
+    ERKIN MATN maydonlarida bu belgilar TASODIFAN (masalan, o'zbekcha
+    apostrof o'rniga ba'zan qo'llaniladigan backtick — "A`LO GRILL" kabi)
+    juft-toq (muvozanatsiz) kelib qolsa, Telegram BUTUN xabarni "Can't
+    parse entities" xatosi bilan rad etadi. Bizda bu holatda
+    safe_markdown_reply avtomatik formatlashsiz (parse_mode'siz) qayta
+    yuborardi — bu ma'lumot yo'qolib ketmasligini ta'minlagan, LEKIN link
+    va qalin matnlar endi "[Nodira](https://t.me/...)" kabi XOM matn
+    ko'rinishida chiqib qolgan (aynan shu holat filial #58'da ko'rilgan).
+
+    Shu funksiya erkin matn maydonlaridagi bunday belgilarni OLDINDAN
+    escape qiladi (\\* \\_ \\` \\[), shunda xabar birinchi urinishdayoq
+    TO'G'RI, chiroyli (qalin sarlavha, bosiladigan link) formatda
+    yuboriladi — hech qanday zaxira (fallback)ga tushmasdan.
+    """
+    if text is None:
+        return ""
+    s = str(text)
+    s = s.replace("\\", "\\\\")
+    for ch in ["*", "_", "`", "["]:
+        s = s.replace(ch, "\\" + ch)
+    return s
+
 def format_card(row, language):
     lg_up = "UZ" if language == "uz" else "RU"
-    nomi = row.get(f"Nomi ({lg_up})", "") or row.get("Nomi (RU)", "")
+    nomi = escape_md(row.get(f"Nomi ({lg_up})", "") or row.get("Nomi (RU)", ""))
     filial = str(row.get("filial_no", "")).strip()
-    hudud = row.get(f"Hudud ({lg_up})", "") or row.get("Hudud (RU)", "")
-    tuman = row.get(f"Tuman ({lg_up})", "") or row.get("Tuman (RU)", "")
-    manzil = row.get(f"Manzil ({lg_up})", "") or row.get("Manzil (RU)", "")
-    orientir = row.get(f"Orientir ({lg_up})", "") or row.get("Orientir (RU)", "")
-    hours = row.get(f"Ish vaqti ({lg_up})", "") or row.get("Ish vaqti (RU)", "")
+    hudud = escape_md(row.get(f"Hudud ({lg_up})", "") or row.get("Hudud (RU)", ""))
+    tuman = escape_md(row.get(f"Tuman ({lg_up})", "") or row.get("Tuman (RU)", ""))
+    manzil = escape_md(row.get(f"Manzil ({lg_up})", "") or row.get("Manzil (RU)", ""))
+    orientir = escape_md(row.get(f"Orientir ({lg_up})", "") or row.get("Orientir (RU)", ""))
+    hours = escape_md(row.get(f"Ish vaqti ({lg_up})", "") or row.get("Ish vaqti (RU)", ""))
     phone = row.get("Telefon", "")
 
-    koordinator_ismi = row.get("Koordinator ismi", "")
+    koordinator_ismi = escape_md(row.get("Koordinator ismi", ""))
     koordinator_tel = row.get("Koordinator tel", "")
     mudiri_tel = row.get("Dorixona mudiri tel", "")
 
@@ -246,7 +273,7 @@ def format_card(row, language):
     if hours: lines.append(f"🕐 {hours}")
     if phone:
         clean_phone = str(phone).replace(" ","").replace("-","").replace("(","").replace(")","")
-        lines.append(f"📞 [{phone}](tel:{clean_phone})")
+        lines.append(f"📞 [{escape_md(phone)}](tel:{clean_phone})")
     if koordinator_ismi and str(koordinator_ismi) not in ["", "nan"]:
         if koordinator_tel and str(koordinator_tel) not in ["", "nan"]:
             digits_k = re.sub(r"\D", "", str(koordinator_tel))
@@ -257,7 +284,7 @@ def format_card(row, language):
     if mudiri_tel and str(mudiri_tel) not in ["", "nan"]:
         digits_m = re.sub(r"\D", "", str(mudiri_tel))
         tg_m = f"https://t.me/+{digits_m}"
-        lines.append(f"💊 Dorixona mudiri: [{mudiri_tel}]({tg_m})")
+        lines.append(f"💊 Dorixona mudiri: [{escape_md(mudiri_tel)}]({tg_m})")
     return "\n".join(str(l) for l in lines)
 
 def phone_to_tg(phone):
