@@ -43,7 +43,7 @@ OFFICE_LAT = 41.219104
 OFFICE_LON = 69.272889
 
 LANG, MENU, SEARCH_MENU, SEARCH_INPUT, LOCATION_WAIT, \
-SELECT_RESULT, SELECT_REGION, SELECT_DISTRICT, LIST_PAGE = range(9)
+SELECT_RESULT, SELECT_REGION, SELECT_DISTRICT, LIST_PAGE, ADMIN_PANEL = range(10)
 
 PAGE_SIZE = 10
 
@@ -116,6 +116,8 @@ T = {
         "reports_btn": "📊 Hisobotlar va to'lovlar",
         "appeal_btn": "📩 Murojaat",
         "eksklyuziv_btn": "📦 Eksklyuziv dori",
+        "admin_panel_btn": "⚙️ Admin panel",
+        "admin_panel_menu": "⚙️ *Admin panel* — bo'limni tanlang:",
         "back": "⬅️ Orqaga",
         "enter_number": "🔢 Filial raqamini kiriting:\n_(masalan: 1, 5, 23)_",
         "enter_name": "🔤 Dorixona nomini kiriting:",
@@ -158,6 +160,8 @@ T = {
         "reports_btn": "📊 Отчёты и оплаты",
         "appeal_btn": "📩 Обращение",
         "eksklyuziv_btn": "📦 Эксклюзив товар",
+        "admin_panel_btn": "⚙️ Админ-панель",
+        "admin_panel_menu": "⚙️ *Админ-панель* — выберите раздел:",
         "back": "⬅️ Назад",
         "enter_number": "🔢 Введите номер филиала:\n_(например: 1, 5, 23)_",
         "enter_name": "🔤 Введите название аптеки:",
@@ -331,18 +335,42 @@ def main_keyboard(language, is_admin=False):
     # 30+ joyda faqat main_keyboard(til) deb (bitta argument bilan)
     # chaqiriladi. Default qiymat shu chaqiruvlarning birontasini
     # o'zgartirmasdan, orqaga mos (backward-compatible) ishlashini
-    # ta'minlaydi — faqat shu faylda (bot.py) admin uchun ataylab
-    # is_admin=True uzatilgan joylardagina qo'shimcha tugma ko'rinadi.
+    # ta'minlaydi.
+    #
+    # MUHIM (2026-08): mijoz talabiga ko'ra, Davomat / Ro'yxatdan o'tish /
+    # Hisobotlar va to'lovlar / Murojaat / Eksklyuziv dori tugmalari ENDI
+    # oddiy foydalanuvchilarga UMUMAN ko'rinmaydi — faqat ADMIN_IDS
+    # ichidagi foydalanuvchilarga (is_admin=True bo'lganda) ko'rinadi, va
+    # ular endi ALOHIDA-ALOHIDA tugma sifatida emas, balki bitta "⚙️ Admin
+    # panel" tugmasi ichiga yig'ilgan (bosilganda admin_panel_keyboard()
+    # ochiladi — pastga qarang). Oddiy foydalanuvchi uchun menyuda faqat:
+    # qidiruv, chat, kanal va til tugmalari qoladi. Bu — tugmalarni
+    # yashirish bilan bir qatorda, menu_handler() ichida ham is_admin
+    # tekshiruvi qo'shilgan (pastga qarang) — shunda oddiy foydalanuvchi
+    # eski xabar tarixidan shu tugma matnini qo'lda yozib yuborsa ham,
+    # funksiyaga kira olmaydi.
     rows = [
         [T[language]["search_btn"]],
-        [T[language]["attendance_btn"], T[language]["register_btn"]],
-        [T[language]["reports_btn"], T[language]["appeal_btn"]],
-        [T[language]["chat_btn"], T[language]["channel_btn"]],
     ]
+    rows.append([T[language]["chat_btn"], T[language]["channel_btn"]])
     if is_admin:
-        rows.append([T[language]["eksklyuziv_btn"]])
+        rows.append([T[language]["admin_panel_btn"]])
     rows.append([T[language]["lang_btn"]])
     return ReplyKeyboardMarkup(rows, resize_keyboard=True)
+
+def admin_panel_keyboard(language):
+    """
+    Admin uchun bitta "⚙️ Admin panel" tugmasi bosilganda ochiladigan
+    kichik submenyu — avval asosiy menyuda alohida-alohida turgan 5 ta
+    bo'lim (Davomat, Ro'yxatdan o'tish, Hisobotlar va to'lovlar,
+    Murojaat, Eksklyuziv dori) endi shu yerda jamlangan.
+    """
+    return ReplyKeyboardMarkup([
+        [T[language]["attendance_btn"], T[language]["register_btn"]],
+        [T[language]["reports_btn"], T[language]["appeal_btn"]],
+        [T[language]["eksklyuziv_btn"]],
+        [T[language]["back"]],
+    ], resize_keyboard=True)
 
 def search_keyboard(language):
     return ReplyKeyboardMarkup([
@@ -466,20 +494,10 @@ async def menu_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                                          reply_markup=search_keyboard(language), parse_mode="Markdown")
         return SEARCH_MENU
 
-    elif txt == T[language]["attendance_btn"]:
-        return await att_enter(update, ctx)
-
-    elif txt == T[language]["register_btn"]:
-        return await register_enter(update, ctx)
-
-    elif txt == T[language]["reports_btn"]:
-        return await reports_menu_enter(update, ctx)
-
-    elif txt == T[language]["appeal_btn"]:
-        return await appeal_menu_enter(update, ctx)
-
-    elif is_admin and txt == T[language]["eksklyuziv_btn"]:
-        return await cmd_eksklyuziv(update, ctx)
+    elif is_admin and txt == T[language]["admin_panel_btn"]:
+        await update.message.reply_text(T[language]["admin_panel_menu"],
+                                         reply_markup=admin_panel_keyboard(language), parse_mode="Markdown")
+        return ADMIN_PANEL
 
     elif txt == T[language]["chat_btn"]:
         kb = InlineKeyboardMarkup([[InlineKeyboardButton("💬 Chat", url=TELEGRAM_CHAT_LINK)]])
@@ -492,6 +510,45 @@ async def menu_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return MENU
 
     return MENU
+
+async def admin_panel_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """
+    "⚙️ Admin panel" tugmasi bosilgandan keyin ochiladigan submenyuni
+    boshqaradi. MUHIM: bu yerda ham is_admin tekshiruvi takrorlanadi —
+    chunki nazariy jihatdan (masalan eski, admin bo'lmagan foydalanuvchi
+    biror sabab bilan shu holatga tushib qolsa) himoyasiz qolmasligi
+    uchun. Har bir bo'lim tugmasi avvalgi, allaqachon sinovdan o'tgan
+    funksiyalarga (att_enter, register_enter va h.k.) o'zgarishsiz
+    yo'naltiriladi — faqat qaysi tugma orqali chaqirilishi o'zgargan.
+    """
+    language = get_lang(ctx)
+    is_admin = update.effective_user.id in ADMIN_IDS
+    txt = update.message.text
+
+    if txt == T[language]["back"]:
+        await update.message.reply_text(T[language]["menu"], reply_markup=main_keyboard(language, is_admin), parse_mode="Markdown")
+        return MENU
+
+    if not is_admin:
+        await update.message.reply_text(T[language]["menu"], reply_markup=main_keyboard(language, is_admin), parse_mode="Markdown")
+        return MENU
+
+    if txt == T[language]["attendance_btn"]:
+        return await att_enter(update, ctx)
+
+    elif txt == T[language]["register_btn"]:
+        return await register_enter(update, ctx)
+
+    elif txt == T[language]["reports_btn"]:
+        return await reports_menu_enter(update, ctx)
+
+    elif txt == T[language]["appeal_btn"]:
+        return await appeal_menu_enter(update, ctx)
+
+    elif txt == T[language]["eksklyuziv_btn"]:
+        return await cmd_eksklyuziv(update, ctx)
+
+    return ADMIN_PANEL
 
 async def search_menu_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     language = get_lang(ctx)
@@ -926,6 +983,7 @@ def main():
         states={
             LANG: [CallbackQueryHandler(set_lang, pattern="^lang_")],
             MENU: [MessageHandler(filters.TEXT & ~filters.COMMAND, menu_handler)],
+            ADMIN_PANEL: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_panel_handler)],
             REPORTS_MENU: [MessageHandler(filters.TEXT & ~filters.COMMAND, reports_menu_handler)],
             SEARCH_MENU: [MessageHandler(filters.TEXT & ~filters.COMMAND, search_menu_handler)],
             SEARCH_INPUT: [MessageHandler(filters.TEXT & ~filters.COMMAND, search_handler)],
