@@ -1673,92 +1673,145 @@ def _parse_report_xlsx_totals(xlsx_bytes: bytes) -> dict:
     Aylanma hisoboti xlsx faylidan jami sotuv summasi va oxirgi qoldiq
     summasini hisoblab qaytaradi.
 
-    Ustun tartibi (1C "Оборот по сети" format):
-      [0]  наименование (dori nomi, har bir blokda birinchi qatorda)
-      [1]  производитель
-      [2]  филиал
-      [3]  ост нач кол-во    [4]  ост нач сумма
-      [5]  покупка кол-во    [6]  покупка сумма
-      [7]  ПРОДАЖА кол-во    [8]  ПРОДАЖА сумма   ← sotuv summasi
-      [9]  перемещение кол   [10] перемещение сум
-      [11] ост кон кол-во    [12] ост кон сумма   ← ostatok summasi
+    Ikki format qo'llab-quvvatlanadi:
 
-    "по сети" qatorida har bir dori bloki uchun umumiy summa mavjud —
-    shu qator ishlatiladi. Agar "по сети" yo'q bo'lsa, barcha filial
-    qatorlari qo'shib chiqiladi.
+    13-ustunli format (klassik "Оборот по сети"):
+      [0]  наименование  [1] производитель  [2] филиал
+      [3]  ост нач кол   [4]  ост нач сум
+      [5]  покупка кол   [6]  покупка сум
+      [7]  продажа кол   [8]  продажа сум   ← sotuv
+      [9]  перемещение к [10] перемещение с
+      [11] ост кон кол   [12] ост кон сум   ← ostatok
 
-    Qaytaradi: {"sotuv": float, "ostatok": float, "products": int}
+    17-ustunli format (возврат va инвентаризация ustunlari bilan):
+      [0]  наименование  [1] производитель  [2] филиал
+      [3]  ост нач кол   [4]  ост нач сум
+      [5]  покупка кол   [6]  покупка сум
+      [7]  продажа кол   [8]  продажа сум   ← sotuv
+      [9]  возврат кол   [10] возврат сум
+      [11] инвент кол    [12] инвент сум
+      [13] перемещение к [14] перемещение с
+      [15] ост кон кол   [16] ост кон сум   ← ostatok
+
+    Har ikki formatda ham:
+    - "по сети" qatori dori bloki uchun umumiy summani ko'rsatadi (ustuvor)
+    - "по сети" yo'q bo'lsa, barcha filial qatorlari yig'iladi
+    - 17-ustunli formatda dori nomi HAR BIR qatorda takrorlanishi mumkin;
+      bu holda bir xil nomdagi barcha qatorlar bitta dori bloki sifatida
+      birlashtiriladi
+
+    Sarlavha qatorlaridan (row 1 / row 2) ustun nomlari avtomatik aniqlanadi.
+    Qaytaradi: {"sotuv": float, "priod": float, "ostatok": float, "products": int}
     """
     import openpyxl
     import io as _io
 
     wb = openpyxl.load_workbook(_io.BytesIO(xlsx_bytes), data_only=True)
-    SKIP_NAMES = {"по сети", "склад"}
-    total_sotuv = 0.0
+
+    total_sotuv   = 0.0
+    total_priod   = 0.0
     total_ostatok = 0.0
     products_found = 0
 
     for ws in wb.worksheets:
         rows = list(ws.iter_rows(min_row=1, values_only=True))
+        if len(rows) < 3:
+            continue
 
-        current_product = None
-        net_sotuv = None       # "по сети" sotuv summasi
-        net_ostatok = None     # "по сети" ostatok summasi
-        fil_sotuv = 0.0
-        fil_ostatok = 0.0
-        has_filials = False
+        # ── Sarlavha qatorlaridan ustun indekslarini aniqlash ─────────────
+        # Row 1: merged headings (продажа, покупка, остаток на конец, ...)
+        # Row 2: кол-во / сумма subheadings
+        h1 = [str(c).strip().lower() if c is not None else "" for c in rows[0]]
+        h2 = [str(c).strip().lower() if c is not None else "" for c in rows[1]]
 
-        def _flush():
-            nonlocal total_sotuv, total_ostatok, products_found
-            nonlocal net_sotuv, net_ostatok, fil_sotuv, fil_ostatok, has_filials
-            if current_product is None:
-                return
-            products_found += 1
-            if net_sotuv is not None:
-                total_sotuv += net_sotuv
-                total_ostatok += (net_ostatok or 0.0)
-            elif has_filials:
-                total_sotuv += fil_sotuv
-                total_ostatok += fil_ostatok
-            net_sotuv = None
-            net_ostatok = None
-            fil_sotuv = 0.0
-            fil_ostatok = 0.0
-            has_filials = False
+        def _find_sum_col(keyword: str) -> int | None:
+            """h1 dagi 'keyword' sarlavhasi ostidagi 'сумма' subustun indeksini qaytaradi."""
+            start = next((i for i, v in enumerate(h1) if keyword in v), None)
+            if start is None:
+                return None
+            for i in range(start, min(start + 4, len(h2))):
+                if "сум" in h2[i]:
+                    return i
+            return None
 
-        for r in rows:
-            if not r or len(r) < 12:
+        sotuv_col   = _find_sum_col("продажа")
+        priod_col   = _find_sum_col("покупка")
+        ostatok_col = _find_sum_col("остаток на конец") or _find_sum_col("остаток к")
+
+        # Zaxira pozitsiyalar (sarlavha topilmasa)
+        if sotuv_col   is None: sotuv_col   = 8
+        if priod_col   is None: priod_col   = 6
+        if ostatok_col is None: ostatok_col = 16
+
+        # ── Ma'lumot qatorlarini qayta ishlash (row 3 dan) ─────────────────
+        # "склад" yig'ib olmaymiz — u tarmoq emas, ichki sklad
+        # "по сети" — tarmoq bo'yicha umumiy qator, USTUVOR manba
+        SKIP_NAMES = {"склад"}
+        drug_blocks: dict = {}
+        current_drug = None
+
+        def _block(name: str) -> dict:
+            if name not in drug_blocks:
+                drug_blocks[name] = {
+                    "net_sotuv":   None, "net_priod":   None, "net_ostatok":  None,
+                    "fil_sotuv":   0.0,  "fil_priod":   0.0,  "fil_ostatok":  0.0,
+                    "has_filials": False,
+                }
+            return drug_blocks[name]
+
+        for r in rows[2:]:                  # sarlavha 2 qatorini o'tkazib yuborish
+            if not r or len(r) < 4:
                 continue
-            filial = r[2]
+            filial = r[2] if len(r) > 2 else None
             if not filial:
                 continue
-            # r[3] bo'lishi kerak sonli qator (ost_boshi) — sarlavha qatorini o'tkazib yuboramiz
             if not isinstance(r[3], (int, float)):
-                continue
+                continue                     # sarlavha/bo'sh qator
 
-            sotuv_sum = float(r[8]) if len(r) > 8 and isinstance(r[8], (int, float)) else 0.0
-            ost_sum   = float(r[12]) if len(r) > 12 and isinstance(r[12], (int, float)) else 0.0
-
-            # Yangi dori bloki boshlanishi
             if r[0]:
-                _flush()
-                current_product = str(r[0]).strip()
-
-            if current_product is None:
+                current_drug = str(r[0]).strip()
+            if current_drug is None:
                 continue
+
+            blk = _block(current_drug)
+
+            def _v(col, _r=r):
+                v = _r[col] if col < len(_r) else None
+                return float(v) if isinstance(v, (int, float)) else 0.0
+
+            sotuv_sum   = abs(_v(sotuv_col))   # продажа manfiy bo'lishi mumkin
+            priod_sum   = abs(_v(priod_col))   # покупка ham manfiy bo'lishi mumkin
+            ostatok_sum =     _v(ostatok_col)
 
             filial_lower = str(filial).strip().lower()
             if filial_lower == "по сети":
-                net_sotuv = sotuv_sum
-                net_ostatok = ost_sum
+                blk["net_sotuv"]   = sotuv_sum
+                blk["net_priod"]   = priod_sum
+                blk["net_ostatok"] = ostatok_sum
             elif filial_lower not in SKIP_NAMES:
-                fil_sotuv += sotuv_sum
-                fil_ostatok += ost_sum
-                has_filials = True
+                blk["fil_sotuv"]   += sotuv_sum
+                blk["fil_priod"]   += priod_sum
+                blk["fil_ostatok"] += ostatok_sum
+                blk["has_filials"]  = True
 
-        _flush()
+        # ── Natijalarni yig'amiz ───────────────────────────────────────────
+        for blk in drug_blocks.values():
+            products_found += 1
+            if blk["net_sotuv"] is not None:
+                total_sotuv   += blk["net_sotuv"]
+                total_priod   += blk["net_priod"]   or 0.0
+                total_ostatok += blk["net_ostatok"] or 0.0
+            elif blk["has_filials"]:
+                total_sotuv   += blk["fil_sotuv"]
+                total_priod   += blk["fil_priod"]
+                total_ostatok += blk["fil_ostatok"]
 
-    return {"sotuv": total_sotuv, "ostatok": total_ostatok, "products": products_found}
+    return {
+        "sotuv":    total_sotuv,
+        "priod":    total_priod,
+        "ostatok":  total_ostatok,
+        "products": products_found,
+    }
 
 
 def _find_firm_row_in_tolovlar(caption: str):
@@ -1822,10 +1875,12 @@ def _find_firm_row_in_tolovlar(caption: str):
         return None
 
 
-def _update_firm_totals_in_sheet(ws, row_i: int, sotuv: float, ostatok: float) -> str:
+def _update_firm_totals_in_sheet(
+    ws, row_i: int, sotuv: float, priod: float, ostatok: float
+) -> str:
     """
-    "To'lovlar" varag'ining row_i-qatoriga sotuv va ostatok summasini yozadi.
-    Ustunlar mavjud bo'lmasa, sarlavhaga qo'shiladi.
+    "To'lovlar" varag'ining row_i-qatoriga sotuv, priod va ostatok summasini yozadi.
+    Ustunlar mavjud bo'lmasa, sarlavhaga avtomatik qo'shiladi.
 
     Qaytaradi: "ok" yoki xato xabari.
     """
@@ -1833,30 +1888,30 @@ def _update_firm_totals_in_sheet(ws, row_i: int, sotuv: float, ostatok: float) -
     try:
         all_values = ws.get_all_values()
         header = list(all_values[0]) if all_values else []
-        ncols = ws.col_count
 
         def _get_or_create_col(col_name: str) -> int:
-            """Ustun indeksini (1-based) qaytaradi; yo'q bo'lsa yaratadi."""
-            nonlocal header, ncols
+            """Ustun indeksini (1-based) qaytaradi; yo'q bo'lsa oxiriga qo'shadi."""
+            nonlocal header
             for i, h in enumerate(header):
                 if h.strip().lower() == col_name.strip().lower():
                     return i + 1
-            # Yangi ustun qo'shish
             new_col = len(header) + 1
             header.append(col_name)
             ws.update_cell(1, new_col, col_name)
             return new_col
 
         sotuv_col   = _get_or_create_col("Sotuv (so'm)")
+        priod_col   = _get_or_create_col("Priod (so'm)")
         ostatok_col = _get_or_create_col("Ostatok (so'm)")
         date_col    = _get_or_create_col("Yangilangan")
 
         today = _dt.date.today().strftime("%d.%m.%Y")
 
         def _fmt(n: float) -> str:
-            return f"{int(n):,}".replace(",", " ")
+            return f"{int(round(n)):,}".replace(",", " ")
 
         ws.update_cell(row_i, sotuv_col,   _fmt(sotuv))
+        ws.update_cell(row_i, priod_col,   _fmt(priod))
         ws.update_cell(row_i, ostatok_col, _fmt(ostatok))
         ws.update_cell(row_i, date_col,    today)
         return "ok"
@@ -1944,9 +1999,10 @@ async def firm_report_receive_file(update: Update, ctx: ContextTypes.DEFAULT_TYP
         file_obj = await ctx.bot.get_file(doc.file_id)
         xlsx_bytes = bytes(await file_obj.download_as_bytearray())
 
-        # 2) Sotuv va ostatok summalarini hisoblash
-        totals = await run_read(_parse_report_xlsx_totals, xlsx_bytes)
+        # 2) Sotuv, priod va ostatok summalarini hisoblash
+        totals  = await run_read(_parse_report_xlsx_totals, xlsx_bytes)
         sotuv   = totals["sotuv"]
+        priod   = totals["priod"]
         ostatok = totals["ostatok"]
         n_prod  = totals["products"]
 
@@ -1960,19 +2016,21 @@ async def firm_report_receive_file(update: Update, ctx: ContextTypes.DEFAULT_TYP
 
         # 3) Firmani Google Sheets dan topish
         result = await run_read(_find_firm_row_in_tolovlar, caption)
-        def _fmt(n): return f"{int(n):,}".replace(",", " ")
+        def _fmt(n): return f"{int(round(n)):,}".replace(",", " ")
         if result is None:
             await msg.edit_text(
                 f"⚠️ *{caption}* nomi/INN bo'yicha firma topilmadi.\n\n"
                 f"📊 Hisoblangan natijalar:\n"
-                f"  Sotuv: *{_fmt(sotuv)} so'm*\n"
-                f"  Ostatok: *{_fmt(ostatok)} so'm*\n\n"
+                f"  📥 Priod: *{_fmt(priod)} so'm*\n"
+                f"  💰 Sotuv: *{_fmt(sotuv)} so'm*\n"
+                f"  📦 Ostatok: *{_fmt(ostatok)} so'm*\n\n"
                 f"Firma nomini To'lovlar varag'ida tekshiring."
                 if language == "uz" else
                 f"⚠️ Фирма *{caption}* не найдена (по названию/ИНН).\n\n"
                 f"📊 Рассчитанные данные:\n"
-                f"  Продажи: *{_fmt(sotuv)} сум*\n"
-                f"  Остаток: *{_fmt(ostatok)} сум*\n\n"
+                f"  📥 Приход: *{_fmt(priod)} сум*\n"
+                f"  💰 Продажи: *{_fmt(sotuv)} сум*\n"
+                f"  📦 Остаток: *{_fmt(ostatok)} сум*\n\n"
                 f"Проверьте название фирмы в листе «To'lovlar».",
                 parse_mode="Markdown",
             )
@@ -1986,7 +2044,7 @@ async def firm_report_receive_file(update: Update, ctx: ContextTypes.DEFAULT_TYP
         firma_nomi = row_dict.get("Firma nomi") or caption
 
         # 4) Google Sheets ga yozish
-        err = await run_read(_update_firm_totals_in_sheet, ws, row_i, sotuv, ostatok)
+        err = await run_write(_update_firm_totals_in_sheet, ws, row_i, sotuv, priod, ostatok)
 
         if err == "ok":
             lines = [
@@ -1994,6 +2052,8 @@ async def firm_report_receive_file(update: Update, ctx: ContextTypes.DEFAULT_TYP
                 "",
                 f"📦 Dorilar soni: {n_prod} ta" if language == "uz"
                 else f"📦 Позиций: {n_prod}",
+                f"📥 Priod: *{_fmt(priod)} so'm*" if language == "uz"
+                else f"📥 Приход: *{_fmt(priod)} сум*",
                 f"💰 Sotuv: *{_fmt(sotuv)} so'm*" if language == "uz"
                 else f"💰 Продажи: *{_fmt(sotuv)} сум*",
                 f"📦 Ostatok: *{_fmt(ostatok)} so'm*" if language == "uz"
