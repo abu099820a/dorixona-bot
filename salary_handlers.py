@@ -63,6 +63,7 @@ APPEAL_DORIXONA_TARGET = 513
 APPEAL_FIRM_NAMES = 514
 APPEAL_DORIXONA_NAMES = 515
 APPEAL_PASSWORD_STATE = 516
+FIRM_REPORT_WAIT = 517   # Admin xlsx fayl (firma otchyoti) kutish holati
 
 
 # ─── Google Sheets ────────────────────────────────────────────────────────────
@@ -872,40 +873,49 @@ def get_firms_report() -> list:
         return []
 
 
-def payments_keyboard(language: str = "uz"):
+def payments_keyboard(language: str = "uz", is_admin: bool = False):
     from telegram import ReplyKeyboardMarkup
     if language == "ru":
-        return ReplyKeyboardMarkup([
+        rows = [
             ["📤 Отправить файлы фирмам"],
             ["📊 Получить мой отчёт"],
-            ["⬅️ Назад"],
-        ], resize_keyboard=True)
-    return ReplyKeyboardMarkup([
+        ]
+        if is_admin:
+            rows.append(["📥 Загрузить отчёт фирмы"])
+        rows.append(["⬅️ Назад"])
+        return ReplyKeyboardMarkup(rows, resize_keyboard=True)
+    rows = [
         ["📤 Firmalarga fayl yuborish"],
         ["📊 Hisobotimni olish"],
-        ["⬅️ Orqaga"],
-    ], resize_keyboard=True)
+    ]
+    if is_admin:
+        rows.append(["📥 Firma otchyotini yuklash"])
+    rows.append(["⬅️ Orqaga"])
+    return ReplyKeyboardMarkup(rows, resize_keyboard=True)
 
 
 async def payments_menu_enter(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     language = ctx.user_data.get("lang", "uz")
+    is_admin = update.effective_user.id in ADMIN_IDS
     text = (
         "📊 *Отчёт и оплаты*\n\nВыберите раздел:" if language == "ru"
         else "📊 *Отчёт va to'lovlar*\n\nBo'limni tanlang:"
     )
     await update.message.reply_text(
-        text, parse_mode="Markdown", reply_markup=payments_keyboard(language)
+        text, parse_mode="Markdown", reply_markup=payments_keyboard(language, is_admin)
     )
     return PAYMENTS_MENU
 
 
 async def payments_menu_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     language = ctx.user_data.get("lang", "uz")
+    is_admin = update.effective_user.id in ADMIN_IDS
     txt = update.message.text.strip() if update.message and update.message.text else ""
 
     back_txt = "⬅️ Назад" if language == "ru" else "⬅️ Orqaga"
     firm_send_txt = "📤 Отправить файлы фирмам" if language == "ru" else "📤 Firmalarga fayl yuborish"
     my_report_txt = "📊 Получить мой отчёт" if language == "ru" else "📊 Hisobotimni olish"
+    upload_report_txt = "📥 Загрузить отчёт фирмы" if language == "ru" else "📥 Firma otchyotini yuklash"
 
     if txt == back_txt:
         await update.message.reply_text(
@@ -917,18 +927,16 @@ async def payments_menu_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return REPORTS_MENU
 
     elif txt == firm_send_txt:
-        if update.effective_user.id not in ADMIN_IDS:
+        if not is_admin:
             await update.message.reply_text(
                 "❌ Bu bo'lim faqat administrator uchun.",
-                reply_markup=payments_keyboard(language),
+                reply_markup=payments_keyboard(language, is_admin),
             )
             return PAYMENTS_MENU
         return await cmd_send_firm_files(update, ctx)
 
     elif txt == my_report_txt:
-        if update.effective_user.id in ADMIN_IDS:
-            # Admin uchun: firma nomini so'raymiz, so'ng shu firmaning
-            # saqlangan faylini va to'lovini topib beramiz
+        if is_admin:
             from telegram import ReplyKeyboardMarkup
             await update.message.reply_text(
                 "🏢 Qaysi firma? Firma nomini kiriting:",
@@ -938,12 +946,21 @@ async def payments_menu_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await get_my_report_handler(update, ctx)
         return PAYMENTS_MENU
 
+    elif txt == upload_report_txt:
+        if not is_admin:
+            await update.message.reply_text(
+                "❌ Bu bo'lim faqat administrator uchun.",
+                reply_markup=payments_keyboard(language, is_admin),
+            )
+            return PAYMENTS_MENU
+        return await firm_report_enter(update, ctx)
+
     # Tanilmagan matn
     await update.message.reply_text(
         "📊 *Отчёт va to'lovlar*\n\nBo'limni tanlang:" if language == "uz"
         else "📊 *Отчёт и оплаты*\n\nВыберите раздел:",
         parse_mode="Markdown",
-        reply_markup=payments_keyboard(language),
+        reply_markup=payments_keyboard(language, is_admin),
     )
     return PAYMENTS_MENU
 
@@ -958,7 +975,7 @@ async def payments_password_handler(update: Update, ctx: ContextTypes.DEFAULT_TY
             "📊 *Отчёт va to'lovlar*\n\nBo'limni tanlang:" if language == "uz"
             else "📊 *Отчёт и оплаты*\n\nВыберите раздел:",
             parse_mode="Markdown",
-            reply_markup=payments_keyboard(language),
+            reply_markup=payments_keyboard(language, True),
         )
         return PAYMENTS_MENU
 
@@ -982,7 +999,7 @@ async def _show_firms_report(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             "❌ Hozircha firmalar ro'yxati topilmadi." if language == "uz"
             else "❌ Список фирм пока не найден."
         )
-        await update.message.reply_text(text, reply_markup=payments_keyboard(language))
+        await update.message.reply_text(text, reply_markup=payments_keyboard(language, True))
         return PAYMENTS_MENU
 
     lines = ["🏢 *Firmalarga to'lovlar hisoboti*\n"] if language == "uz" \
@@ -999,7 +1016,7 @@ async def _show_firms_report(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         lines.append(f"{belgi} *{f['firma']}* — {f['summa']} ({f['holati']})")
 
     await update.message.reply_text(
-        "\n".join(lines), parse_mode="Markdown", reply_markup=payments_keyboard(language)
+        "\n".join(lines), parse_mode="Markdown", reply_markup=payments_keyboard(language, True)
     )
     return PAYMENTS_MENU
 
@@ -1649,6 +1666,358 @@ def appeal_target_keyboard(language: str = "uz"):
 APPEAL_PAROL = "офис"  # Davomat/Tolovlar bilan bir xil umumiy parol
 
 
+# ─── Firma otchyotini yuklash (Admin xlsx → Google Sheets) ─────────────────────
+
+def _parse_report_xlsx_totals(xlsx_bytes: bytes) -> dict:
+    """
+    Aylanma hisoboti xlsx faylidan jami sotuv summasi va oxirgi qoldiq
+    summasini hisoblab qaytaradi.
+
+    Ustun tartibi (1C "Оборот по сети" format):
+      [0]  наименование (dori nomi, har bir blokda birinchi qatorda)
+      [1]  производитель
+      [2]  филиал
+      [3]  ост нач кол-во    [4]  ост нач сумма
+      [5]  покупка кол-во    [6]  покупка сумма
+      [7]  ПРОДАЖА кол-во    [8]  ПРОДАЖА сумма   ← sotuv summasi
+      [9]  перемещение кол   [10] перемещение сум
+      [11] ост кон кол-во    [12] ост кон сумма   ← ostatok summasi
+
+    "по сети" qatorida har bir dori bloki uchun umumiy summa mavjud —
+    shu qator ishlatiladi. Agar "по сети" yo'q bo'lsa, barcha filial
+    qatorlari qo'shib chiqiladi.
+
+    Qaytaradi: {"sotuv": float, "ostatok": float, "products": int}
+    """
+    import openpyxl
+    import io as _io
+
+    wb = openpyxl.load_workbook(_io.BytesIO(xlsx_bytes), data_only=True)
+    SKIP_NAMES = {"по сети", "склад"}
+    total_sotuv = 0.0
+    total_ostatok = 0.0
+    products_found = 0
+
+    for ws in wb.worksheets:
+        rows = list(ws.iter_rows(min_row=1, values_only=True))
+
+        current_product = None
+        net_sotuv = None       # "по сети" sotuv summasi
+        net_ostatok = None     # "по сети" ostatok summasi
+        fil_sotuv = 0.0
+        fil_ostatok = 0.0
+        has_filials = False
+
+        def _flush():
+            nonlocal total_sotuv, total_ostatok, products_found
+            nonlocal net_sotuv, net_ostatok, fil_sotuv, fil_ostatok, has_filials
+            if current_product is None:
+                return
+            products_found += 1
+            if net_sotuv is not None:
+                total_sotuv += net_sotuv
+                total_ostatok += (net_ostatok or 0.0)
+            elif has_filials:
+                total_sotuv += fil_sotuv
+                total_ostatok += fil_ostatok
+            net_sotuv = None
+            net_ostatok = None
+            fil_sotuv = 0.0
+            fil_ostatok = 0.0
+            has_filials = False
+
+        for r in rows:
+            if not r or len(r) < 12:
+                continue
+            filial = r[2]
+            if not filial:
+                continue
+            # r[3] bo'lishi kerak sonli qator (ost_boshi) — sarlavha qatorini o'tkazib yuboramiz
+            if not isinstance(r[3], (int, float)):
+                continue
+
+            sotuv_sum = float(r[8]) if len(r) > 8 and isinstance(r[8], (int, float)) else 0.0
+            ost_sum   = float(r[12]) if len(r) > 12 and isinstance(r[12], (int, float)) else 0.0
+
+            # Yangi dori bloki boshlanishi
+            if r[0]:
+                _flush()
+                current_product = str(r[0]).strip()
+
+            if current_product is None:
+                continue
+
+            filial_lower = str(filial).strip().lower()
+            if filial_lower == "по сети":
+                net_sotuv = sotuv_sum
+                net_ostatok = ost_sum
+            elif filial_lower not in SKIP_NAMES:
+                fil_sotuv += sotuv_sum
+                fil_ostatok += ost_sum
+                has_filials = True
+
+        _flush()
+
+    return {"sotuv": total_sotuv, "ostatok": total_ostatok, "products": products_found}
+
+
+def _find_firm_row_in_tolovlar(caption: str):
+    """
+    "To'lovlar" varag'idan firma qatorini caption orqali topadi.
+    Caption INN (raqam) yoki firma nomi bo'lishi mumkin.
+
+    Qaytaradi: (gspread.Worksheet, row_index_1based, row_dict) yoki None.
+    """
+    import re as _re
+    try:
+        client = _get_client()
+        sh = client.open_by_key(SALARY_SHEET_ID)
+        ws = _find_worksheet_flexible(sh, TOLOVLAR_WS_NAME)
+        all_values = ws.get_all_values()
+        if not all_values:
+            return None
+        header = all_values[0]
+
+        caption_clean = caption.strip()
+        # INN: faqat raqamlardan iborat (9 yoki 12 ta belgi)
+        is_inn = bool(_re.fullmatch(r"\d{9,12}", caption_clean))
+        norm_caption = _norm_firma_nomi(caption_clean)
+
+        inn_col = next((i for i, h in enumerate(header) if "inn" in h.lower()), None)
+        name_col = next(
+            (i for i, h in enumerate(header) if "firma" in h.lower() or "нomi" in h.lower()),
+            None,
+        )
+        if name_col is None:
+            name_col = 0  # birinchi ustun
+
+        for row_i, row in enumerate(all_values[1:], start=2):
+            if is_inn and inn_col is not None:
+                cell_inn = str(row[inn_col]).strip() if inn_col < len(row) else ""
+                if cell_inn == caption_clean:
+                    return ws, row_i, dict(zip(header, row))
+            else:
+                cell_name = str(row[name_col]).strip() if name_col < len(row) else ""
+                if _norm_firma_nomi(cell_name) == norm_caption:
+                    return ws, row_i, dict(zip(header, row))
+
+        # Topilmadi — fuzzy search
+        from thefuzz import process as _fuzz_proc, fuzz as _fuzz
+        names_list = [
+            str(row[name_col]).strip()
+            for row in all_values[1:]
+            if name_col < len(row) and row[name_col]
+        ]
+        best = _fuzz_proc.extractOne(caption_clean, names_list, scorer=_fuzz.token_sort_ratio)
+        if best and best[1] >= 75:
+            matched_name = _norm_firma_nomi(best[0])
+            for row_i, row in enumerate(all_values[1:], start=2):
+                cell_name = str(row[name_col]).strip() if name_col < len(row) else ""
+                if _norm_firma_nomi(cell_name) == matched_name:
+                    return ws, row_i, dict(zip(header, row))
+
+        return None
+    except Exception as e:
+        logger.error(f"[FIRM_REPORT] _find_firm_row_in_tolovlar xato: {e}")
+        return None
+
+
+def _update_firm_totals_in_sheet(ws, row_i: int, sotuv: float, ostatok: float) -> str:
+    """
+    "To'lovlar" varag'ining row_i-qatoriga sotuv va ostatok summasini yozadi.
+    Ustunlar mavjud bo'lmasa, sarlavhaga qo'shiladi.
+
+    Qaytaradi: "ok" yoki xato xabari.
+    """
+    import datetime as _dt
+    try:
+        all_values = ws.get_all_values()
+        header = list(all_values[0]) if all_values else []
+        ncols = ws.col_count
+
+        def _get_or_create_col(col_name: str) -> int:
+            """Ustun indeksini (1-based) qaytaradi; yo'q bo'lsa yaratadi."""
+            nonlocal header, ncols
+            for i, h in enumerate(header):
+                if h.strip().lower() == col_name.strip().lower():
+                    return i + 1
+            # Yangi ustun qo'shish
+            new_col = len(header) + 1
+            header.append(col_name)
+            ws.update_cell(1, new_col, col_name)
+            return new_col
+
+        sotuv_col   = _get_or_create_col("Sotuv (so'm)")
+        ostatok_col = _get_or_create_col("Ostatok (so'm)")
+        date_col    = _get_or_create_col("Yangilangan")
+
+        today = _dt.date.today().strftime("%d.%m.%Y")
+
+        def _fmt(n: float) -> str:
+            return f"{int(n):,}".replace(",", " ")
+
+        ws.update_cell(row_i, sotuv_col,   _fmt(sotuv))
+        ws.update_cell(row_i, ostatok_col, _fmt(ostatok))
+        ws.update_cell(row_i, date_col,    today)
+        return "ok"
+    except Exception as e:
+        logger.error(f"[FIRM_REPORT] _update_firm_totals_in_sheet xato: {e}")
+        return str(e)
+
+
+async def firm_report_enter(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Admin 'Firma otchyotini yuklash' bosganda chaqiriladi."""
+    language = ctx.user_data.get("lang", "uz")
+    back_txt = "⬅️ Назад" if language == "ru" else "⬅️ Orqaga"
+    from telegram import ReplyKeyboardMarkup
+
+    text = (
+        "📥 *Firma otchyotini yuklash*\n\n"
+        "Aylanma hisoboti (.xlsx) faylini yuboring.\n"
+        "Fayl *izohiga* (caption) firma *nomini* yoki *INN raqamini* yozing.\n\n"
+        "Misol izoh: `АВЕНСИС ГРУПП` yoki `123456789`"
+        if language == "uz" else
+        "📥 *Загрузить отчёт фирмы*\n\n"
+        "Отправьте файл оборота (.xlsx).\n"
+        "В *описании* (caption) файла укажите *название* фирмы или *ИНН*.\n\n"
+        "Пример: `АВЕНСИС ГРУПП` или `123456789`"
+    )
+    await update.message.reply_text(
+        text,
+        parse_mode="Markdown",
+        reply_markup=ReplyKeyboardMarkup([[back_txt]], resize_keyboard=True),
+    )
+    return FIRM_REPORT_WAIT
+
+
+async def firm_report_receive_file(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """
+    FIRM_REPORT_WAIT holatida — faylni (xlsx) yoki 'Orqaga' matni qabul qiladi.
+    """
+    language = ctx.user_data.get("lang", "uz")
+    is_admin = update.effective_user.id in ADMIN_IDS
+
+    back_txt = "⬅️ Назад" if language == "ru" else "⬅️ Orqaga"
+    txt = update.message.text.strip() if update.message and update.message.text else ""
+
+    if txt in (back_txt, "⬅️ Orqaga", "⬅️ Назад"):
+        await update.message.reply_text(
+            "📊 *Отчёт va to'lovlar*\n\nBo'limni tanlang:" if language == "uz"
+            else "📊 *Отчёт и оплаты*\n\nВыберите раздел:",
+            parse_mode="Markdown",
+            reply_markup=payments_keyboard(language, is_admin),
+        )
+        return PAYMENTS_MENU
+
+    if not update.message.document:
+        await update.message.reply_text(
+            "❌ Iltimos, .xlsx fayl yuboring (caption da firma nomi yoki INN bilan)."
+            if language == "uz" else
+            "❌ Пожалуйста, отправьте .xlsx файл (с названием фирмы или ИНН в описании)."
+        )
+        return FIRM_REPORT_WAIT
+
+    doc = update.message.document
+    caption = (update.message.caption or "").strip()
+
+    if not caption:
+        await update.message.reply_text(
+            "❌ Fayl izohiga (caption) firma nomini yoki INN ni yozing va qayta yuboring."
+            if language == "uz" else
+            "❌ Укажите название фирмы или ИНН в описании (caption) файла и отправьте снова."
+        )
+        return FIRM_REPORT_WAIT
+
+    if not doc.file_name.lower().endswith(".xlsx"):
+        await update.message.reply_text(
+            "❌ Faqat .xlsx format qabul qilinadi." if language == "uz"
+            else "❌ Принимается только формат .xlsx."
+        )
+        return FIRM_REPORT_WAIT
+
+    msg = await update.message.reply_text(
+        "⏳ Fayl tahlil qilinmoqda..." if language == "uz" else "⏳ Анализирую файл..."
+    )
+
+    try:
+        # 1) Faylni yuklab olish
+        file_obj = await ctx.bot.get_file(doc.file_id)
+        xlsx_bytes = bytes(await file_obj.download_as_bytearray())
+
+        # 2) Sotuv va ostatok summalarini hisoblash
+        totals = await run_read(_parse_report_xlsx_totals, xlsx_bytes)
+        sotuv   = totals["sotuv"]
+        ostatok = totals["ostatok"]
+        n_prod  = totals["products"]
+
+        if n_prod == 0:
+            await msg.edit_text(
+                "❌ Fayl ichida hech qanday ma'lumot topilmadi. Format to'g'riligini tekshiring."
+                if language == "uz" else
+                "❌ В файле не найдено данных. Проверьте формат."
+            )
+            return FIRM_REPORT_WAIT
+
+        # 3) Firmani Google Sheets dan topish
+        result = await run_read(_find_firm_row_in_tolovlar, caption)
+        if result is None:
+            def _fmt(n): return f"{int(n):,}".replace(",", " ")
+            await msg.edit_text(
+                f"⚠️ *{caption}* nomi/INN bo'yicha firma topilmadi.\n\n"
+                f"📊 Hisoblangan natijalar:\n"
+                f"  Sotuv: *{_fmt(sotuv)} so'm*\n"
+                f"  Ostatok: *{_fmt(ostatok)} so'm*\n\n"
+                f"Firma nomini To'lovlar varag'ida tekshiring."
+                if language == "uz" else
+                f"⚠️ Фирма *{caption}* не найдена (по названию/ИНН).\n\n"
+                f"📊 Рассчитанные данные:\n"
+                f"  Продажи: *{_fmt(sotuv)} сум*\n"
+                f"  Остаток: *{_fmt(ostatok)} сум*\n\n"
+                f"Проверьте название фирмы в листе «To'lovlar».",
+                parse_mode="Markdown",
+                reply_markup=payments_keyboard(language, True),
+            )
+            return PAYMENTS_MENU
+
+        ws, row_i, row_dict = result
+        firma_nomi = row_dict.get("Firma nomi") or caption
+
+        # 4) Google Sheets ga yozish
+        err = await run_read(_update_firm_totals_in_sheet, ws, row_i, sotuv, ostatok)
+
+        def _fmt(n): return f"{int(n):,}".replace(",", " ")
+
+        if err == "ok":
+            lines = [
+                f"✅ *{firma_nomi}* — yangilandi!",
+                "",
+                f"📦 Dorilar soni: {n_prod} ta" if language == "uz"
+                else f"📦 Позиций: {n_prod}",
+                f"💰 Sotuv: *{_fmt(sotuv)} so'm*" if language == "uz"
+                else f"💰 Продажи: *{_fmt(sotuv)} сум*",
+                f"📦 Ostatok: *{_fmt(ostatok)} so'm*" if language == "uz"
+                else f"📦 Остаток: *{_fmt(ostatok)} сум*",
+            ]
+            await msg.edit_text("\n".join(lines), parse_mode="Markdown",
+                                reply_markup=payments_keyboard(language, True))
+        else:
+            await msg.edit_text(
+                f"⚠️ Firma topildi lekin yozishda xato: {err}"
+                if language == "uz" else
+                f"⚠️ Фирма найдена, но ошибка при записи: {err}",
+                reply_markup=payments_keyboard(language, True),
+            )
+
+    except Exception as e:
+        logger.error(f"[FIRM_REPORT] firm_report_receive_file xato: {e}")
+        await msg.edit_text(
+            f"❌ Xato yuz berdi: {e}" if language == "uz" else f"❌ Ошибка: {e}",
+            reply_markup=payments_keyboard(language, True),
+        )
+
+    return PAYMENTS_MENU
+
+
 async def appeal_menu_enter(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """'📩 Murojaat' bosilganda — faqat admin uchun, parol bilan."""
     from telegram import ReplyKeyboardMarkup
@@ -2262,7 +2631,7 @@ async def admin_firm_lookup_handler(update: Update, ctx: ContextTypes.DEFAULT_TY
             "📊 *Отчёт va to'lovlar*\n\nBo'limni tanlang:" if language == "uz"
             else "📊 *Отчёт и оплаты*\n\nВыберите раздел:",
             parse_mode="Markdown",
-            reply_markup=payments_keyboard(language),
+            reply_markup=payments_keyboard(language, True),
         )
         return PAYMENTS_MENU
 
@@ -2326,6 +2695,10 @@ def get_sal_states():
         ],
         ADMIN_FIRM_LOOKUP: [
             MessageHandler(filters.TEXT & ~filters.COMMAND, admin_firm_lookup_handler),
+        ],
+        FIRM_REPORT_WAIT: [
+            MessageHandler(filters.Document.ALL, firm_report_receive_file),
+            MessageHandler(filters.TEXT & ~filters.COMMAND, firm_report_receive_file),
         ],
         APPEAL_MENU: [
             MessageHandler(filters.TEXT & ~filters.COMMAND, appeal_menu_handler),
