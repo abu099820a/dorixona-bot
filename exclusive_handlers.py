@@ -176,34 +176,45 @@ def classify(sold: int, ost_boshi, peremeshenie) -> str:
 
 def _parse_turnover_workbook(xlsx_bytes: bytes):
     """
-    MUHIM (2026-08, ko'p dorili fayllar uchun qo'shildi): bitta firmaning
-    bir nechta dorisi bo'lsa, aylanma hisobot BITTA xlsx faylda, lekin har
-    bir dori ALOHIDA varaqda (sheet) keladi (mijoz tasdiqlagan format).
-    Avval kod faqat wb.worksheets[0] (birinchi varaq)ni o'qirdi — agar
-    faylda 2+ varaq bo'lsa, qolgan dorilar UMUMAN e'tiborga olinmasdi.
+    MUHIM (2026-08, ko'p dorili fayllar uchun qo'shildi va keyin
+    TUZATILDI): mijoz tasdiqlagan haqiqiy format — bir firmaning bir
+    nechta dorisi BITTA VARAQ (sheet) ICHIDA, TIK (vertikal) ravishda
+    ketma-ket keladi: birinchi dorining hisoboti tugagach, KEYINGI
+    QATORDAN darhol ikkinchi dorining hisoboti boshlanadi (alohida
+    varaqlarda EMAS). Bu — avvalgi taxmindan (har dori alohida varaqda)
+    FARQLI ekani mijoz tomonidan aniq aytildi.
 
-    Endi BARCHA varaqlar aylanib chiqiladi, har biri alohida dori sifatida
-    parse qilinadi. Ma'lumotsiz (bo'sh, sarlavha-only) varaqlar avtomatik
-    o'tkazib yuboriladi. Qaytaradi: [(product_name, data_rows), ...] —
-    ro'yxat, har bir element bitta varaq/doriga tegishli.
+    Shu sababli _parse_turnover_sheet() endi BITTA varaq ichida ham
+    bir nechta "blok" (dori)ni aniqlaydi: har safar 1-ustunda (r[0])
+    YANGI, bo'sh bo'lmagan qiymat uchraganda — bu YANGI dori boshlangani
+    degani (chunki dori nomi odatda faqat shu dorining birinchi qatorida
+    yozilib, qolgan qatorlarida bo'sh qoladi — xuddi merged cell kabi).
+    Shu qiymatgacha bo'lgan qatorlar oldingi doriga, undan keyingilari esa
+    yangi doriga tegishli deb hisoblanadi.
+
+    Bir vaqtning o'zida BIR NECHTA varaq bo'lishi ham (ehtiyot chorasi
+    sifatida) qo'llab-quvvatlanadi — har bir varaq ham xuddi shunday
+    ko'p-blokli tekshiriladi. Qaytaradi: [(product_name, data_rows), ...]
     """
     wb = openpyxl.load_workbook(io.BytesIO(xlsx_bytes), data_only=True)
     results = []
     for ws in wb.worksheets:
-        product_name, data_rows = _parse_turnover_sheet(ws)
-        if data_rows:
-            results.append((product_name, data_rows))
+        for product_name, data_rows in _parse_turnover_sheet(ws):
+            if data_rows:
+                results.append((product_name, data_rows))
     return results
 
 
 def _parse_turnover_sheet(ws):
-    """Bitta varaqdan (bir doriga tegishli) filiallar bo'yicha qatorlarni o'qiydi."""
+    """
+    Bitta varaqni o'qiydi va ICHIDAGI bir yoki bir nechta dori blokini
+    ajratib qaytaradi: [(product_name, data_rows), ...] (tartib fayldagi
+    ketma-ketlik bo'yicha saqlanadi).
+    """
     rows = list(ws.iter_rows(min_row=1, values_only=True))
-    # Birinchi ustundagi qiymat dori nomi bo'lgan qatorni topamiz (2-3 qatorlarda
-    # sarlavha bo'lishi mumkin, shuning uchun filial nomi bo'sh bo'lmagan va
-    # "по сети"/"склад" bo'lmagan birinchi qatordan boshlaymiz).
-    product_name = None
-    data_rows = []
+    current_product = None
+    blocks = {}       # product_name -> data_rows (ro'yxat)
+    order = []         # birinchi uchragan tartibda product_name'lar
     for r in rows:
         if r is None or len(r) < 12:
             continue
@@ -213,22 +224,31 @@ def _parse_turnover_sheet(ws):
         ost_boshi, sotuv, peremeshenie, ost_oxiri = r[3] or 0, r[7] or 0, r[9] or 0, r[11] or 0
         # Faqat RAQAMLI qiymatga ega qatorlar haqiqiy ma'lumot qatori
         # hisoblanadi — shu tekshiruv orqali sarlavha qatorlarini (ustun
-        # nomlari matn bo'lgani uchun) chetlab o'tamiz. MUHIM: mahsulot
-        # nomini ('product_name') ham FAQAT shu tasdiqlangan qatordan
-        # olamiz — aks holda 1-qatordagi ustun sarlavhasi ("наименование")
-        # xato ravishda mahsulot nomi sifatida qabul qilinib qolardi.
+        # nomlari matn bo'lgani uchun) chetlab o'tamiz.
         if not isinstance(ost_boshi, (int, float)):
             continue
-        if product_name is None and r[0]:
-            product_name = r[0]
+        # 1-ustunda YANGI (bo'sh bo'lmagan) qiymat — YANGI dori bloki
+        # boshlanganini bildiradi. Bo'sh bo'lsa — oldingi dori davom etadi.
+        if r[0]:
+            current_product = str(r[0]).strip()
+            if current_product and current_product not in blocks:
+                blocks[current_product] = []
+                order.append(current_product)
+        if current_product is None:
+            # Hali hech qanday dori nomi uchramagan holda ma'lumot qatori
+            # kelib qolsa (kutilmagan holat) — bu qatorni e'tiborsiz qoldiramiz,
+            # chunki uni qaysi doriga tegishli qilib bo'lmaydi.
+            continue
         if filial in SKIP_FILIAL_NAMES:
             continue
-        data_rows.append({
+        blocks[current_product].append({
             "filial_raw": str(filial).strip(),
             "ost_boshi": ost_boshi, "sotuv": sotuv,
             "peremeshenie": peremeshenie, "ost_oxiri": ost_oxiri,
         })
-    return product_name or "Nomalum dori", data_rows
+    if not order:
+        return []
+    return [(name, blocks[name]) for name in order]
 
 
 def _norm_name(text) -> str:
@@ -528,7 +548,7 @@ async def eks_receive_xlsx(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"🎯 {radius} km radiusda topilgan, dori HALI YO'Q nomzod aptekalar: *{n_cand}*",
         ]
     else:
-        lines = [f"✅ *{len(products)} ta dori* tahlili tayyor (fayldagi {len(products)} ta varaq bo'yicha)", ""]
+        lines = [f"✅ *{len(products)} ta dori* tahlili tayyor", ""]
         total_cand = 0
         for p in products:
             n_matched, n_unmatched = len(p["matched"]), len(p["unmatched"])
