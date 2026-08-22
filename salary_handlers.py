@@ -1960,8 +1960,8 @@ async def firm_report_receive_file(update: Update, ctx: ContextTypes.DEFAULT_TYP
 
         # 3) Firmani Google Sheets dan topish
         result = await run_read(_find_firm_row_in_tolovlar, caption)
+        def _fmt(n): return f"{int(n):,}".replace(",", " ")
         if result is None:
-            def _fmt(n): return f"{int(n):,}".replace(",", " ")
             await msg.edit_text(
                 f"⚠️ *{caption}* nomi/INN bo'yicha firma topilmadi.\n\n"
                 f"📊 Hisoblangan natijalar:\n"
@@ -1975,6 +1975,9 @@ async def firm_report_receive_file(update: Update, ctx: ContextTypes.DEFAULT_TYP
                 f"  Остаток: *{_fmt(ostatok)} сум*\n\n"
                 f"Проверьте название фирмы в листе «To'lovlar».",
                 parse_mode="Markdown",
+            )
+            await update.message.reply_text(
+                "📊 Bo'limni tanlang:" if language == "uz" else "📊 Выберите раздел:",
                 reply_markup=payments_keyboard(language, True),
             )
             return PAYMENTS_MENU
@@ -1984,8 +1987,6 @@ async def firm_report_receive_file(update: Update, ctx: ContextTypes.DEFAULT_TYP
 
         # 4) Google Sheets ga yozish
         err = await run_read(_update_firm_totals_in_sheet, ws, row_i, sotuv, ostatok)
-
-        def _fmt(n): return f"{int(n):,}".replace(",", " ")
 
         if err == "ok":
             lines = [
@@ -1998,20 +1999,26 @@ async def firm_report_receive_file(update: Update, ctx: ContextTypes.DEFAULT_TYP
                 f"📦 Ostatok: *{_fmt(ostatok)} so'm*" if language == "uz"
                 else f"📦 Остаток: *{_fmt(ostatok)} сум*",
             ]
-            await msg.edit_text("\n".join(lines), parse_mode="Markdown",
-                                reply_markup=payments_keyboard(language, True))
+            await msg.edit_text("\n".join(lines), parse_mode="Markdown")
         else:
             await msg.edit_text(
                 f"⚠️ Firma topildi lekin yozishda xato: {err}"
                 if language == "uz" else
                 f"⚠️ Фирма найдена, но ошибка при записи: {err}",
-                reply_markup=payments_keyboard(language, True),
             )
+
+        await update.message.reply_text(
+            "📊 Bo'limni tanlang:" if language == "uz" else "📊 Выберите раздел:",
+            reply_markup=payments_keyboard(language, True),
+        )
 
     except Exception as e:
         logger.error(f"[FIRM_REPORT] firm_report_receive_file xato: {e}")
         await msg.edit_text(
             f"❌ Xato yuz berdi: {e}" if language == "uz" else f"❌ Ошибка: {e}",
+        )
+        await update.message.reply_text(
+            "📊 Bo'limni tanlang:" if language == "uz" else "📊 Выберите раздел:",
             reply_markup=payments_keyboard(language, True),
         )
 
