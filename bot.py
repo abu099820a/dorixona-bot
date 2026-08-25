@@ -577,8 +577,9 @@ async def firm_reports_menu_handler(update: Update, ctx: ContextTypes.DEFAULT_TY
         return FIRM_REPORTS_MENU
 
     elif is_admin and txt == T[language]["upload_report_btn"]:
-        # Admin xlsx fayl yuklaydi
+        # Admin xlsx fayl yuklaydi — yangi menyudan chaqirilganini belgilaymiz
         from salary_handlers import firm_report_enter
+        ctx.user_data["firm_upload_from_new_menu"] = True
         return await firm_report_enter(update, ctx)
 
     # Tanilmagan matn

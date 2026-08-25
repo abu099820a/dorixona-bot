@@ -2323,6 +2323,14 @@ async def firm_report_receive_file(update: Update, ctx: ContextTypes.DEFAULT_TYP
     txt = update.message.text.strip() if update.message and update.message.text else ""
 
     if txt in (back_txt, "⬅️ Orqaga", "⬅️ Назад"):
+        from_new = ctx.user_data.pop("firm_upload_from_new_menu", False)
+        if from_new:
+            from bot import firm_reports_keyboard, FIRM_REPORTS_MENU
+            await update.message.reply_text(
+                "📊 Bo'limni tanlang:" if language == "uz" else "📊 Выберите раздел:",
+                reply_markup=firm_reports_keyboard(language, is_admin),
+            )
+            return FIRM_REPORTS_MENU
         await update.message.reply_text(
             "📊 *Отчёт va to'lovlar*\n\nBo'limni tanlang:" if language == "uz"
             else "📊 *Отчёт и оплаты*\n\nВыберите раздел:",
@@ -2401,6 +2409,14 @@ async def firm_report_receive_file(update: Update, ctx: ContextTypes.DEFAULT_TYP
                 f"Проверьте название фирмы в листе «To'lovlar».",
                 parse_mode="Markdown",
             )
+            from_new = ctx.user_data.pop("firm_upload_from_new_menu", False)
+            if from_new:
+                from bot import firm_reports_keyboard, FIRM_REPORTS_MENU
+                await update.message.reply_text(
+                    "📊 Bo'limni tanlang:" if language == "uz" else "📊 Выберите раздел:",
+                    reply_markup=firm_reports_keyboard(language, True),
+                )
+                return FIRM_REPORTS_MENU
             await update.message.reply_text(
                 "📊 Bo'limni tanlang:" if language == "uz" else "📊 Выберите раздел:",
                 reply_markup=payments_keyboard(language, True),
@@ -2446,6 +2462,14 @@ async def firm_report_receive_file(update: Update, ctx: ContextTypes.DEFAULT_TYP
                 f"⚠️ Фирма найдена, но ошибка при записи: {err}",
             )
 
+        from_new = ctx.user_data.pop("firm_upload_from_new_menu", False)
+        if from_new:
+            from bot import firm_reports_keyboard, FIRM_REPORTS_MENU
+            await update.message.reply_text(
+                "📊 Bo'limni tanlang:" if language == "uz" else "📊 Выберите раздел:",
+                reply_markup=firm_reports_keyboard(language, True),
+            )
+            return FIRM_REPORTS_MENU
         await update.message.reply_text(
             "📊 Bo'limni tanlang:" if language == "uz" else "📊 Выберите раздел:",
             reply_markup=payments_keyboard(language, True),
@@ -2456,6 +2480,14 @@ async def firm_report_receive_file(update: Update, ctx: ContextTypes.DEFAULT_TYP
         await msg.edit_text(
             f"❌ Xato yuz berdi: {e}" if language == "uz" else f"❌ Ошибка: {e}",
         )
+        from_new = ctx.user_data.pop("firm_upload_from_new_menu", False)
+        if from_new:
+            from bot import firm_reports_keyboard, FIRM_REPORTS_MENU
+            await update.message.reply_text(
+                "📊 Bo'limni tanlang:" if language == "uz" else "📊 Выберите раздел:",
+                reply_markup=firm_reports_keyboard(language, True),
+            )
+            return FIRM_REPORTS_MENU
         await update.message.reply_text(
             "📊 Bo'limni tanlang:" if language == "uz" else "📊 Выберите раздел:",
             reply_markup=payments_keyboard(language, True),
