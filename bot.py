@@ -45,6 +45,8 @@ OFFICE_LON = 69.272889
 LANG, MENU, SEARCH_MENU, SEARCH_INPUT, LOCATION_WAIT, \
 SELECT_RESULT, SELECT_REGION, SELECT_DISTRICT, LIST_PAGE, ADMIN_PANEL = range(10)
 
+FIRM_REPORTS_MENU = 519  # Yangi "Hisobotlar" submenyusi (firma vakillari + admin)
+
 PAGE_SIZE = 10
 
 VILOYATLAR = {
@@ -118,6 +120,8 @@ T = {
         "eksklyuziv_btn": "📦 Eksklyuziv dori",
         "admin_panel_btn": "⚙️ Admin panel",
         "admin_panel_menu": "⚙️ *Admin panel* — bo'limni tanlang:",
+        "get_report_btn": "📊 Hisobot olish",
+        "upload_report_btn": "📥 Hisobot yuklash",
         "back": "⬅️ Orqaga",
         "enter_number": "🔢 Filial raqamini kiriting:\n_(masalan: 1, 5, 23)_",
         "enter_name": "🔤 Dorixona nomini kiriting:",
@@ -162,6 +166,8 @@ T = {
         "eksklyuziv_btn": "📦 Эксклюзив товар",
         "admin_panel_btn": "⚙️ Админ-панель",
         "admin_panel_menu": "⚙️ *Админ-панель* — выберите раздел:",
+        "get_report_btn": "📊 Получить отчёт",
+        "upload_report_btn": "📥 Загрузить отчёт",
         "back": "⬅️ Назад",
         "enter_number": "🔢 Введите номер филиала:\n_(например: 1, 5, 23)_",
         "enter_name": "🔤 Введите название аптеки:",
@@ -332,27 +338,20 @@ def haversine(lat1, lon1, lat2, lon2):
 def main_keyboard(language, is_admin=False):
     # MUHIM: is_admin default False — bu funksiya boshqa fayllarda
     # (salary_handlers.py, attendance_handlers.py, registration_handlers.py)
-    # 30+ joyda faqat main_keyboard(til) deb (bitta argument bilan)
-    # chaqiriladi. Default qiymat shu chaqiruvlarning birontasini
-    # o'zgartirmasdan, orqaga mos (backward-compatible) ishlashini
-    # ta'minlaydi.
+    # ko'p joyda faqat main_keyboard(til) deb chaqiriladi. Default qiymat
+    # shu chaqiruvlarning birontasini o'zgartirmasdan ishlashini ta'minlaydi.
     #
-    # MUHIM (2026-08): mijoz talabiga ko'ra, Davomat / Ro'yxatdan o'tish /
-    # Hisobotlar va to'lovlar / Murojaat / Eksklyuziv dori tugmalari ENDI
-    # oddiy foydalanuvchilarga UMUMAN ko'rinmaydi — faqat ADMIN_IDS
-    # ichidagi foydalanuvchilarga (is_admin=True bo'lganda) ko'rinadi, va
-    # ular endi ALOHIDA-ALOHIDA tugma sifatida emas, balki bitta "⚙️ Admin
-    # panel" tugmasi ichiga yig'ilgan (bosilganda admin_panel_keyboard()
-    # ochiladi — pastga qarang). Oddiy foydalanuvchi uchun menyuda faqat:
-    # qidiruv, chat, kanal va til tugmalari qoladi. Bu — tugmalarni
-    # yashirish bilan bir qatorda, menu_handler() ichida ham is_admin
-    # tekshiruvi qo'shilgan (pastga qarang) — shunda oddiy foydalanuvchi
-    # eski xabar tarixidan shu tugma matnini qo'lda yozib yuborsa ham,
-    # funksiyaga kira olmaydi.
+    # "📊 Hisobotlar va to'lovlar" tugmasi HAMMA foydalanuvchilarga
+    # ko'rinadi (2026-08 yashirish bekor qilindi — postawchiklar uchun ham
+    # kerak). Bosilganda:
+    #   - Admin       → admin hisobotlar menyusi (REPORTS_MENU)
+    #   - Postawchik  → o'z firma hisoboti (_send_firm_direct_report)
+    #   - Oddiy user  → "ro'yxatdan o'tmagan" xabari
     rows = [
         [T[language]["search_btn"]],
+        [T[language]["reports_btn"]],
+        [T[language]["chat_btn"], T[language]["channel_btn"]],
     ]
-    rows.append([T[language]["chat_btn"], T[language]["channel_btn"]])
     if is_admin:
         rows.append([T[language]["admin_panel_btn"]])
     rows.append([T[language]["lang_btn"]])
@@ -371,6 +370,21 @@ def admin_panel_keyboard(language):
         [T[language]["eksklyuziv_btn"]],
         [T[language]["back"]],
     ], resize_keyboard=True)
+
+def firm_reports_keyboard(language, is_admin=False):
+    """
+    "📊 Hisobotlar va to'lovlar" tugmasi bosilganda ochiladigan kichik
+    submenyu — firma vakillari va admin uchun.
+    - "📊 Hisobot olish"   → hamma ko'radi (postawchiklar + admin)
+    - "📥 Hisobot yuklash" → faqat admin ko'radi
+    - "⬅️ Orqaga"         → asosiy menyuga qaytish
+    """
+    rows = [[T[language]["get_report_btn"]]]
+    if is_admin:
+        rows.append([T[language]["upload_report_btn"]])
+    rows.append([T[language]["back"]])
+    return ReplyKeyboardMarkup(rows, resize_keyboard=True)
+
 
 def search_keyboard(language):
     return ReplyKeyboardMarkup([
@@ -499,6 +513,16 @@ async def menu_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                                          reply_markup=admin_panel_keyboard(language), parse_mode="Markdown")
         return ADMIN_PANEL
 
+    elif txt == T[language]["reports_btn"]:
+        # Yangi firma hisobotlari submenyusini ochish
+        await update.message.reply_text(
+            "📊 *Hisobotlar*\n\nBo'limni tanlang:" if language == "uz"
+            else "📊 *Отчёты*\n\nВыберите раздел:",
+            parse_mode="Markdown",
+            reply_markup=firm_reports_keyboard(language, is_admin),
+        )
+        return FIRM_REPORTS_MENU
+
     elif txt == T[language]["chat_btn"]:
         kb = InlineKeyboardMarkup([[InlineKeyboardButton("💬 Chat", url=TELEGRAM_CHAT_LINK)]])
         await update.message.reply_text("💬 Telegram chatimizga xush kelibsiz!" if language == "uz" else "💬 Добро пожаловать в наш Telegram чат!", reply_markup=kb)
@@ -510,6 +534,60 @@ async def menu_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return MENU
 
     return MENU
+
+async def firm_reports_menu_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """
+    "📊 Hisobotlar va to'lovlar" tugmasi ochgan submenyusini boshqaradi.
+    - "📊 Hisobot olish"   → postawchik hisoboti (yoki "murojaat qiling" xabari)
+    - "📥 Hisobot yuklash" → admin: xlsx fayl yuklash (firm_report_enter)
+    - "⬅️ Orqaga"         → asosiy menyuga qaytish
+    """
+    language = get_lang(ctx)
+    is_admin = update.effective_user.id in ADMIN_IDS
+    txt = (update.message.text or "").strip()
+
+    if txt == T[language]["back"]:
+        await update.message.reply_text(
+            T[language]["menu"],
+            parse_mode="Markdown",
+            reply_markup=main_keyboard(language, is_admin),
+        )
+        return MENU
+
+    elif txt == T[language]["get_report_btn"]:
+        # Firma vakili hisobot oladi; oddiy user → xabar
+        from salary_handlers import get_firma_file_by_telegram_id, _send_firm_direct_report
+        from attendance import run_read
+        try:
+            firm_info = await run_read(get_firma_file_by_telegram_id, update.effective_user.id)
+        except Exception as e:
+            print(f"[FIRM REPORT] firm_reports_menu_handler xato: {e}")
+            firm_info = None
+        if firm_info:
+            return await _send_firm_direct_report(update, ctx, firm_info, from_menu=True)
+        # Ro'yxatdan o'tmagan foydalanuvchi
+        await update.message.reply_text(
+            "❌ Siz firma sifatida ro'yxatdan o'tmagansiz.\n\n"
+            "📞 Hisobot olish uchun administratsiyaga murojaat qiling."
+            if language == "uz" else
+            "❌ Вы не зарегистрированы как представитель фирмы.\n\n"
+            "📞 Обратитесь к администрации для получения отчёта.",
+            reply_markup=firm_reports_keyboard(language, is_admin),
+        )
+        return FIRM_REPORTS_MENU
+
+    elif is_admin and txt == T[language]["upload_report_btn"]:
+        # Admin xlsx fayl yuklaydi
+        from salary_handlers import firm_report_enter
+        return await firm_report_enter(update, ctx)
+
+    # Tanilmagan matn
+    await update.message.reply_text(
+        "📊 Bo'limni tanlang:" if language == "uz" else "📊 Выберите раздел:",
+        reply_markup=firm_reports_keyboard(language, is_admin),
+    )
+    return FIRM_REPORTS_MENU
+
 
 async def admin_panel_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """
@@ -984,6 +1062,7 @@ def main():
             LANG: [CallbackQueryHandler(set_lang, pattern="^lang_")],
             MENU: [MessageHandler(filters.TEXT & ~filters.COMMAND, menu_handler)],
             ADMIN_PANEL: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_panel_handler)],
+            FIRM_REPORTS_MENU: [MessageHandler(filters.TEXT & ~filters.COMMAND, firm_reports_menu_handler)],
             REPORTS_MENU: [MessageHandler(filters.TEXT & ~filters.COMMAND, reports_menu_handler)],
             SEARCH_MENU: [MessageHandler(filters.TEXT & ~filters.COMMAND, search_menu_handler)],
             SEARCH_INPUT: [MessageHandler(filters.TEXT & ~filters.COMMAND, search_handler)],

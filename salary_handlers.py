@@ -1582,12 +1582,16 @@ async def firm_zip_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 # ─── Firma o'zi hisobotini olishi (self-service) ───────────────────────────────
 
 async def _send_firm_direct_report(
-    update: Update, ctx: ContextTypes.DEFAULT_TYPE, firm_info: dict
+    update: Update, ctx: ContextTypes.DEFAULT_TYPE, firm_info: dict, from_menu: bool = False
 ) -> int:
     """
     Firma vakili "Отчёт va to'lovlar" bosganda — faylini va hisobotini yuboradi.
     Oylik ma'lumotlar mavjud bo'lsa, oy tanlash klaviaturasini ko'rsatadi.
-    Qaytaradi: FIRM_MONTH_SELECT (tanlash kutilsa) yoki REPORTS_MENU.
+
+    from_menu=True bo'lsa (asosiy menyudan chaqirilganda):
+        - 0/1 oylik: ma'lumotni ko'rsatib MENU ga qaytadi
+        - 2+ oylik: oy tanlash holatiga o'tadi, "from_menu" belgisini saqlaydi
+    Qaytaradi: FIRM_MONTH_SELECT (tanlash kutilsa), yoki MENU / REPORTS_MENU.
     """
     from telegram import ReplyKeyboardMarkup, ReplyKeyboardRemove
     language    = ctx.user_data.get("lang", "uz")
@@ -1662,6 +1666,15 @@ async def _send_firm_direct_report(
                 else "📊 Отчёт по продажам ещё не загружен."
             )
         await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+        if from_menu:
+            from bot import main_keyboard, T, MENU
+            is_admin = update.effective_user.id in ADMIN_IDS
+            await update.message.reply_text(
+                T[language]["menu"],
+                parse_mode="Markdown",
+                reply_markup=main_keyboard(language, is_admin),
+            )
+            return MENU
         return REPORTS_MENU
 
     elif len(available_months) == 1:
@@ -1686,6 +1699,15 @@ async def _send_firm_direct_report(
         else:
             lines.append("  ❌ Ma'lumot topilmadi." if language == "uz" else "  ❌ Данные не найдены.")
         await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+        if from_menu:
+            from bot import main_keyboard, T, MENU
+            is_admin = update.effective_user.id in ADMIN_IDS
+            await update.message.reply_text(
+                T[language]["menu"],
+                parse_mode="Markdown",
+                reply_markup=main_keyboard(language, is_admin),
+            )
+            return MENU
         return REPORTS_MENU
 
     else:
@@ -1713,6 +1735,8 @@ async def _send_firm_direct_report(
         ctx.user_data["report_firma_nomi"]    = firma_nomi
         ctx.user_data["report_inn"]           = inn_val
         ctx.user_data["report_available_months"] = available_months
+        if from_menu:
+            ctx.user_data["firm_report_from_menu"] = True
         return FIRM_MONTH_SELECT
 
 
@@ -1886,9 +1910,16 @@ def _parse_report_xlsx_totals(xlsx_bytes: bytes) -> dict:
 
             filial_lower = str(filial).strip().lower()
             if filial_lower == "по сети":
-                blk["net_sotuv"]   = sotuv_sum
-                blk["net_priod"]   = priod_sum
-                blk["net_ostatok"] = ostatok_sum
+                # Bir xil dori bir nechta поставщикda bo'lishi mumkin —
+                # har birining "по сети" qatorini QUSHIB BORISH kerak (ustiga yozmaslik)
+                if blk["net_sotuv"] is None:
+                    blk["net_sotuv"]   = sotuv_sum
+                    blk["net_priod"]   = priod_sum
+                    blk["net_ostatok"] = ostatok_sum
+                else:
+                    blk["net_sotuv"]   += sotuv_sum
+                    blk["net_priod"]   += priod_sum
+                    blk["net_ostatok"] += ostatok_sum
             elif filial_lower not in SKIP_NAMES:
                 blk["fil_sotuv"]   += sotuv_sum
                 blk["fil_priod"]   += priod_sum
@@ -3098,6 +3129,15 @@ async def firm_month_select_handler(update: Update, ctx: ContextTypes.DEFAULT_TY
     is_admin = update.effective_user.id in ADMIN_IDS
 
     if txt in (back_txt, "⬅️ Orqaga", "⬅️ Назад"):
+        from_menu = ctx.user_data.pop("firm_report_from_menu", False)
+        if from_menu:
+            from bot import main_keyboard, T, MENU
+            await update.message.reply_text(
+                T[language]["menu"],
+                parse_mode="Markdown",
+                reply_markup=main_keyboard(language, is_admin),
+            )
+            return MENU
         await update.message.reply_text(
             "📊 Bo'limni tanlang:" if language == "uz" else "📊 Выберите раздел:",
             reply_markup=payments_keyboard(language, is_admin),
@@ -3157,6 +3197,15 @@ async def firm_month_select_handler(update: Update, ctx: ContextTypes.DEFAULT_TY
         logger.error(f"[MONTHLY] firm_month_select_handler xato: {e}")
         await msg.edit_text(f"❌ Xato: {e}" if language == "uz" else f"❌ Ошибка: {e}")
 
+    from_menu = ctx.user_data.pop("firm_report_from_menu", False)
+    if from_menu:
+        from bot import main_keyboard, T, MENU
+        await update.message.reply_text(
+            T[language]["menu"],
+            parse_mode="Markdown",
+            reply_markup=main_keyboard(language, is_admin),
+        )
+        return MENU
     await update.message.reply_text(
         "📊 Bo'limni tanlang:" if language == "uz" else "📊 Выберите раздел:",
         reply_markup=payments_keyboard(language, is_admin),
