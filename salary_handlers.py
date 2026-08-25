@@ -1829,6 +1829,20 @@ def _parse_report_xlsx_totals(xlsx_bytes: bytes) -> dict:
         if priod_col   is None: priod_col   = 6
         if ostatok_col is None: ostatok_col = 16
 
+        # ── Filial ustunini sarlavhadan avtomatik aniqlash ─────────────────
+        # Ba'zi fayllarda "поставщик" ustuni qo'shimcha kiritilgan bo'ladi,
+        # bu holda "филиал" 3-indeksga (yoki undan keyinga) siljiydi.
+        filial_col = next(
+            (i for i, v in enumerate(h1) if "филиал" in v),
+            None,
+        )
+        if filial_col is None:
+            filial_col = next(
+                (i for i, v in enumerate(h2) if "филиал" in v),
+                2,          # standart: наимен(0), произв(1), филиал(2)
+            )
+        numeric_check_col = filial_col + 1  # filialdan keyingi ustun (кол-во) raqam bo'lishi kerak
+
         # ── Ma'lumot qatorlarini qayta ishlash (row 3 dan) ─────────────────
         # "склад" yig'ib olmaymiz — u tarmoq emas, ichki sklad
         # "по сети" — tarmoq bo'yicha umumiy qator, USTUVOR manba
@@ -1846,12 +1860,13 @@ def _parse_report_xlsx_totals(xlsx_bytes: bytes) -> dict:
             return drug_blocks[name]
 
         for r in rows[2:]:                  # sarlavha 2 qatorini o'tkazib yuborish
-            if not r or len(r) < 4:
+            if not r or len(r) <= filial_col:
                 continue
-            filial = r[2] if len(r) > 2 else None
+            filial = r[filial_col]
             if not filial:
                 continue
-            if not isinstance(r[3], (int, float)):
+            num_val = r[numeric_check_col] if numeric_check_col < len(r) else None
+            if not isinstance(num_val, (int, float)):
                 continue                     # sarlavha/bo'sh qator
 
             if r[0]:
