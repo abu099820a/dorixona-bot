@@ -64,6 +64,7 @@ APPEAL_FIRM_NAMES = 514
 APPEAL_DORIXONA_NAMES = 515
 APPEAL_PASSWORD_STATE = 516
 FIRM_REPORT_WAIT = 517   # Admin xlsx fayl (firma otchyoti) kutish holati
+FIRM_MONTH_SELECT = 518  # Postawchik oy tanlash holati
 
 
 # ─── Google Sheets ────────────────────────────────────────────────────────────
@@ -801,15 +802,17 @@ def _find_worksheet_flexible(sh, target_name: str):
 
 
 def get_firm_summa(firma_nomi: str) -> dict | None:
-    """SALARY_SHEET_ID ichidagi "To'lovlar" varag'idan berilgan firma uchun ma'lumotlarini topadi."""
+    """
+    SALARY_SHEET_ID ichidagi "To'lovlar" varag'idan berilgan firma uchun
+    to'liq ma'lumotni qaytaradi: shartnoma, INN, to'lov holati va
+    hisobot (sotuv, priod, ostatok, yangilangan sana).
+    """
     try:
         client = _get_client()
         sh = client.open_by_key(SALARY_SHEET_ID)
         ws = _find_worksheet_flexible(sh, TOLOVLAR_WS_NAME)
         print(f"[FIRMS] '{TOLOVLAR_WS_NAME}' varag'i topildi: '{ws.title}'")
         records = ws.get_all_records()
-        print(f"[FIRMS] Qidirilayotgan firma: '{firma_nomi}' | Jadvaldagi firmalar: "
-              f"{[str(r.get('Firma nomi','')) for r in records]}")
         target = _norm_firma_nomi(firma_nomi)
         for row in records:
             firma = str(row.get("Firma nomi", "")).strip()
@@ -817,9 +820,15 @@ def get_firm_summa(firma_nomi: str) -> dict | None:
                 print(f"[FIRMS] MOS TOPILDI: qator={row}")
                 return {
                     "shartnoma": str(row.get("Shartnoma raqami", "")).strip(),
-                    "inn": str(row.get("INN", "")).strip(),
-                    "summa": row.get("Summa", ""),
-                    "holati": str(row.get("Holati", "")).strip(),
+                    "inn":       str(row.get("INN", "")).strip(),
+                    "dogovor":   str(row.get("Договор", "")).strip(),
+                    "summa":     row.get("Summa", ""),
+                    "holati":    str(row.get("Holati", "")).strip(),
+                    # Admin tomonidan yuklangan hisobot ma'lumotlari
+                    "sotuv":     str(row.get("Sotuv (so'm)", "")).strip(),
+                    "priod":     str(row.get("Priod (so'm)", "")).strip(),
+                    "ostatok":   str(row.get("Ostatok (so'm)", "")).strip(),
+                    "yangilangan": str(row.get("Yangilangan", "")).strip(),
                 }
         print(f"[FIRMS] Mos firma topilmadi: '{firma_nomi}'")
         return None
@@ -1572,15 +1581,20 @@ async def firm_zip_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 # ─── Firma o'zi hisobotini olishi (self-service) ───────────────────────────────
 
-async def _send_firm_direct_report(update: Update, ctx: ContextTypes.DEFAULT_TYPE, firm_info: dict):
+async def _send_firm_direct_report(
+    update: Update, ctx: ContextTypes.DEFAULT_TYPE, firm_info: dict
+) -> int:
     """
-    Firma vakili "Отчёт va to'lovlar" bosganda — to'g'ridan-to'g'ri
-    (submenyusiz) faylini va shu oylik to'lov summasini yuboradi.
+    Firma vakili "Отчёт va to'lovlar" bosganda — faylini va hisobotini yuboradi.
+    Oylik ma'lumotlar mavjud bo'lsa, oy tanlash klaviaturasini ko'rsatadi.
+    Qaytaradi: FIRM_MONTH_SELECT (tanlash kutilsa) yoki REPORTS_MENU.
     """
-    language = ctx.user_data.get("lang", "uz")
-    firma_nomi = firm_info.get("firma_nomi", "")
+    from telegram import ReplyKeyboardMarkup, ReplyKeyboardRemove
+    language    = ctx.user_data.get("lang", "uz")
+    firma_nomi  = firm_info.get("firma_nomi", "")
+    back_txt    = "⬅️ Назад" if language == "ru" else "⬅️ Orqaga"
 
-    # Fayl (agar yuklangan bo'lsa)
+    # ── 1. Hisobot faylini yuborish ──────────────────────────────────────────
     if firm_info.get("file_id"):
         try:
             await ctx.bot.send_document(
@@ -1597,37 +1611,109 @@ async def _send_firm_direct_report(update: Update, ctx: ContextTypes.DEFAULT_TYP
             else "📭 Файл отчёта ещё не загружен."
         )
 
-    # Shu oylik to'lov summasi
+    # ── 2. To'lovlar varag'idan asosiy ma'lumotlar ───────────────────────────
     summa_info = await run_read(get_firm_summa, firma_nomi)
-    if summa_info:
-        holati = summa_info.get("holati", "").strip().lower()
-        if holati in ("to'langan", "оплачено", "✅"):
-            belgi = "✅"
-        elif holati in ("to'lanmagan", "не оплачено", "❌"):
-            belgi = "❌"
-        else:
-            belgi = "⏳"
+    inn_val    = (summa_info or {}).get("inn", "")
 
-        lines = [f"{belgi} *{firma_nomi}*"]
-        if summa_info.get("shartnoma"):
-            lines.append(f"📄 Shartnoma: {summa_info['shartnoma']}")
+    # ── 3. Oylik varaqlar ro'yxati ───────────────────────────────────────────
+    available_months = await run_read(_list_monthly_sheets_for_firm, firma_nomi, inn_val)
+
+    # ── 4. Shartnoma / INN / To'lov bloki ────────────────────────────────────
+    lines = [f"🏢 *{firma_nomi}*", ""]
+    if summa_info:
+        if summa_info.get("dogovor"):
+            lines.append(f"📄 {'Shartnoma' if language == 'uz' else 'Договор'}: {summa_info['dogovor']}")
+        elif summa_info.get("shartnoma"):
+            lines.append(f"📄 {'Shartnoma' if language == 'uz' else 'Договор'}: {summa_info['shartnoma']}")
         if summa_info.get("inn"):
             lines.append(f"🆔 INN: {summa_info['inn']}")
+        holati = summa_info.get("holati", "").strip().lower()
+        belgi  = "✅" if holati in ("to'langan", "оплачено", "✅") else \
+                 "❌" if holati in ("to'lanmagan", "не оплачено", "❌") else "⏳"
+        if summa_info.get("summa") or summa_info.get("holati"):
+            lines.append("")
+            lines.append(
+                f"{belgi} To'lov: {summa_info.get('summa', '—')} ({summa_info.get('holati', '—')})"
+                if language == "uz" else
+                f"{belgi} Оплата: {summa_info.get('summa', '—')} ({summa_info.get('holati', '—')})"
+            )
+
+    # ── 5. Hisobot bloki ─────────────────────────────────────────────────────
+    if len(available_months) == 0:
+        # Oylik varaq yo'q — To'lovlar'dan eski ma'lumotni ko'rsat
+        sotuv   = (summa_info or {}).get("sotuv", "")
+        priod   = (summa_info or {}).get("priod", "")
+        ostatok = (summa_info or {}).get("ostatok", "")
+        yangi   = (summa_info or {}).get("yangilangan", "")
+        lines.append("")
+        if sotuv or ostatok:
+            lines.append("📊 *Sotish hisoboti:*" if language == "uz" else "📊 *Отчёт по продажам:*")
+            if priod:
+                lines.append(f"  📥 {'Priod' if language == 'uz' else 'Приход'}: *{priod}*")
+            if sotuv:
+                lines.append(f"  💰 {'Sotuv' if language == 'uz' else 'Продажи'}: *{sotuv}*")
+            if ostatok:
+                lines.append(f"  📦 {'Ostatok' if language == 'uz' else 'Остаток'}: *{ostatok}*")
+            if yangi:
+                lines.append(f"  🕐 {'Yangilangan' if language == 'uz' else 'Обновлено'}: {yangi}")
+        else:
+            lines.append(
+                "📊 Sotish hisoboti hali yuklanmagan." if language == "uz"
+                else "📊 Отчёт по продажам ещё не загружен."
+            )
+        await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+        return REPORTS_MENU
+
+    elif len(available_months) == 1:
+        # Faqat bitta oy — to'g'ridan-to'g'ri ko'rsat
+        mk     = available_months[0]
+        mdata  = await run_read(_get_firm_monthly_data, firma_nomi, inn_val, mk)
+        mdisp  = _month_display(mk, language)
+        lines.append("")
         lines.append(
-            f"💰 To'lov: {summa_info.get('summa', '')} ({summa_info.get('holati', '')})"
-            if language == "uz" else
-            f"💰 Оплата: {summa_info.get('summa', '')} ({summa_info.get('holati', '')})"
+            f"📊 *Sotish hisoboti ({mdisp}):*" if language == "uz"
+            else f"📊 *Отчёт по продажам ({mdisp}):*"
+        )
+        if mdata:
+            if mdata.get("priod"):
+                lines.append(f"  📥 {'Priod' if language == 'uz' else 'Приход'}: *{mdata['priod']}*")
+            if mdata.get("sotuv"):
+                lines.append(f"  💰 {'Sotuv' if language == 'uz' else 'Продажи'}: *{mdata['sotuv']}*")
+            if mdata.get("ostatok"):
+                lines.append(f"  📦 {'Ostatok' if language == 'uz' else 'Остаток'}: *{mdata['ostatok']}*")
+            if mdata.get("yangilangan"):
+                lines.append(f"  🕐 {'Yangilangan' if language == 'uz' else 'Обновлено'}: {mdata['yangilangan']}")
+        else:
+            lines.append("  ❌ Ma'lumot topilmadi." if language == "uz" else "  ❌ Данные не найдены.")
+        await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+        return REPORTS_MENU
+
+    else:
+        # Bir necha oy — oy tanlash klaviaturasi
+        lines.append("")
+        lines.append(
+            "📅 Qaysi oy hisobotini ko'rmoqchisiz?" if language == "uz"
+            else "📅 Отчёт за какой месяц хотите посмотреть?"
         )
         await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
-    else:
+
+        # Klaviatura: har bir oy alohida tugma
+        month_buttons = [
+            [_month_display(mk, language)] for mk in available_months
+        ]
+        month_buttons.append([back_txt])
+        kb = ReplyKeyboardMarkup(month_buttons, resize_keyboard=True)
+
         await update.message.reply_text(
-            f"ℹ️ *{firma_nomi}* uchun joriy oy to'lov ma'lumoti hali kiritilmagan."
-            if language == "uz" else
-            f"ℹ️ Данные об оплате для *{firma_nomi}* ещё не внесены.",
-            parse_mode="Markdown",
+            "📅 Oyni tanlang:" if language == "uz" else "📅 Выберите месяц:",
+            reply_markup=kb,
         )
 
-    return REPORTS_MENU
+        # Holatni saqlash
+        ctx.user_data["report_firma_nomi"]    = firma_nomi
+        ctx.user_data["report_inn"]           = inn_val
+        ctx.user_data["report_available_months"] = available_months
+        return FIRM_MONTH_SELECT
 
 
 def appeal_keyboard(language: str = "uz"):
@@ -1920,6 +2006,241 @@ def _update_firm_totals_in_sheet(
         return str(e)
 
 
+# ─── Oylik varaqlar (monthly sheets) ──────────────────────────────────────────
+
+_MONTHS_UZ = {
+    1: "Yanvar", 2: "Fevral", 3: "Mart", 4: "Aprel",
+    5: "May", 6: "Iyun", 7: "Iyul", 8: "Avgust",
+    9: "Sentabr", 10: "Oktabr", 11: "Noyabr", 12: "Dekabr",
+}
+_MONTHS_RU = {
+    1: "Январь", 2: "Февраль", 3: "Март", 4: "Апрель",
+    5: "Май", 6: "Июнь", 7: "Июль", 8: "Август",
+    9: "Сентябрь", 10: "Октябрь", 11: "Ноябрь", 12: "Декабрь",
+}
+
+MONTHLY_SHEET_COLUMNS = [
+    "Firma nomi", "INN", "Priod (so'm)", "Sotuv (so'm)", "Ostatok (so'm)", "Yangilangan"
+]
+
+
+def _month_key() -> str:
+    """Hozirgi oy uchun 'YYYY-MM' kalitini qaytaradi."""
+    import datetime as _dt
+    return _dt.date.today().strftime("%Y-%m")
+
+
+def _month_display(month_key: str, language: str = "uz") -> str:
+    """'2026-08' → 'Avgust 2026' yoki 'Август 2026'."""
+    try:
+        year, month = int(month_key[:4]), int(month_key[5:7])
+        names = _MONTHS_RU if language == "ru" else _MONTHS_UZ
+        return f"{names.get(month, month_key)} {year}"
+    except Exception:
+        return month_key
+
+
+def _month_key_from_display(display: str, language: str = "uz") -> str | None:
+    """'Avgust 2026' → '2026-08' (yoki None)."""
+    names = _MONTHS_RU if language == "ru" else _MONTHS_UZ
+    rev = {v.lower(): k for k, v in names.items()}
+    parts = display.strip().split()
+    if len(parts) >= 2:
+        try:
+            year = int(parts[-1])
+            month_name = " ".join(parts[:-1]).lower()
+            month = rev.get(month_name)
+            if month:
+                return f"{year:04d}-{month:02d}"
+        except ValueError:
+            pass
+    return None
+
+
+def _get_or_create_monthly_sheet(sh, month_key: str):
+    """'YYYY-MM' nomli varaqni topadi yoki yangi yaratadi."""
+    try:
+        return sh.worksheet(month_key)
+    except gspread.exceptions.WorksheetNotFound:
+        ws = sh.add_worksheet(title=month_key, rows=200, cols=10)
+        ws.append_row(MONTHLY_SHEET_COLUMNS)
+        return ws
+
+
+def _save_to_monthly_sheet(
+    firma_nomi: str, inn: str, month_key: str,
+    sotuv: float, priod: float, ostatok: float
+) -> str:
+    """
+    SALARY_SHEET_ID dagi 'YYYY-MM' varaqda firma qatorini yangilaydi yoki yangi qo'shadi.
+    Qaytaradi: "ok" yoki xato xabari.
+    """
+    import datetime as _dt
+    try:
+        client = _get_client()
+        sh = client.open_by_key(SALARY_SHEET_ID)
+        ws = _get_or_create_monthly_sheet(sh, month_key)
+        all_values = ws.get_all_values()
+        header = list(all_values[0]) if all_values else MONTHLY_SHEET_COLUMNS[:]
+
+        def _col(name: str) -> int:
+            for i, h in enumerate(header):
+                if h.strip().lower() == name.strip().lower():
+                    return i + 1
+            new_col = len(header) + 1
+            header.append(name)
+            ws.update_cell(1, new_col, name)
+            return new_col
+
+        name_col    = _col("Firma nomi")
+        inn_col     = _col("INN")
+        priod_col   = _col("Priod (so'm)")
+        sotuv_col   = _col("Sotuv (so'm)")
+        ostatok_col = _col("Ostatok (so'm)")
+        date_col    = _col("Yangilangan")
+
+        today = _dt.date.today().strftime("%d.%m.%Y")
+        def _fmt(n: float) -> str:
+            return f"{int(round(n)):,}".replace(",", " ")
+
+        norm_firma = _norm_firma_nomi(firma_nomi)
+        row_i = None
+        for i, row in enumerate(all_values[1:], start=2):
+            cell_name = str(row[name_col - 1]).strip() if name_col - 1 < len(row) else ""
+            cell_inn  = str(row[inn_col - 1]).strip()  if inn_col  - 1 < len(row) else ""
+            if (inn and cell_inn == inn) or _norm_firma_nomi(cell_name) == norm_firma:
+                row_i = i
+                break
+
+        if row_i is None:
+            new_row = [""] * len(header)
+            new_row[name_col    - 1] = firma_nomi
+            new_row[inn_col     - 1] = inn or ""
+            new_row[priod_col   - 1] = _fmt(priod)
+            new_row[sotuv_col   - 1] = _fmt(sotuv)
+            new_row[ostatok_col - 1] = _fmt(ostatok)
+            new_row[date_col    - 1] = today
+            ws.append_row(new_row)
+        else:
+            ws.update_cell(row_i, name_col,    firma_nomi)
+            ws.update_cell(row_i, inn_col,     inn or "")
+            ws.update_cell(row_i, priod_col,   _fmt(priod))
+            ws.update_cell(row_i, sotuv_col,   _fmt(sotuv))
+            ws.update_cell(row_i, ostatok_col, _fmt(ostatok))
+            ws.update_cell(row_i, date_col,    today)
+
+        return "ok"
+    except Exception as e:
+        logger.error(f"[MONTHLY] _save_to_monthly_sheet xato: {e}")
+        return str(e)
+
+
+def _list_monthly_sheets_for_firm(firma_nomi: str, inn: str) -> list:
+    """
+    SALARY_SHEET_ID dagi 'YYYY-MM' nomli varaqlardan berilgan firma uchun
+    ma'lumot mavjud bo'lgan oylar ro'yxatini qaytaradi (yangi → eski tartibda).
+    """
+    import re as _re
+    try:
+        client = _get_client()
+        sh = client.open_by_key(SALARY_SHEET_ID)
+        norm_firma = _norm_firma_nomi(firma_nomi)
+        month_pat = _re.compile(r"^\d{4}-\d{2}$")
+
+        result = []
+        for ws_meta in sh.worksheets():
+            if not month_pat.match(ws_meta.title):
+                continue
+            ws = sh.worksheet(ws_meta.title)
+            all_values = ws.get_all_values()
+            if len(all_values) < 2:
+                continue
+            header = all_values[0]
+            try:
+                name_idx = next(i for i, h in enumerate(header) if "firma" in h.lower())
+                inn_idx  = next((i for i, h in enumerate(header) if "inn"   in h.lower()), None)
+            except StopIteration:
+                continue
+            for row in all_values[1:]:
+                cell_name = str(row[name_idx]).strip() if name_idx < len(row) else ""
+                cell_inn  = str(row[inn_idx ]).strip() if inn_idx is not None and inn_idx < len(row) else ""
+                if (inn and cell_inn == inn) or _norm_firma_nomi(cell_name) == norm_firma:
+                    result.append(ws_meta.title)
+                    break
+
+        result.sort(reverse=True)  # yangi oylar avval
+        return result
+    except Exception as e:
+        logger.error(f"[MONTHLY] _list_monthly_sheets_for_firm xato: {e}")
+        return []
+
+
+def _get_firm_monthly_data(firma_nomi: str, inn: str, month_key: str) -> dict | None:
+    """
+    'YYYY-MM' varaqdan berilgan firma uchun bir oylik ma'lumotni qaytaradi.
+    """
+    try:
+        client = _get_client()
+        sh = client.open_by_key(SALARY_SHEET_ID)
+        ws = sh.worksheet(month_key)
+        all_values = ws.get_all_values()
+        if len(all_values) < 2:
+            return None
+        header = all_values[0]
+        norm_firma = _norm_firma_nomi(firma_nomi)
+        try:
+            name_idx = next(i for i, h in enumerate(header) if "firma" in h.lower())
+            inn_idx  = next((i for i, h in enumerate(header) if "inn"   in h.lower()), None)
+        except StopIteration:
+            return None
+        for row in all_values[1:]:
+            cell_name = str(row[name_idx]).strip() if name_idx < len(row) else ""
+            cell_inn  = str(row[inn_idx ]).strip() if inn_idx is not None and inn_idx < len(row) else ""
+            if (inn and cell_inn == inn) or _norm_firma_nomi(cell_name) == norm_firma:
+                record = dict(zip(header, row))
+                return {
+                    "sotuv":       str(record.get("Sotuv (so'm)",   "")).strip(),
+                    "priod":       str(record.get("Priod (so'm)",   "")).strip(),
+                    "ostatok":     str(record.get("Ostatok (so'm)", "")).strip(),
+                    "yangilangan": str(record.get("Yangilangan",    "")).strip(),
+                }
+        return None
+    except gspread.exceptions.WorksheetNotFound:
+        return None
+    except Exception as e:
+        logger.error(f"[MONTHLY] _get_firm_monthly_data xato: {e}")
+        return None
+
+
+def _cleanup_old_monthly_sheets(keep: int = 3) -> str:
+    """
+    SALARY_SHEET_ID dagi YYYY-MM nomli varaqlardan eng so'nggi `keep` tasini saqlaydi,
+    qolganlarini (eski oylarni) o'chiradi.
+    """
+    import re as _re
+    try:
+        client = _get_client()
+        sh = client.open_by_key(SALARY_SHEET_ID)
+        month_pat = _re.compile(r"^\d{4}-\d{2}$")
+        month_sheets = sorted(
+            [ws for ws in sh.worksheets() if month_pat.match(ws.title)],
+            key=lambda w: w.title,
+            reverse=True,   # yangi → eski tartib
+        )
+        deleted = []
+        for ws in month_sheets[keep:]:
+            sh.del_worksheet(ws)
+            deleted.append(ws.title)
+        if deleted:
+            logger.info(f"[MONTHLY] O'chirilgan eski varaqlar: {deleted}")
+        return "ok"
+    except Exception as e:
+        logger.error(f"[MONTHLY] _cleanup_old_monthly_sheets xato: {e}")
+        return str(e)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+
 async def firm_report_enter(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Admin 'Firma otchyotini yuklash' bosganda chaqiriladi."""
     language = ctx.user_data.get("lang", "uz")
@@ -2042,13 +2363,25 @@ async def firm_report_receive_file(update: Update, ctx: ContextTypes.DEFAULT_TYP
 
         ws, row_i, row_dict = result
         firma_nomi = row_dict.get("Firma nomi") or caption
+        inn_val    = str(row_dict.get("INN", "")).strip()
 
-        # 4) Google Sheets ga yozish
+        # 4a) To'lovlar varag'ini yangilash (eng so'nggi ma'lumot sifatida)
         err = await run_write(_update_firm_totals_in_sheet, ws, row_i, sotuv, priod, ostatok)
 
+        # 4b) Oylik varaqqa yozish (YYYY-MM)
+        cur_month  = _month_key()
+        month_err  = await run_write(_save_to_monthly_sheet, firma_nomi, inn_val, cur_month, sotuv, priod, ostatok)
+        if month_err != "ok":
+            logger.warning(f"[FIRM_REPORT] Oylik varaqqa yozish xato: {month_err}")
+
+        # 4c) 3 tadan ortiq eski oylik varaqlarni o'chirish
+        await run_write(_cleanup_old_monthly_sheets, 3)
+
         if err == "ok":
+            month_disp = _month_display(cur_month, language)
             lines = [
                 f"✅ *{firma_nomi}* — yangilandi!",
+                f"📅 {'Oy' if language == 'uz' else 'Месяц'}: {month_disp}",
                 "",
                 f"📦 Dorilar soni: {n_prod} ta" if language == "uz"
                 else f"📦 Позиций: {n_prod}",
@@ -2710,8 +3043,7 @@ async def admin_firm_lookup_handler(update: Update, ctx: ContextTypes.DEFAULT_TY
         )
         return ADMIN_FIRM_LOOKUP
 
-    await _send_firm_direct_report(update, ctx, info)
-    return PAYMENTS_MENU
+    return await _send_firm_direct_report(update, ctx, info)
 
 
 async def get_my_report_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -2736,6 +3068,85 @@ async def get_my_report_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
 
     await _send_firm_direct_report(update, ctx, info)
+
+
+# ─── Oy tanlash handler ──────────────────────────────────────────────────────
+
+async def firm_month_select_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """
+    FIRM_MONTH_SELECT holatida — foydalanuvchi oy tanlashini qayta ishlaydi.
+    """
+    from telegram import ReplyKeyboardRemove
+    language = ctx.user_data.get("lang", "uz")
+    txt      = (update.message.text or "").strip()
+    back_txt = "⬅️ Назад" if language == "ru" else "⬅️ Orqaga"
+    is_admin = update.effective_user.id in ADMIN_IDS
+
+    if txt in (back_txt, "⬅️ Orqaga", "⬅️ Назад"):
+        await update.message.reply_text(
+            "📊 Bo'limni tanlang:" if language == "uz" else "📊 Выберите раздел:",
+            reply_markup=payments_keyboard(language, is_admin),
+        )
+        return PAYMENTS_MENU
+
+    firma_nomi       = ctx.user_data.get("report_firma_nomi", "")
+    inn_val          = ctx.user_data.get("report_inn", "")
+    available_months = ctx.user_data.get("report_available_months", [])
+
+    # Tanlangan oy nomini kalit (YYYY-MM) ga aylantirish
+    month_key = _month_key_from_display(txt, language)
+
+    # Agar avtomatik aylantirish bo'lmasa, available_months orqali qidirish
+    if not month_key:
+        for mk in available_months:
+            if _month_display(mk, language).lower() == txt.lower():
+                month_key = mk
+                break
+
+    if not month_key or month_key not in available_months:
+        await update.message.reply_text(
+            "❌ Noma'lum oy. Iltimos, ro'yxatdan tanlang." if language == "uz"
+            else "❌ Неизвестный месяц. Пожалуйста, выберите из списка."
+        )
+        return FIRM_MONTH_SELECT
+
+    msg = await update.message.reply_text(
+        "⏳ Ma'lumot yuklanmoqda..." if language == "uz" else "⏳ Загружаю данные..."
+    )
+
+    try:
+        mdata = await run_read(_get_firm_monthly_data, firma_nomi, inn_val, month_key)
+        mdisp = _month_display(month_key, language)
+
+        lines = [
+            f"🏢 *{firma_nomi}*",
+            f"📅 {'Oy' if language == 'uz' else 'Месяц'}: {mdisp}",
+            "",
+            "📊 *Sotish hisoboti:*" if language == "uz" else "📊 *Отчёт по продажам:*",
+        ]
+        if mdata:
+            if mdata.get("priod"):
+                lines.append(f"  📥 {'Priod' if language == 'uz' else 'Приход'}: *{mdata['priod']}*")
+            if mdata.get("sotuv"):
+                lines.append(f"  💰 {'Sotuv' if language == 'uz' else 'Продажи'}: *{mdata['sotuv']}*")
+            if mdata.get("ostatok"):
+                lines.append(f"  📦 {'Ostatok' if language == 'uz' else 'Остаток'}: *{mdata['ostatok']}*")
+            if mdata.get("yangilangan"):
+                lines.append(f"  🕐 {'Yangilangan' if language == 'uz' else 'Обновлено'}: {mdata['yangilangan']}")
+        else:
+            lines.append("  ❌ Ma'lumot topilmadi." if language == "uz" else "  ❌ Данные не найдены.")
+
+        await msg.edit_text("\n".join(lines), parse_mode="Markdown")
+
+    except Exception as e:
+        logger.error(f"[MONTHLY] firm_month_select_handler xato: {e}")
+        await msg.edit_text(f"❌ Xato: {e}" if language == "uz" else f"❌ Ошибка: {e}")
+
+    await update.message.reply_text(
+        "📊 Bo'limni tanlang:" if language == "uz" else "📊 Выберите раздел:",
+        reply_markup=payments_keyboard(language, is_admin),
+    )
+    return PAYMENTS_MENU
 
 
 # ─── States ───────────────────────────────────────────────────────────────────
@@ -2766,6 +3177,9 @@ def get_sal_states():
         FIRM_REPORT_WAIT: [
             MessageHandler(filters.Document.ALL, firm_report_receive_file),
             MessageHandler(filters.TEXT & ~filters.COMMAND, firm_report_receive_file),
+        ],
+        FIRM_MONTH_SELECT: [
+            MessageHandler(filters.TEXT & ~filters.COMMAND, firm_month_select_handler),
         ],
         APPEAL_MENU: [
             MessageHandler(filters.TEXT & ~filters.COMMAND, appeal_menu_handler),
