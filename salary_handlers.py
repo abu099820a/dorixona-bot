@@ -2440,11 +2440,14 @@ async def firm_report_receive_file(update: Update, ctx: ContextTypes.DEFAULT_TYP
             month_disp = _month_display(cur_month, language)
             if already_filled:
                 # Avval to'ldirilgan bo'lsa — ogohlantirish bilan qayta yozildi
+                warn1 = "Bu firma hisobi avval allaqachon to'ldirilgan edi." if language == "uz" else "Данные этой фирмы уже были заполнены ранее."
+                warn2 = "Eski qiymat ustiga yangi ma'lumot yozildi." if language == "uz" else "Старые данные перезаписаны новыми."
+                oy_lbl = "Oy" if language == "uz" else "Месяц"
                 lines = [
                     f"♻️ *{firma_nomi}* — qayta yozildi!",
-                    f"📅 {'Oy' if language == 'uz' else 'Месяц'}: {month_disp}",
-                    f"⚠️ {'Bu firma hisobi avval allaqachon to\'ldirilgan edi.' if language == 'uz' else 'Данные этой фирмы уже были заполнены ранее.'}",
-                    f"{'Eski qiymat ustiga yangi ma\'lumot yozildi.' if language == 'uz' else 'Старые данные перезаписаны новыми.'}",
+                    f"📅 {oy_lbl}: {month_disp}",
+                    f"⚠️ {warn1}",
+                    warn2,
                     "",
                     f"📦 Dorilar soni: {n_prod} ta" if language == "uz" else f"📦 Позиций: {n_prod}",
                     f"💰 Sotuv: *{_fmt(sotuv)} so'm*" if language == "uz" else f"💰 Продажи: *{_fmt(sotuv)} сум*",
