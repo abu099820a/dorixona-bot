@@ -1652,8 +1652,6 @@ async def _send_firm_direct_report(
         lines.append("")
         if sotuv or ostatok:
             lines.append("📊 *Sotish hisoboti:*" if language == "uz" else "📊 *Отчёт по продажам:*")
-            if priod:
-                lines.append(f"  📥 {'Priod' if language == 'uz' else 'Приход'}: *{priod}*")
             if sotuv:
                 lines.append(f"  💰 {'Sotuv' if language == 'uz' else 'Продажи'}: *{sotuv}*")
             if ostatok:
@@ -1688,8 +1686,6 @@ async def _send_firm_direct_report(
             else f"📊 *Отчёт по продажам ({mdisp}):*"
         )
         if mdata:
-            if mdata.get("priod"):
-                lines.append(f"  📥 {'Priod' if language == 'uz' else 'Приход'}: *{mdata['priod']}*")
             if mdata.get("sotuv"):
                 lines.append(f"  💰 {'Sotuv' if language == 'uz' else 'Продажи'}: *{mdata['sotuv']}*")
             if mdata.get("ostatok"):
@@ -1964,8 +1960,11 @@ def _find_firm_row_in_tolovlar(caption: str):
         header = all_values[0]
 
         caption_clean = caption.strip()
-        # INN: faqat raqamlardan iborat (9 yoki 12 ta belgi)
-        is_inn = bool(_re.fullmatch(r"\d{9,12}", caption_clean))
+        # INN: bo'shliqlarni olib tashlagan holda faqat raqamlardan iborat (9-12 ta belgi)
+        caption_digits = _re.sub(r"\s+", "", caption_clean)
+        is_inn = bool(_re.fullmatch(r"\d{9,12}", caption_digits))
+        if is_inn:
+            caption_clean = caption_digits  # bo'shliqsiz raqam bilan solishtirish
         norm_caption = _norm_firma_nomi(caption_clean)
 
         inn_col = next((i for i, h in enumerate(header) if "inn" in h.lower()), None)
@@ -1978,7 +1977,8 @@ def _find_firm_row_in_tolovlar(caption: str):
 
         for row_i, row in enumerate(all_values[1:], start=2):
             if is_inn and inn_col is not None:
-                cell_inn = str(row[inn_col]).strip() if inn_col < len(row) else ""
+                # Sheetdagi INN ni ham bo'shliqsiz solishtirish
+                cell_inn = _re.sub(r"\s+", "", str(row[inn_col]).strip()) if inn_col < len(row) else ""
                 if cell_inn == caption_clean:
                     return ws, row_i, dict(zip(header, row))
             else:
@@ -2033,7 +2033,6 @@ def _update_firm_totals_in_sheet(
             return new_col
 
         sotuv_col   = _get_or_create_col("Sotuv (so'm)")
-        priod_col   = _get_or_create_col("Priod (so'm)")
         ostatok_col = _get_or_create_col("Ostatok (so'm)")
         date_col    = _get_or_create_col("Yangilangan")
 
@@ -2043,7 +2042,6 @@ def _update_firm_totals_in_sheet(
             return f"{int(round(n)):,}".replace(",", " ")
 
         ws.update_cell(row_i, sotuv_col,   _fmt(sotuv))
-        ws.update_cell(row_i, priod_col,   _fmt(priod))
         ws.update_cell(row_i, ostatok_col, _fmt(ostatok))
         ws.update_cell(row_i, date_col,    today)
         return "ok"
@@ -2140,7 +2138,6 @@ def _save_to_monthly_sheet(
 
         name_col    = _col("Firma nomi")
         inn_col     = _col("INN")
-        priod_col   = _col("Priod (so'm)")
         sotuv_col   = _col("Sotuv (so'm)")
         ostatok_col = _col("Ostatok (so'm)")
         date_col    = _col("Yangilangan")
@@ -2162,7 +2159,6 @@ def _save_to_monthly_sheet(
             new_row = [""] * len(header)
             new_row[name_col    - 1] = firma_nomi
             new_row[inn_col     - 1] = inn or ""
-            new_row[priod_col   - 1] = _fmt(priod)
             new_row[sotuv_col   - 1] = _fmt(sotuv)
             new_row[ostatok_col - 1] = _fmt(ostatok)
             new_row[date_col    - 1] = today
@@ -2170,7 +2166,6 @@ def _save_to_monthly_sheet(
         else:
             ws.update_cell(row_i, name_col,    firma_nomi)
             ws.update_cell(row_i, inn_col,     inn or "")
-            ws.update_cell(row_i, priod_col,   _fmt(priod))
             ws.update_cell(row_i, sotuv_col,   _fmt(sotuv))
             ws.update_cell(row_i, ostatok_col, _fmt(ostatok))
             ws.update_cell(row_i, date_col,    today)
@@ -2396,14 +2391,12 @@ async def firm_report_receive_file(update: Update, ctx: ContextTypes.DEFAULT_TYP
             await msg.edit_text(
                 f"⚠️ *{caption}* nomi/INN bo'yicha firma topilmadi.\n\n"
                 f"📊 Hisoblangan natijalar:\n"
-                f"  📥 Priod: *{_fmt(priod)} so'm*\n"
                 f"  💰 Sotuv: *{_fmt(sotuv)} so'm*\n"
                 f"  📦 Ostatok: *{_fmt(ostatok)} so'm*\n\n"
                 f"Firma nomini To'lovlar varag'ida tekshiring."
                 if language == "uz" else
                 f"⚠️ Фирма *{caption}* не найдена (по названию/ИНН).\n\n"
                 f"📊 Рассчитанные данные:\n"
-                f"  📥 Приход: *{_fmt(priod)} сум*\n"
                 f"  💰 Продажи: *{_fmt(sotuv)} сум*\n"
                 f"  📦 Остаток: *{_fmt(ostatok)} сум*\n\n"
                 f"Проверьте название фирмы в листе «To'lovlar».",
@@ -2447,8 +2440,6 @@ async def firm_report_receive_file(update: Update, ctx: ContextTypes.DEFAULT_TYP
                 "",
                 f"📦 Dorilar soni: {n_prod} ta" if language == "uz"
                 else f"📦 Позиций: {n_prod}",
-                f"📥 Priod: *{_fmt(priod)} so'm*" if language == "uz"
-                else f"📥 Приход: *{_fmt(priod)} сум*",
                 f"💰 Sotuv: *{_fmt(sotuv)} so'm*" if language == "uz"
                 else f"💰 Продажи: *{_fmt(sotuv)} сум*",
                 f"📦 Ostatok: *{_fmt(ostatok)} so'm*" if language == "uz"
@@ -3212,8 +3203,6 @@ async def firm_month_select_handler(update: Update, ctx: ContextTypes.DEFAULT_TY
             "📊 *Sotish hisoboti:*" if language == "uz" else "📊 *Отчёт по продажам:*",
         ]
         if mdata:
-            if mdata.get("priod"):
-                lines.append(f"  📥 {'Priod' if language == 'uz' else 'Приход'}: *{mdata['priod']}*")
             if mdata.get("sotuv"):
                 lines.append(f"  💰 {'Sotuv' if language == 'uz' else 'Продажи'}: *{mdata['sotuv']}*")
             if mdata.get("ostatok"):
