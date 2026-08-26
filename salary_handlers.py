@@ -65,6 +65,11 @@ APPEAL_DORIXONA_NAMES = 515
 APPEAL_PASSWORD_STATE = 516
 FIRM_REPORT_WAIT = 517   # Admin xlsx fayl (firma otchyoti) kutish holati
 FIRM_MONTH_SELECT = 518  # Postawchik oy tanlash holati
+# 519 = FIRM_REPORTS_MENU (bot.py da aniqlangan — bu yerda import qilinmaydi)
+FIRM_CONTRACT_SELECT = 520     # Upload vaqtida birdan ko'p shartnoma tanlash
+ADMIN_FIRM_REPORT_SEARCH = 521  # Admin firma hisobotini qidirish (ism/INN kiritadi)
+ADMIN_FIRM_REPORT_CONTRACT = 522  # Admin bir necha shartnomadan birini tanlaydi
+FIRM_SUPPLIER_CONTRACT_SELECT = 523  # Postawchik bir necha shartnomadan birini tanlaydi (hisobot uchun)
 
 
 # ─── Google Sheets ────────────────────────────────────────────────────────────
@@ -1582,7 +1587,8 @@ async def firm_zip_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 # ─── Firma o'zi hisobotini olishi (self-service) ───────────────────────────────
 
 async def _send_firm_direct_report(
-    update: Update, ctx: ContextTypes.DEFAULT_TYPE, firm_info: dict, from_menu: bool = False
+    update: Update, ctx: ContextTypes.DEFAULT_TYPE, firm_info: dict,
+    from_menu: bool = False, summa_info_override: dict | None = None
 ) -> int:
     """
     Firma vakili "Отчёт va to'lovlar" bosganda — faylini va hisobotini yuboradi.
@@ -1616,8 +1622,38 @@ async def _send_firm_direct_report(
         )
 
     # ── 2. To'lovlar varag'idan asosiy ma'lumotlar ───────────────────────────
-    summa_info = await run_read(get_firm_summa, firma_nomi)
-    inn_val    = (summa_info or {}).get("inn", "")
+    if summa_info_override is not None:
+        # Postawchik shartnoma tanlashdan keyin — to'g'ridan ma'lumot uzatilgan
+        summa_info = summa_info_override
+        inn_val    = summa_info.get("inn", "")
+    else:
+        all_rows = await run_read(_find_all_firm_rows_in_tolovlar, firma_nomi)
+        if len(all_rows) > 1:
+            # Bir necha shartnoma — postawchikdan tanlash so'rash
+            ctx.user_data["supplier_firm_info"]     = firm_info
+            ctx.user_data["supplier_contract_rows"] = all_rows
+            if from_menu:
+                ctx.user_data["firm_report_from_menu"] = True
+            back_txt_s = "⬅️ Orqaga" if language == "uz" else "⬅️ Назад"
+            contract_btns = [
+                [f"📄 {r['shartnoma'] or ('Shartnoma #' + str(i + 1))}"]
+                for i, r in enumerate(all_rows)
+            ]
+            contract_btns.append([back_txt_s])
+            from telegram import ReplyKeyboardMarkup as _RKM
+            await update.message.reply_text(
+                "Bir nechta shartnoma topildi. Qaysi shartnoma hisobotini ko'rmoqchisiz?"
+                if language == "uz" else
+                "Найдено несколько договоров. По какому хотите посмотреть отчёт?",
+                reply_markup=_RKM(contract_btns, resize_keyboard=True),
+            )
+            return FIRM_SUPPLIER_CONTRACT_SELECT
+        elif len(all_rows) == 1:
+            summa_info = _entry_to_summa_info(all_rows[0])
+            inn_val    = all_rows[0]["inn"]
+        else:
+            summa_info = None
+            inn_val    = ""
 
     # ── 3. Oylik varaqlar ro'yxati ───────────────────────────────────────────
     available_months = await run_read(_list_monthly_sheets_for_firm, firma_nomi, inn_val)
@@ -2007,6 +2043,122 @@ def _find_firm_row_in_tolovlar(caption: str):
         return None
 
 
+def _find_all_firm_rows_in_tolovlar(caption: str) -> list:
+    """
+    "To'lovlar" varag'idan berilgan caption (firma nomi yoki INN) ga mos
+    barcha qatorlarni qaytaradi — bir xil firma nomiga ikki xil shartnoma
+    mavjud bo'lsa, ikkisi ham topiladi.
+
+    Qaytaradi: [{"row_i": int, "firma_nomi": str, "shartnoma": str, "inn": str,
+                  "holati": str, "summa": str, "sotuv": str, "ostatok": str,
+                  "yangilangan": str}, ...]
+    Topilmasa: bo'sh ro'yxat []
+    """
+    import re as _re
+    try:
+        client = _get_client()
+        sh = client.open_by_key(SALARY_SHEET_ID)
+        ws = _find_worksheet_flexible(sh, TOLOVLAR_WS_NAME)
+        all_values = ws.get_all_values()
+        if not all_values:
+            return []
+        header = all_values[0]
+
+        caption_clean = caption.strip()
+        caption_digits = _re.sub(r"\s+", "", caption_clean)
+        is_inn = bool(_re.fullmatch(r"\d{9,12}", caption_digits))
+        if is_inn:
+            caption_clean = caption_digits
+        norm_caption = _norm_firma_nomi(caption_clean)
+
+        inn_col = next((i for i, h in enumerate(header) if "inn" in h.lower()), None)
+        name_col = next(
+            (i for i, h in enumerate(header) if "firma" in h.lower() or "нomi" in h.lower()),
+            0,
+        )
+
+        def _row_to_entry(row_i, row):
+            rd = dict(zip(header, row))
+            return {
+                "row_i":       row_i,
+                "firma_nomi":  str(rd.get("Firma nomi", "")).strip(),
+                "shartnoma":   str(rd.get("Shartnoma raqami", "")).strip(),
+                "inn":         str(rd.get("INN", "")).strip(),
+                "holati":      str(rd.get("Holati", "")).strip(),
+                "summa":       str(rd.get("Summa", "")).strip(),
+                "sotuv":       str(rd.get("Sotuv (so'm)", "")).strip(),
+                "ostatok":     str(rd.get("Ostatok (so'm)", "")).strip(),
+                "yangilangan": str(rd.get("Yangilangan", "")).strip(),
+            }
+
+        results = []
+        for row_i, row in enumerate(all_values[1:], start=2):
+            if is_inn and inn_col is not None:
+                cell_inn = _re.sub(r"\s+", "", str(row[inn_col]).strip()) if inn_col < len(row) else ""
+                if cell_inn == caption_clean:
+                    results.append(_row_to_entry(row_i, row))
+            else:
+                cell_name = str(row[name_col]).strip() if name_col < len(row) else ""
+                if _norm_firma_nomi(cell_name) == norm_caption:
+                    results.append(_row_to_entry(row_i, row))
+
+        # Aniq topilmasa — fuzzy qidirish (bitta eng yaxshi moslikni topib shu nom bo'yicha barcha qatorni qaytarish)
+        if not results and not is_inn:
+            from thefuzz import process as _fuzz_proc, fuzz as _fuzz
+            names_list = [
+                str(row[name_col]).strip()
+                for row in all_values[1:]
+                if name_col < len(row) and row[name_col]
+            ]
+            best = _fuzz_proc.extractOne(caption_clean, names_list, scorer=_fuzz.token_sort_ratio)
+            if best and best[1] >= 75:
+                matched_norm = _norm_firma_nomi(best[0])
+                for row_i, row in enumerate(all_values[1:], start=2):
+                    cell_name = str(row[name_col]).strip() if name_col < len(row) else ""
+                    if _norm_firma_nomi(cell_name) == matched_norm:
+                        results.append(_row_to_entry(row_i, row))
+
+        return results
+    except Exception as e:
+        logger.error(f"[FIRM_REPORT] _find_all_firm_rows_in_tolovlar xato: {e}")
+        return []
+
+
+def _entry_to_summa_info(entry: dict) -> dict:
+    """
+    _find_all_firm_rows_in_tolovlar natijasidagi bir qatorni
+    get_firm_summa() qaytaruviga o'xshash dict ga aylantiradi.
+    Postawchik bir necha shartnomadan birini tanlaganidan keyin
+    _send_firm_direct_report ga uzatish uchun ishlatiladi.
+    """
+    return {
+        "shartnoma":   entry.get("shartnoma", ""),
+        "inn":         entry.get("inn", ""),
+        "dogovor":     entry.get("shartnoma", ""),
+        "summa":       entry.get("summa", ""),
+        "holati":      entry.get("holati", ""),
+        "sotuv":       entry.get("sotuv", ""),
+        "priod":       "",
+        "ostatok":     entry.get("ostatok", ""),
+        "yangilangan": entry.get("yangilangan", ""),
+    }
+
+
+def _update_firm_totals_by_row_index(row_i: int, sotuv: float, priod: float, ostatok: float) -> str:
+    """
+    "To'lovlar" varag'ining row_i-qatoriga sotuv va ostatok yozadi.
+    ws ni qayta ochadi — contract_select kabi kechiktirilgan yozish uchun ishlatiladi.
+    """
+    try:
+        client = _get_client()
+        sh = client.open_by_key(SALARY_SHEET_ID)
+        ws = _find_worksheet_flexible(sh, TOLOVLAR_WS_NAME)
+        return _update_firm_totals_in_sheet(ws, row_i, sotuv, priod, ostatok)
+    except Exception as e:
+        logger.error(f"[FIRM_REPORT] _update_firm_totals_by_row_index xato: {e}")
+        return str(e)
+
+
 def _update_firm_totals_in_sheet(
     ws, row_i: int, sotuv: float, priod: float, ostatok: float
 ) -> str:
@@ -2384,10 +2536,10 @@ async def firm_report_receive_file(update: Update, ctx: ContextTypes.DEFAULT_TYP
             )
             return FIRM_REPORT_WAIT
 
-        # 3) Firmani Google Sheets dan topish
-        result = await run_read(_find_firm_row_in_tolovlar, caption)
+        # 3) Firmani Google Sheets dan topish (barcha shartnomalar)
+        all_rows = await run_read(_find_all_firm_rows_in_tolovlar, caption)
         def _fmt(n): return f"{int(round(n)):,}".replace(",", " ")
-        if result is None:
+        if not all_rows:
             await msg.edit_text(
                 f"⚠️ *{caption}* nomi/INN bo'yicha firma topilmadi.\n\n"
                 f"📊 Hisoblangan natijalar:\n"
@@ -2416,16 +2568,46 @@ async def firm_report_receive_file(update: Update, ctx: ContextTypes.DEFAULT_TYP
             )
             return PAYMENTS_MENU
 
-        ws, row_i, row_dict = result
-        firma_nomi = row_dict.get("Firma nomi") or caption
-        inn_val    = str(row_dict.get("INN", "")).strip()
+        # Agar birdan ko'p shartnoma topilsa — tanlash so'rash
+        if len(all_rows) > 1:
+            await msg.delete()
+            ctx.user_data["firm_upload_totals"] = {
+                "sotuv": sotuv, "priod": priod, "ostatok": ostatok, "n_prod": n_prod
+            }
+            ctx.user_data["firm_upload_contracts"] = all_rows
+            firma_nomi_display = all_rows[0]["firma_nomi"] or caption
+            back_txt = "⬅️ Nazad" if language == "ru" else "⬅️ Orqaga"
+            contract_btns = [
+                [f"📄 {r['shartnoma'] or ('Shartnoma #' + str(i+1))}"]
+                for i, r in enumerate(all_rows)
+            ]
+            contract_btns.append([back_txt])
+            from telegram import ReplyKeyboardMarkup as _RKM
+            await update.message.reply_text(
+                f"🏢 *{firma_nomi_display}* — bir nechta shartnoma topildi.\n\n"
+                f"📊 Hisoblangan: 💰 Sotuv *{_fmt(sotuv)} so'm* | 📦 Ostatok *{_fmt(ostatok)} so'm*\n\n"
+                f"Qaysi shartnomaga yozilsin?"
+                if language == "uz" else
+                f"🏢 *{firma_nomi_display}* — найдено несколько договоров.\n\n"
+                f"📊 Рассчитано: 💰 Продажи *{_fmt(sotuv)} сум* | 📦 Остаток *{_fmt(ostatok)} сум*\n\n"
+                f"По какому договору записать?",
+                parse_mode="Markdown",
+                reply_markup=_RKM(contract_btns, resize_keyboard=True),
+            )
+            return FIRM_CONTRACT_SELECT
+
+        # Faqat bitta shartnoma
+        entry = all_rows[0]
+        row_i      = entry["row_i"]
+        firma_nomi = entry["firma_nomi"] or caption
+        inn_val    = entry["inn"]
 
         # Avvalgi ma'lumot bor-yo'qligini tekshirish
-        existing_sotuv = str(row_dict.get("Sotuv (so'm)", "")).strip()
+        existing_sotuv = entry["sotuv"]
         already_filled = bool(existing_sotuv and existing_sotuv not in ("0", "-"))
 
         # 4a) To'lovlar varag'ini yangilash
-        err = await run_write(_update_firm_totals_in_sheet, ws, row_i, sotuv, priod, ostatok)
+        err = await run_write(_update_firm_totals_by_row_index, row_i, sotuv, priod, ostatok)
 
         # 4b) Oylik varaqqa yozish (YYYY-MM)
         cur_month  = _month_key()
@@ -2508,6 +2690,140 @@ async def firm_report_receive_file(update: Update, ctx: ContextTypes.DEFAULT_TYP
             reply_markup=payments_keyboard(language, True),
         )
 
+    return PAYMENTS_MENU
+
+
+async def firm_contract_select_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """
+    FIRM_CONTRACT_SELECT holatida — admin qaysi shartnomaga yozilishini tanlaydi.
+    user_data da firm_upload_contracts va firm_upload_totals saqlanган bo'lishi kerak.
+    """
+    from telegram import ReplyKeyboardMarkup as _RKM
+    language = ctx.user_data.get("lang", "uz")
+    is_admin = update.effective_user.id in ADMIN_IDS
+    txt = (update.message.text or "").strip()
+    back_txt = "⬅️ Orqaga" if language == "uz" else "⬅️ Nazad"
+
+    if txt in (back_txt, "⬅️ Orqaga", "⬅️ Назад"):
+        ctx.user_data.pop("firm_upload_contracts", None)
+        ctx.user_data.pop("firm_upload_totals", None)
+        from_new = ctx.user_data.pop("firm_upload_from_new_menu", False)
+        if from_new:
+            from bot import firm_reports_keyboard, FIRM_REPORTS_MENU
+            await update.message.reply_text(
+                "📊 Bo'limni tanlang:" if language == "uz" else "📊 Выберите раздел:",
+                reply_markup=firm_reports_keyboard(language, is_admin),
+            )
+            return FIRM_REPORTS_MENU
+        await update.message.reply_text(
+            "📊 Bo'limni tanlang:" if language == "uz" else "📊 Выберите раздел:",
+            reply_markup=payments_keyboard(language, is_admin),
+        )
+        return PAYMENTS_MENU
+
+    contracts = ctx.user_data.get("firm_upload_contracts", [])
+    totals = ctx.user_data.get("firm_upload_totals", {})
+    sotuv   = totals.get("sotuv", 0.0)
+    priod   = totals.get("priod", 0.0)
+    ostatok = totals.get("ostatok", 0.0)
+    n_prod  = totals.get("n_prod", 0)
+
+    def _fmt(n): return f"{int(round(n)):,}".replace(",", " ")
+
+    # Tanlangan shartnomani topish
+    selected = None
+    for entry in contracts:
+        shart = entry.get("shartnoma", "")
+        btn_label = f"📄 {shart}" if shart else None
+        if btn_label and txt == btn_label:
+            selected = entry
+            break
+    # Agar 📄 prefiksi bilan mos kelmasa — to'g'ridan shartnoma raqami orqali qidirish
+    if selected is None:
+        clean_txt = txt.lstrip("📄 ").strip()
+        for entry in contracts:
+            if entry.get("shartnoma", "").strip() == clean_txt:
+                selected = entry
+                break
+
+    if selected is None:
+        await update.message.reply_text(
+            "❌ Shartnoma topilmadi. Ro'yxatdan tanlang." if language == "uz"
+            else "❌ Договор не найден. Выберите из списка."
+        )
+        return FIRM_CONTRACT_SELECT
+
+    row_i      = selected["row_i"]
+    firma_nomi = selected["firma_nomi"]
+    inn_val    = selected["inn"]
+    shartnoma  = selected["shartnoma"]
+    existing_sotuv = selected.get("sotuv", "")
+    already_filled = bool(existing_sotuv and existing_sotuv not in ("0", "-"))
+
+    msg = await update.message.reply_text(
+        "⏳ Yozilmoqda..." if language == "uz" else "⏳ Записываю..."
+    )
+
+    try:
+        err = await run_write(_update_firm_totals_by_row_index, row_i, sotuv, priod, ostatok)
+
+        cur_month = _month_key()
+        month_err = await run_write(_save_to_monthly_sheet, firma_nomi, inn_val, cur_month, sotuv, priod, ostatok)
+        await run_write(_cleanup_old_monthly_sheets, 3)
+
+        month_disp = _month_display(cur_month, language)
+        shartnoma_lbl = f"📄 {'Shartnoma' if language == 'uz' else 'Договор'}: {shartnoma}" if shartnoma else ""
+
+        if err == "ok":
+            if already_filled:
+                warn1 = "Bu firma/shartnoma avval to'ldirilgan edi." if language == "uz" else "Данные этой фирмы/договора уже были заполнены ранее."
+                warn2 = "Eski qiymat ustiga yangi ma'lumot yozildi." if language == "uz" else "Старые данные перезаписаны новыми."
+                lines = [
+                    f"♻️ *{firma_nomi}* — qayta yozildi!",
+                    shartnoma_lbl,
+                    f"📅 {'Oy' if language == 'uz' else 'Месяц'}: {month_disp}",
+                    f"⚠️ {warn1}",
+                    warn2,
+                    "",
+                    f"📦 Dorilar soni: {n_prod} ta" if language == "uz" else f"📦 Позиций: {n_prod}",
+                    f"💰 Sotuv: *{_fmt(sotuv)} so'm*" if language == "uz" else f"💰 Продажи: *{_fmt(sotuv)} сум*",
+                    f"📦 Ostatok: *{_fmt(ostatok)} so'm*" if language == "uz" else f"📦 Остаток: *{_fmt(ostatok)} сум*",
+                ]
+            else:
+                lines = [
+                    f"✅ *{firma_nomi}* — yangilandi!",
+                    shartnoma_lbl,
+                    f"📅 {'Oy' if language == 'uz' else 'Месяц'}: {month_disp}",
+                    "",
+                    f"📦 Dorilar soni: {n_prod} ta" if language == "uz" else f"📦 Позиций: {n_prod}",
+                    f"💰 Sotuv: *{_fmt(sotuv)} so'm*" if language == "uz" else f"💰 Продажи: *{_fmt(sotuv)} сум*",
+                    f"📦 Ostatok: *{_fmt(ostatok)} so'm*" if language == "uz" else f"📦 Остаток: *{_fmt(ostatok)} сум*",
+                ]
+            if month_err != "ok":
+                lines.append(f"⚠️ Oylik varaqqa yozishda xato: {month_err}" if language == "uz" else f"⚠️ Ошибка записи в месячный лист: {month_err}")
+            await msg.edit_text("\n".join(l for l in lines if l is not None), parse_mode="Markdown")
+        else:
+            await msg.edit_text(f"⚠️ Topildi lekin yozishda xato: {err}" if language == "uz" else f"⚠️ Найден, но ошибка при записи: {err}")
+
+    except Exception as e:
+        logger.error(f"[FIRM_CONTRACT] firm_contract_select_handler xato: {e}")
+        await msg.edit_text(f"❌ Xato: {e}" if language == "uz" else f"❌ Ошибка: {e}")
+
+    # Tozalash
+    ctx.user_data.pop("firm_upload_contracts", None)
+    ctx.user_data.pop("firm_upload_totals", None)
+    from_new = ctx.user_data.pop("firm_upload_from_new_menu", False)
+    if from_new:
+        from bot import firm_reports_keyboard, FIRM_REPORTS_MENU
+        await update.message.reply_text(
+            "📊 Bo'limni tanlang:" if language == "uz" else "📊 Выберите раздел:",
+            reply_markup=firm_reports_keyboard(language, is_admin),
+        )
+        return FIRM_REPORTS_MENU
+    await update.message.reply_text(
+        "📊 Bo'limni tanlang:" if language == "uz" else "📊 Выберите раздел:",
+        reply_markup=payments_keyboard(language, is_admin),
+    )
     return PAYMENTS_MENU
 
 
@@ -3113,6 +3429,169 @@ async def appeal_dorixona_msg_handler(update: Update, ctx: ContextTypes.DEFAULT_
     return MENU
 
 
+def _format_admin_firm_report_lines(entry: dict, language: str) -> list:
+    """
+    To'lovlar varag'idan olingan bitta firma/shartnoma ma'lumotini
+    matn qatorlari ro'yxati sifatida formatlaydi (admin hisobot ko'rish uchun).
+    """
+    firma_nomi = entry.get("firma_nomi", "")
+    shartnoma  = entry.get("shartnoma", "")
+    inn        = entry.get("inn", "")
+    holati     = entry.get("holati", "").strip().lower()
+    summa      = entry.get("summa", "")
+    sotuv      = entry.get("sotuv", "")
+    ostatok    = entry.get("ostatok", "")
+    yangi      = entry.get("yangilangan", "")
+
+    belgi = "✅" if holati in ("to'langan", "оплачено", "✅") else \
+            "❌" if holati in ("to'lanmagan", "не оплачено", "❌") else "⏳"
+
+    lines = [f"🏢 *{firma_nomi}*", ""]
+    if shartnoma:
+        lines.append(f"📄 {'Shartnoma' if language == 'uz' else 'Договор'}: {shartnoma}")
+    if inn:
+        lines.append(f"🆔 INN: {inn}")
+    if summa or holati:
+        lines.append("")
+        lines.append(
+            f"{belgi} To'lov: {summa or '—'} ({entry.get('holati','—')})"
+            if language == "uz" else
+            f"{belgi} Оплата: {summa or '—'} ({entry.get('holati','—')})"
+        )
+    lines.append("")
+    if sotuv or ostatok:
+        lines.append("📊 *Sotish hisoboti:*" if language == "uz" else "📊 *Отчёт по продажам:*")
+        if sotuv:
+            lines.append(f"  💰 {'Sotuv' if language == 'uz' else 'Продажи'}: *{sotuv}*")
+        if ostatok:
+            lines.append(f"  📦 {'Ostatok' if language == 'uz' else 'Остаток'}: *{ostatok}*")
+        if yangi:
+            lines.append(f"  🕐 {'Yangilangan' if language == 'uz' else 'Обновлено'}: {yangi}")
+    else:
+        lines.append(
+            "📊 Sotish hisoboti hali yuklanmagan." if language == "uz"
+            else "📊 Отчёт по продажам ещё не загружен."
+        )
+    return lines
+
+
+async def admin_firm_report_search_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """
+    ADMIN_FIRM_REPORT_SEARCH holatida: admin firma nomi yoki INN ni kiritadi,
+    bot To'lovlar varag'idan topib hisobotni ko'rsatadi.
+    Birdan ko'p shartnoma bo'lsa → ADMIN_FIRM_REPORT_CONTRACT ga o'tadi.
+    """
+    from telegram import ReplyKeyboardMarkup as _RKM
+    language = ctx.user_data.get("lang", "uz")
+    is_admin = update.effective_user.id in ADMIN_IDS
+    txt = (update.message.text or "").strip()
+    back_txt = "⬅️ Orqaga" if language == "uz" else "⬅️ Назад"
+
+    if txt in (back_txt, "⬅️ Orqaga", "⬅️ Назад"):
+        from bot import firm_reports_keyboard, FIRM_REPORTS_MENU
+        await update.message.reply_text(
+            "📊 Bo'limni tanlang:" if language == "uz" else "📊 Выберите раздел:",
+            reply_markup=firm_reports_keyboard(language, is_admin),
+        )
+        return FIRM_REPORTS_MENU
+
+    msg = await update.message.reply_text(
+        "⏳ Qidirilmoqda..." if language == "uz" else "⏳ Поиск..."
+    )
+
+    try:
+        all_rows = await run_read(_find_all_firm_rows_in_tolovlar, txt)
+    except Exception as e:
+        logger.error(f"[ADMIN_REPORT] qidirishda xato: {e}")
+        all_rows = []
+
+    if not all_rows:
+        await msg.edit_text(
+            f"❌ *{txt}* nomi/INN bo'yicha firma topilmadi.\n\n"
+            f"To'lovlar varag'ida tekshiring yoki boshqa nom kiriting."
+            if language == "uz" else
+            f"❌ Фирма *{txt}* не найдена (по названию/ИНН).\n\n"
+            f"Проверьте в листе «To'lovlar» или введите другое название.",
+            parse_mode="Markdown",
+        )
+        return ADMIN_FIRM_REPORT_SEARCH
+
+    if len(all_rows) == 1:
+        lines = _format_admin_firm_report_lines(all_rows[0], language)
+        await msg.edit_text("\n".join(lines), parse_mode="Markdown")
+        from bot import firm_reports_keyboard, FIRM_REPORTS_MENU
+        await update.message.reply_text(
+            "📊 Bo'limni tanlang:" if language == "uz" else "📊 Выберите раздел:",
+            reply_markup=firm_reports_keyboard(language, is_admin),
+        )
+        return FIRM_REPORTS_MENU
+
+    # Birdan ko'p shartnoma — tanlash so'rash
+    await msg.delete()
+    ctx.user_data["admin_report_rows"] = all_rows
+    firma_nomi_display = all_rows[0]["firma_nomi"] or txt
+    contract_btns = [
+        [f"📄 {r['shartnoma'] or ('Shartnoma #' + str(i+1))}"]
+        for i, r in enumerate(all_rows)
+    ]
+    contract_btns.append([back_txt])
+    await update.message.reply_text(
+        f"🏢 *{firma_nomi_display}* — bir nechta shartnoma topildi.\n\nQaysi shartnoma hisobotini ko'rmoqchisiz?"
+        if language == "uz" else
+        f"🏢 *{firma_nomi_display}* — найдено несколько договоров.\n\nПо какому договору хотите посмотреть отчёт?",
+        parse_mode="Markdown",
+        reply_markup=_RKM(contract_btns, resize_keyboard=True),
+    )
+    return ADMIN_FIRM_REPORT_CONTRACT
+
+
+async def admin_firm_report_contract_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """
+    ADMIN_FIRM_REPORT_CONTRACT holatida — admin shartnomani tanlaydi va
+    shu shartnoma uchun hisobotni ko'rsatadi.
+    """
+    from telegram import ReplyKeyboardMarkup as _RKM
+    language = ctx.user_data.get("lang", "uz")
+    is_admin = update.effective_user.id in ADMIN_IDS
+    txt = (update.message.text or "").strip()
+    back_txt = "⬅️ Orqaga" if language == "uz" else "⬅️ Назад"
+
+    if txt in (back_txt, "⬅️ Orqaga", "⬅️ Назад"):
+        ctx.user_data.pop("admin_report_rows", None)
+        from bot import firm_reports_keyboard, FIRM_REPORTS_MENU
+        await update.message.reply_text(
+            "📊 Bo'limni tanlang:" if language == "uz" else "📊 Выберите раздел:",
+            reply_markup=firm_reports_keyboard(language, is_admin),
+        )
+        return FIRM_REPORTS_MENU
+
+    rows = ctx.user_data.get("admin_report_rows", [])
+    selected = None
+    for entry in rows:
+        shart = entry.get("shartnoma", "")
+        if txt == f"📄 {shart}" or txt == shart:
+            selected = entry
+            break
+
+    if selected is None:
+        await update.message.reply_text(
+            "❌ Shartnoma topilmadi. Ro'yxatdan tanlang." if language == "uz"
+            else "❌ Договор не найден. Выберите из списка."
+        )
+        return ADMIN_FIRM_REPORT_CONTRACT
+
+    lines = _format_admin_firm_report_lines(selected, language)
+    await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+
+    ctx.user_data.pop("admin_report_rows", None)
+    from bot import firm_reports_keyboard, FIRM_REPORTS_MENU
+    await update.message.reply_text(
+        "📊 Bo'limni tanlang:" if language == "uz" else "📊 Выберите раздел:",
+        reply_markup=firm_reports_keyboard(language, is_admin),
+    )
+    return FIRM_REPORTS_MENU
+
+
 async def admin_firm_lookup_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Admin firma nomini kiritadi — bot shu firmaning faylini va to'lovini topib beradi."""
     language = ctx.user_data.get("lang", "uz")
@@ -3161,6 +3640,70 @@ async def get_my_report_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
 
     await _send_firm_direct_report(update, ctx, info)
+
+
+# ─── Postawchik shartnoma tanlash handler ────────────────────────────────────
+
+async def firm_supplier_contract_select_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """
+    FIRM_SUPPLIER_CONTRACT_SELECT holatida — postawchik qaysi shartnoma
+    hisobotini ko'rmoqchi ekanini tanlaydi (hisobotni ko'rish uchun).
+    """
+    language = ctx.user_data.get("lang", "uz")
+    txt = (update.message.text or "").strip()
+    back_txt = "⬅️ Orqaga" if language == "uz" else "⬅️ Назад"
+    is_admin = update.effective_user.id in ADMIN_IDS
+
+    if txt in (back_txt, "⬅️ Orqaga", "⬅️ Назад"):
+        ctx.user_data.pop("supplier_firm_info", None)
+        ctx.user_data.pop("supplier_contract_rows", None)
+        from_menu = ctx.user_data.pop("firm_report_from_menu", False)
+        if from_menu:
+            from bot import main_keyboard, T, MENU
+            await update.message.reply_text(
+                T[language]["menu"],
+                parse_mode="Markdown",
+                reply_markup=main_keyboard(language, is_admin),
+            )
+            return MENU
+        await update.message.reply_text(
+            "📊 Bo'limni tanlang:" if language == "uz" else "📊 Выберите раздел:",
+            reply_markup=payments_keyboard(language, is_admin),
+        )
+        return PAYMENTS_MENU
+
+    rows = ctx.user_data.get("supplier_contract_rows", [])
+    selected = None
+    for entry in rows:
+        shart = entry.get("shartnoma", "")
+        if txt == f"📄 {shart}" or txt == shart:
+            selected = entry
+            break
+    # "📄 " prefiksi bo'lmagan holda ham qidirish
+    if selected is None:
+        clean_txt = txt.lstrip("📄 ").strip()
+        for entry in rows:
+            if entry.get("shartnoma", "").strip() == clean_txt:
+                selected = entry
+                break
+
+    if selected is None:
+        await update.message.reply_text(
+            "❌ Shartnoma topilmadi. Ro'yxatdan tanlang." if language == "uz"
+            else "❌ Договор не найден. Выберите из списка."
+        )
+        return FIRM_SUPPLIER_CONTRACT_SELECT
+
+    firm_info  = ctx.user_data.pop("supplier_firm_info", {})
+    ctx.user_data.pop("supplier_contract_rows", None)
+    from_menu  = ctx.user_data.pop("firm_report_from_menu", False)
+    summa_info = _entry_to_summa_info(selected)
+
+    return await _send_firm_direct_report(
+        update, ctx, firm_info,
+        from_menu=from_menu,
+        summa_info_override=summa_info,
+    )
 
 
 # ─── Oy tanlash handler ──────────────────────────────────────────────────────
@@ -3289,6 +3832,18 @@ def get_sal_states():
         ],
         FIRM_MONTH_SELECT: [
             MessageHandler(filters.TEXT & ~filters.COMMAND, firm_month_select_handler),
+        ],
+        FIRM_CONTRACT_SELECT: [
+            MessageHandler(filters.TEXT & ~filters.COMMAND, firm_contract_select_handler),
+        ],
+        FIRM_SUPPLIER_CONTRACT_SELECT: [
+            MessageHandler(filters.TEXT & ~filters.COMMAND, firm_supplier_contract_select_handler),
+        ],
+        ADMIN_FIRM_REPORT_SEARCH: [
+            MessageHandler(filters.TEXT & ~filters.COMMAND, admin_firm_report_search_handler),
+        ],
+        ADMIN_FIRM_REPORT_CONTRACT: [
+            MessageHandler(filters.TEXT & ~filters.COMMAND, admin_firm_report_contract_handler),
         ],
         APPEAL_MENU: [
             MessageHandler(filters.TEXT & ~filters.COMMAND, appeal_menu_handler),
