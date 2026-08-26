@@ -7,7 +7,7 @@ from salary_handlers import (
     reports_menu_enter, reports_menu_handler, REPORTS_MENU,
     cmd_sync_oylik, appeal_menu_enter,
     appeal_response_button, appeal_comment_catcher,
-    ADMIN_IDS,
+    ADMIN_IDS, ADMIN_FIRM_REPORT_SEARCH,
 )
 from exclusive_handlers import cmd_eksklyuziv, get_eks_states
 from attendance_handlers import (
@@ -555,6 +555,17 @@ async def firm_reports_menu_handler(update: Update, ctx: ContextTypes.DEFAULT_TY
         return MENU
 
     elif txt == T[language]["get_report_btn"]:
+        if is_admin:
+            # Admin — ixtiyoriy firma nomini kiritib ko'radi
+            from telegram import ReplyKeyboardMarkup as _RKM
+            back_txt = T[language]["back"]
+            await update.message.reply_text(
+                "🏢 Firma nomini yoki INN raqamini kiriting:"
+                if language == "uz" else
+                "🏢 Введите название фирмы или ИНН:",
+                reply_markup=_RKM([[back_txt]], resize_keyboard=True),
+            )
+            return ADMIN_FIRM_REPORT_SEARCH
         # Firma vakili hisobot oladi; oddiy user → xabar
         from salary_handlers import get_firma_file_by_telegram_id, _send_firm_direct_report
         from attendance import run_read
