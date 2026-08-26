@@ -2064,7 +2064,7 @@ _MONTHS_RU = {
 }
 
 MONTHLY_SHEET_COLUMNS = [
-    "Firma nomi", "INN", "Priod (so'm)", "Sotuv (so'm)", "Ostatok (so'm)", "Yangilangan"
+    "Firma nomi", "INN", "Sotuv (so'm)", "Ostatok (so'm)", "Yangilangan"
 ]
 
 
@@ -2420,7 +2420,11 @@ async def firm_report_receive_file(update: Update, ctx: ContextTypes.DEFAULT_TYP
         firma_nomi = row_dict.get("Firma nomi") or caption
         inn_val    = str(row_dict.get("INN", "")).strip()
 
-        # 4a) To'lovlar varag'ini yangilash (eng so'nggi ma'lumot sifatida)
+        # Avvalgi ma'lumot bor-yo'qligini tekshirish
+        existing_sotuv = str(row_dict.get("Sotuv (so'm)", "")).strip()
+        already_filled = bool(existing_sotuv and existing_sotuv not in ("0", "-"))
+
+        # 4a) To'lovlar varag'ini yangilash
         err = await run_write(_update_firm_totals_in_sheet, ws, row_i, sotuv, priod, ostatok)
 
         # 4b) Oylik varaqqa yozish (YYYY-MM)
@@ -2434,17 +2438,34 @@ async def firm_report_receive_file(update: Update, ctx: ContextTypes.DEFAULT_TYP
 
         if err == "ok":
             month_disp = _month_display(cur_month, language)
-            lines = [
-                f"✅ *{firma_nomi}* — yangilandi!",
-                f"📅 {'Oy' if language == 'uz' else 'Месяц'}: {month_disp}",
-                "",
-                f"📦 Dorilar soni: {n_prod} ta" if language == "uz"
-                else f"📦 Позиций: {n_prod}",
-                f"💰 Sotuv: *{_fmt(sotuv)} so'm*" if language == "uz"
-                else f"💰 Продажи: *{_fmt(sotuv)} сум*",
-                f"📦 Ostatok: *{_fmt(ostatok)} so'm*" if language == "uz"
-                else f"📦 Остаток: *{_fmt(ostatok)} сум*",
-            ]
+            if already_filled:
+                # Avval to'ldirilgan bo'lsa — ogohlantirish bilan qayta yozildi
+                lines = [
+                    f"♻️ *{firma_nomi}* — qayta yozildi!",
+                    f"📅 {'Oy' if language == 'uz' else 'Месяц'}: {month_disp}",
+                    f"⚠️ {'Bu firma hisobi avval allaqachon to\'ldirilgan edi.' if language == 'uz' else 'Данные этой фирмы уже были заполнены ранее.'}",
+                    f"{'Eski qiymat ustiga yangi ma\'lumot yozildi.' if language == 'uz' else 'Старые данные перезаписаны новыми.'}",
+                    "",
+                    f"📦 Dorilar soni: {n_prod} ta" if language == "uz" else f"📦 Позиций: {n_prod}",
+                    f"💰 Sotuv: *{_fmt(sotuv)} so'm*" if language == "uz" else f"💰 Продажи: *{_fmt(sotuv)} сум*",
+                    f"📦 Ostatok: *{_fmt(ostatok)} so'm*" if language == "uz" else f"📦 Остаток: *{_fmt(ostatok)} сум*",
+                ]
+            else:
+                lines = [
+                    f"✅ *{firma_nomi}* — yangilandi!",
+                    f"📅 {'Oy' if language == 'uz' else 'Месяц'}: {month_disp}",
+                    "",
+                    f"📦 Dorilar soni: {n_prod} ta" if language == "uz" else f"📦 Позиций: {n_prod}",
+                    f"💰 Sotuv: *{_fmt(sotuv)} so'm*" if language == "uz" else f"💰 Продажи: *{_fmt(sotuv)} сум*",
+                    f"📦 Ostatok: *{_fmt(ostatok)} so'm*" if language == "uz" else f"📦 Остаток: *{_fmt(ostatok)} сум*",
+                ]
+            if month_err != "ok":
+                lines.append("")
+                lines.append(
+                    f"⚠️ Oylik varaqqa yozishda xato: {month_err}"
+                    if language == "uz" else
+                    f"⚠️ Ошибка записи в месячный лист: {month_err}"
+                )
             await msg.edit_text("\n".join(lines), parse_mode="Markdown")
         else:
             await msg.edit_text(
