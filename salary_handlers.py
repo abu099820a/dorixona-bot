@@ -3519,6 +3519,27 @@ async def admin_firm_report_search_handler(update: Update, ctx: ContextTypes.DEF
     if len(all_rows) == 1:
         lines = _format_admin_firm_report_lines(all_rows[0], language)
         await msg.edit_text("\n".join(lines), parse_mode="Markdown")
+        # Firmalar varag'idan faylni topib admin ga yuborish
+        firma_nomi_for_file = all_rows[0].get("firma_nomi", "") or txt
+        firm_file = await run_read(get_firma_file_by_name, firma_nomi_for_file)
+        if firm_file and firm_file.get("file_id"):
+            try:
+                await ctx.bot.send_document(
+                    chat_id=update.effective_chat.id,
+                    document=firm_file["file_id"],
+                    filename=firm_file.get("file_name") or "hisobot.xlsx",
+                )
+            except Exception as e:
+                logger.error(f"[ADMIN_REPORT] fayl yuborish xato: {e}")
+                await update.message.reply_text(
+                    "❌ Faylni yuborishda xatolik yuz berdi." if language == "uz"
+                    else "❌ Ошибка при отправке файла."
+                )
+        else:
+            await update.message.reply_text(
+                "📭 Bu firma uchun hisobot fayli hali yuklanmagan." if language == "uz"
+                else "📭 Файл отчёта для этой фирмы ещё не загружен."
+            )
         from bot import firm_reports_keyboard, FIRM_REPORTS_MENU
         await update.message.reply_text(
             "📊 Bo'limni tanlang:" if language == "uz" else "📊 Выберите раздел:",
@@ -3582,6 +3603,28 @@ async def admin_firm_report_contract_handler(update: Update, ctx: ContextTypes.D
 
     lines = _format_admin_firm_report_lines(selected, language)
     await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+
+    # Firmalar varag'idan faylni topib admin ga yuborish
+    firma_nomi_for_file = selected.get("firma_nomi", "")
+    firm_file = await run_read(get_firma_file_by_name, firma_nomi_for_file)
+    if firm_file and firm_file.get("file_id"):
+        try:
+            await ctx.bot.send_document(
+                chat_id=update.effective_chat.id,
+                document=firm_file["file_id"],
+                filename=firm_file.get("file_name") or "hisobot.xlsx",
+            )
+        except Exception as e:
+            logger.error(f"[ADMIN_REPORT] fayl yuborish xato: {e}")
+            await update.message.reply_text(
+                "❌ Faylni yuborishda xatolik yuz berdi." if language == "uz"
+                else "❌ Ошибка при отправке файла."
+            )
+    else:
+        await update.message.reply_text(
+            "📭 Bu firma uchun hisobot fayli hali yuklanmagan." if language == "uz"
+            else "📭 Файл отчёта для этой фирмы ещё не загружен."
+        )
 
     ctx.user_data.pop("admin_report_rows", None)
     from bot import firm_reports_keyboard, FIRM_REPORTS_MENU
