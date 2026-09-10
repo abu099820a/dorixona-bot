@@ -907,17 +907,40 @@ def save_firma_telegram_id_by_username(username: str, telegram_id: int) -> bool:
 def save_new_firma(firma_nomi: str, username: str = "",
                    phone: str = "", telegram_id=None) -> bool:
     """
-    Firmalar varag'iga yangi firma qatori qo'shadi (admin bot orqali qo'shganda).
+    Firmalar varag'iga firma qo'shadi yoki yangilaydi (upsert).
     Jadval tuzilishi: Firma nomi | Telefon | TelegramID | FileID | FileName | Username
-    username, phone, telegram_id — ixtiyoriy, biri yoki bir nechtasi berilishi mumkin.
+    - Firma avval mavjud bo'lsa → Telefon, TelegramID, Username ni yangilaydi
+      (faqat yangi qiymat berilgan bo'lsa; bo'sh qiymat mavjudni o'chirmaydi)
+    - Yangi firma bo'lsa → yangi qator qo'shadi.
     """
     try:
         from register_handlers import _get_firmalar_ws
         ws = _get_firmalar_ws()
-        uname  = _norm_username(username) if username else ""
-        tid    = str(telegram_id) if telegram_id else ""
-        ph     = _norm_phone_for_firma(phone) if phone else ""
+        uname = _norm_username(username) if username else ""
+        tid   = str(telegram_id) if telegram_id else ""
+        ph    = _norm_phone_for_firma(phone) if phone else ""
+
+        # Mavjud qatorni qidirish
+        all_values = ws.get_all_values()
+        target = _norm_firma_nomi(firma_nomi)
+        for i, row in enumerate(all_values[1:], start=2):
+            if row and _norm_firma_nomi(row[0]) == target:
+                # Firma topildi — faqat yangi qiymatlarni yangilaymiz
+                batch = []
+                if ph:
+                    batch.append({"range": f"B{i}", "values": [[ph]]})
+                if tid:
+                    batch.append({"range": f"C{i}", "values": [[tid]]})
+                if uname:
+                    batch.append({"range": f"F{i}", "values": [[uname]]})
+                if batch:
+                    ws.batch_update(batch)
+                logger.info(f"[FIRMS] Firma yangilandi (upsert): '{firma_nomi}' — {i}-qator")
+                return True
+
+        # Yangi firma — qator qo'shish
         ws.append_row([firma_nomi, ph, tid, "", "", uname])
+        logger.info(f"[FIRMS] Yangi firma qo'shildi: '{firma_nomi}'")
         return True
     except Exception as e:
         logger.error(f"[FIRMS] save_new_firma xato: {e}")
@@ -2848,13 +2871,29 @@ async def firm_report_receive_file(update: Update, ctx: ContextTypes.DEFAULT_TYP
                 firm_contact = await run_read(get_firma_file_by_name, firma_nomi)
                 auto_tid = (firm_contact or {}).get("telegram_id", "")
                 if auto_tid and str(auto_tid).strip().lstrip("-").isdigit():
-                    auto_caption = (
-                        f"📊 *{firma_nomi}* — {month_disp} hisoboti\n\n"
-                        "✅ Administrator tomonidan yuklandi."
-                        if language == "uz" else
-                        f"📊 *{firma_nomi}* — отчёт за {month_disp}\n\n"
-                        "✅ Загружен администратором."
-                    )
+                    # Sotuv/ostatok ma'lumotlari caption ga qo'shiladi
+                    _s = _fmt(sotuv)   if sotuv   else ""
+                    _o = _fmt(ostatok) if ostatok else ""
+                    if language == "uz":
+                        _fin = (
+                            f"\n💰 Sotuv: *{_s} so'm*\n📦 Ostatok: *{_o} so'm*\n"
+                            if (_s or _o) else ""
+                        )
+                        auto_caption = (
+                            f"📊 *{firma_nomi}* — {month_disp} hisoboti"
+                            f"{_fin}\n"
+                            "✅ Administrator tomonidan yuklandi."
+                        )
+                    else:
+                        _fin = (
+                            f"\n💰 Продажи: *{_s} сум*\n📦 Остаток: *{_o} сум*\n"
+                            if (_s or _o) else ""
+                        )
+                        auto_caption = (
+                            f"📊 *{firma_nomi}* — отчёт за {month_disp}"
+                            f"{_fin}\n"
+                            "✅ Загружен администратором."
+                        )
                     await ctx.bot.send_document(
                         chat_id=int(auto_tid),
                         document=doc.file_id,
