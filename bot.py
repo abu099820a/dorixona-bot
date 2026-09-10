@@ -8,6 +8,7 @@ from salary_handlers import (
     cmd_sync_oylik, appeal_menu_enter,
     appeal_response_button, appeal_comment_catcher,
     ADMIN_IDS, ADMIN_FIRM_REPORT_SEARCH,
+    FIRM_ADD_NAME, FIRM_ADD_USERNAME,
 )
 from exclusive_handlers import cmd_eksklyuziv, get_eks_states
 from attendance_handlers import (
@@ -377,11 +378,13 @@ def firm_reports_keyboard(language, is_admin=False):
     submenyu — firma vakillari va admin uchun.
     - "📊 Hisobot olish"   → hamma ko'radi (postawchiklar + admin)
     - "📥 Hisobot yuklash" → faqat admin ko'radi
+    - "➕ Firma qo'shish"  → faqat admin ko'radi
     - "⬅️ Orqaga"         → asosiy menyuga qaytish
     """
     rows = [[T[language]["get_report_btn"]]]
     if is_admin:
         rows.append([T[language]["upload_report_btn"]])
+        rows.append(["➕ Firma qo'shish" if language == "uz" else "➕ Добавить фирму"])
     rows.append([T[language]["back"]])
     return ReplyKeyboardMarkup(rows, resize_keyboard=True)
 
@@ -566,8 +569,8 @@ async def firm_reports_menu_handler(update: Update, ctx: ContextTypes.DEFAULT_TY
                 reply_markup=_RKM([[back_txt]], resize_keyboard=True),
             )
             return ADMIN_FIRM_REPORT_SEARCH
-        # Firma vakili hisobot oladi; oddiy user → xabar
-        from salary_handlers import get_firma_file_by_telegram_id, _send_firm_direct_report
+        # Firma vakili hisobot oladi
+        from salary_handlers import get_firma_file_by_telegram_id, _send_firm_direct_report, FIRM_PHONE_WAIT
         from attendance import run_read
         try:
             firm_info = await run_read(get_firma_file_by_telegram_id, update.effective_user.id)
@@ -576,22 +579,65 @@ async def firm_reports_menu_handler(update: Update, ctx: ContextTypes.DEFAULT_TY
             firm_info = None
         if firm_info:
             return await _send_firm_direct_report(update, ctx, firm_info, from_menu=True)
-        # Ro'yxatdan o'tmagan foydalanuvchi
-        await update.message.reply_text(
-            "❌ Siz firma sifatida ro'yxatdan o'tmagansiz.\n\n"
-            "📞 Hisobot olish uchun administratsiyaga murojaat qiling."
-            if language == "uz" else
-            "❌ Вы не зарегистрированы как представитель фирмы.\n\n"
-            "📞 Обратитесь к администрации для получения отчёта.",
-            reply_markup=firm_reports_keyboard(language, is_admin),
+        # TelegramID topilmadi — @username bo'yicha tekshirish
+        user_uname = update.effective_user.username
+        if user_uname:
+            from salary_handlers import get_firma_file_by_username, save_firma_telegram_id_by_username
+            from attendance import run_read, run_write
+            try:
+                firm_info_u = await run_read(get_firma_file_by_username, user_uname)
+            except Exception:
+                firm_info_u = None
+            if firm_info_u:
+                try:
+                    await run_write(save_firma_telegram_id_by_username, user_uname, update.effective_user.id)
+                except Exception:
+                    pass
+                return await _send_firm_direct_report(update, ctx, firm_info_u, from_menu=True)
+        # Username ham topilmadi — telefon raqami so'rash
+        from telegram import KeyboardButton, ReplyKeyboardMarkup as _RKM
+        back_txt_s = T[language]["back"]
+        kb = _RKM(
+            [[KeyboardButton(
+                "📱 Telefon raqamimni yuborish" if language == "uz" else "📱 Отправить мой номер",
+                request_contact=True,
+            )],
+             [back_txt_s]],
+            resize_keyboard=True,
         )
-        return FIRM_REPORTS_MENU
+        await update.message.reply_text(
+            "📱 Hisobot olish uchun telefon raqamingizni yuboring.\n\n"
+            "_(Pastdagi tugmani bosing)_"
+            if language == "uz" else
+            "📱 Для получения отчёта отправьте ваш номер телефона.\n\n"
+            "_(Нажмите кнопку ниже)_",
+            parse_mode="Markdown",
+            reply_markup=kb,
+        )
+        return FIRM_PHONE_WAIT
 
     elif is_admin and txt == T[language]["upload_report_btn"]:
         # Admin xlsx fayl yuklaydi — yangi menyudan chaqirilganini belgilaymiz
         from salary_handlers import firm_report_enter
         ctx.user_data["firm_upload_from_new_menu"] = True
         return await firm_report_enter(update, ctx)
+
+    elif is_admin and txt in ("➕ Firma qo'shish", "➕ Добавить фирму"):
+        # Admin yangi firma qo'shadi
+        back_txt_s = T[language]["back"]
+        from telegram import ReplyKeyboardMarkup as _RKM
+        await update.message.reply_text(
+            "🏢 *Yangi firma qo'shish*\n\n"
+            "Firma nomini kiriting:\n"
+            "_(To'lovlar varag'idagi nom bilan bir xil bo'lishi kerak)_"
+            if language == "uz" else
+            "🏢 *Добавление новой фирмы*\n\n"
+            "Введите название фирмы:\n"
+            "_(Должно совпадать с названием в листе «To'lovlar»)_",
+            parse_mode="Markdown",
+            reply_markup=_RKM([[back_txt_s]], resize_keyboard=True),
+        )
+        return FIRM_ADD_NAME
 
     # Tanilmagan matn
     await update.message.reply_text(
