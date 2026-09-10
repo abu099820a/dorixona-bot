@@ -904,16 +904,20 @@ def save_firma_telegram_id_by_username(username: str, telegram_id: int) -> bool:
         return False
 
 
-def save_new_firma(firma_nomi: str, username: str) -> bool:
+def save_new_firma(firma_nomi: str, username: str = "",
+                   phone: str = "", telegram_id=None) -> bool:
     """
     Firmalar varag'iga yangi firma qatori qo'shadi (admin bot orqali qo'shganda).
     Jadval tuzilishi: Firma nomi | Telefon | TelegramID | FileID | FileName | Username
+    username, phone, telegram_id — ixtiyoriy, biri yoki bir nechtasi berilishi mumkin.
     """
     try:
         from register_handlers import _get_firmalar_ws
         ws = _get_firmalar_ws()
-        uname = _norm_username(username)
-        ws.append_row([firma_nomi, "", "", "", "", uname])
+        uname  = _norm_username(username) if username else ""
+        tid    = str(telegram_id) if telegram_id else ""
+        ph     = _norm_phone_for_firma(phone) if phone else ""
+        ws.append_row([firma_nomi, ph, tid, "", "", uname])
         return True
     except Exception as e:
         logger.error(f"[FIRMS] save_new_firma xato: {e}")
@@ -4114,6 +4118,18 @@ async def firm_add_name_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         )
         return FIRM_REPORTS_MENU
 
+    # Kontakt karta yuborilsa — firma nomi matn bo'lishi kerakligi haqida xabar
+    if update.message.contact:
+        await update.message.reply_text(
+            "⚠️ Bu yerda *firma nomini* matn sifatida kiriting.\n"
+            "(Kontakt kartani keyingi qadamda yuboring)"
+            if language == "uz" else
+            "⚠️ Здесь введите *название фирмы* текстом.\n"
+            "(Контакт отправите на следующем шаге)",
+            parse_mode="Markdown",
+        )
+        return FIRM_ADD_NAME
+
     if not txt:
         await update.message.reply_text(
             "❌ Firma nomini kiriting." if language == "uz" else "❌ Введите название фирмы."
@@ -4138,15 +4154,20 @@ async def firm_add_name_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def firm_add_username_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """
-    FIRM_ADD_USERNAME holatida — admin firma vakili @username ni yozadi.
+    FIRM_ADD_USERNAME holatida — admin firma vakili ma'lumotini yuboradi.
+    Ikkita variant qabul qilinadi:
+      1. Kontakt karta (filters.CONTACT) — telefon va TelegramID olinadi
+      2. Matn (@username yoki username matn sifatida)
     Firmalar varag'iga yangi qator qo'shib, menyuga qaytadi.
     """
+    import html as _html
     from bot import firm_reports_keyboard, FIRM_REPORTS_MENU
     language = ctx.user_data.get("lang", "uz")
     is_admin = update.effective_user.id in ADMIN_IDS
-    txt = (update.message.text or "").strip()
     back_txt = "⬅️ Orqaga" if language == "uz" else "⬅️ Назад"
+    txt = (update.message.text or "").strip()
 
+    # Orqaga
     if txt in (back_txt, "⬅️ Orqaga", "⬅️ Назад"):
         ctx.user_data.pop("new_firma_nomi", None)
         await update.message.reply_text(
@@ -4156,46 +4177,87 @@ async def firm_add_username_handler(update: Update, ctx: ContextTypes.DEFAULT_TY
         return FIRM_REPORTS_MENU
 
     firma_nomi = ctx.user_data.pop("new_firma_nomi", "").strip()
-    username = _norm_username(txt)
-
-    if not username:
-        await update.message.reply_text(
-            "❌ Noto'g'ri username. Masalan: @sardor_med\nQayta kiriting."
-            if language == "uz" else
-            "❌ Неверный username. Например: @sardor_med\nВведите ещё раз."
-        )
-        ctx.user_data["new_firma_nomi"] = firma_nomi
-        return FIRM_ADD_USERNAME
-
     msg = await update.message.reply_text(
         "⏳ Saqlanmoqda..." if language == "uz" else "⏳ Сохраняется..."
     )
 
-    ok = await run_write(save_new_firma, firma_nomi, username)
+    # ── 1-variant: kontakt karta ──────────────────────────────────────────────
+    contact = update.message.contact
+    if contact:
+        phone     = contact.phone_number or ""
+        tid       = contact.user_id        # None bo'lishi mumkin
+        full_name = (
+            f"{contact.first_name or ''} {contact.last_name or ''}".strip() or phone
+        )
+        ok = await run_write(save_new_firma, firma_nomi, "", phone, tid)
+        if ok:
+            if tid:
+                tid_note = (
+                    f"\n🆔 TelegramID: <b>{tid}</b>\n✅ Hisobot avtomatik yuboriladi!"
+                    if language == "uz" else
+                    f"\n🆔 TelegramID: <b>{tid}</b>\n✅ Отчёт будет отправлен автоматически!"
+                )
+            else:
+                tid_note = (
+                    "\n📞 TelegramID yo'q — hisobot so'ralganda telefon orqali aniqlanadi."
+                    if language == "uz" else
+                    "\n📞 TelegramID нет — будет определён по телефону при запросе отчёта."
+                )
+            await msg.edit_text(
+                f"✅ <b>{_html.escape(firma_nomi)}</b> — qo'shildi!\n\n"
+                f"👤 <b>{_html.escape(full_name)}</b>\n"
+                f"📱 {_html.escape(phone)}"
+                f"{tid_note}"
+                if language == "uz" else
+                f"✅ <b>{_html.escape(firma_nomi)}</b> — добавлена!\n\n"
+                f"👤 <b>{_html.escape(full_name)}</b>\n"
+                f"📱 {_html.escape(phone)}"
+                f"{tid_note}",
+                parse_mode="HTML",
+            )
+        else:
+            await msg.edit_text(
+                "❌ Saqlashda xato. Qayta urinib ko'ring."
+                if language == "uz" else
+                "❌ Ошибка сохранения. Попробуйте ещё раз."
+            )
+        await update.message.reply_text(
+            "📊 Bo'limni tanlang:" if language == "uz" else "📊 Выберите раздел:",
+            reply_markup=firm_reports_keyboard(language, is_admin),
+        )
+        return FIRM_REPORTS_MENU
 
-    import html as _html
+    # ── 2-variant: matn (@username) ───────────────────────────────────────────
+    username = _norm_username(txt)
+    if not username:
+        await msg.delete()
+        await update.message.reply_text(
+            "❌ Noto'g'ri username. Masalan: @sardormed\n\n"
+            "Yoki firma vakilining kontakt kartasini yuboring."
+            if language == "uz" else
+            "❌ Неверный username. Например: @sardormed\n\n"
+            "Или отправьте контактную карточку представителя."
+        )
+        ctx.user_data["new_firma_nomi"] = firma_nomi
+        return FIRM_ADD_USERNAME
+
+    ok = await run_write(save_new_firma, firma_nomi, username)
     if ok:
         await msg.edit_text(
             f"✅ <b>{_html.escape(firma_nomi)}</b> — qo'shildi!\n\n"
             f"👤 Telegram: <b>@{_html.escape(username)}</b>\n\n"
-            "ℹ️ Firma vakili 'Hisobot olish' bosganida yoki admin hisobot "
-            "yuklaganida avtomatik aniqlanadi.\n\n"
-            "📋 <i>Eslatma: Firmalar varag'ida 6-ustun sarlavhasi "
-            "'Username' bo'lishi kerak.</i>"
+            "ℹ️ Firma vakili 'Hisobot olish' bosganida username orqali aniqlanadi."
             if language == "uz" else
             f"✅ <b>{_html.escape(firma_nomi)}</b> — добавлена!\n\n"
             f"👤 Telegram: <b>@{_html.escape(username)}</b>\n\n"
-            "ℹ️ Представитель будет определён автоматически при нажатии "
-            "'Получить отчёт' или при загрузке отчёта.\n\n"
-            "<i>Заметка: в листе «Firmalar» 6-й столбец должен называться "
-            "«Username».</i>",
+            "ℹ️ Представитель будет определён по username при запросе отчёта.",
             parse_mode="HTML",
         )
     else:
         await msg.edit_text(
-            "❌ Saqlashda xato yuz berdi. Qayta urinib ko'ring."
+            "❌ Saqlashda xato. Qayta urinib ko'ring."
             if language == "uz" else
-            "❌ Ошибка при сохранении. Попробуйте ещё раз."
+            "❌ Ошибка сохранения. Попробуйте ещё раз."
         )
 
     await update.message.reply_text(
@@ -4248,9 +4310,11 @@ def get_sal_states():
             MessageHandler(filters.TEXT & ~filters.COMMAND, firm_supplier_contract_select_handler),
         ],
         FIRM_ADD_NAME: [
+            MessageHandler(filters.CONTACT, firm_add_name_handler),
             MessageHandler(filters.TEXT & ~filters.COMMAND, firm_add_name_handler),
         ],
         FIRM_ADD_USERNAME: [
+            MessageHandler(filters.CONTACT, firm_add_username_handler),
             MessageHandler(filters.TEXT & ~filters.COMMAND, firm_add_username_handler),
         ],
         ADMIN_FIRM_REPORT_SEARCH: [
