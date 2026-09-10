@@ -2417,7 +2417,7 @@ _MONTHS_RU = {
 }
 
 MONTHLY_SHEET_COLUMNS = [
-    "Firma nomi", "INN", "Sotuv (so'm)", "Ostatok (so'm)", "Yangilangan"
+    "Firma nomi", "INN", "Sotuv (so'm)", "Ostatok (so'm)", "Yangilangan", "FileID", "FileName"
 ]
 
 
@@ -2476,10 +2476,12 @@ def _get_or_create_monthly_sheet(sh, month_key: str):
 
 def _save_to_monthly_sheet(
     firma_nomi: str, inn: str, month_key: str,
-    sotuv: float, priod: float, ostatok: float
+    sotuv: float, priod: float, ostatok: float,
+    file_id: str = "", file_name: str = "",
 ) -> str:
     """
     SALARY_SHEET_ID dagi 'YYYY-MM' varaqda firma qatorini yangilaydi yoki yangi qo'shadi.
+    file_id / file_name — Telegram fayl identifikatori (ixtiyoriy).
     Qaytaradi: "ok" yoki xato xabari.
     """
     import datetime as _dt
@@ -2499,11 +2501,13 @@ def _save_to_monthly_sheet(
             ws.update_cell(1, new_col, name)
             return new_col
 
-        name_col    = _col("Firma nomi")
-        inn_col     = _col("INN")
-        sotuv_col   = _col("Sotuv (so'm)")
-        ostatok_col = _col("Ostatok (so'm)")
-        date_col    = _col("Yangilangan")
+        name_col     = _col("Firma nomi")
+        inn_col      = _col("INN")
+        sotuv_col    = _col("Sotuv (so'm)")
+        ostatok_col  = _col("Ostatok (so'm)")
+        date_col     = _col("Yangilangan")
+        fileid_col   = _col("FileID")
+        filename_col = _col("FileName")
 
         today = _dt.date.today().strftime("%d.%m.%Y")
         def _fmt(n: float) -> str:
@@ -2518,25 +2522,46 @@ def _save_to_monthly_sheet(
                 row_i = i
                 break
 
+        batch = []
+        def _bc(col, val):
+            batch.append({"range": f"{_col_letter(col)}{row_i or 0}", "values": [[val]]})
+
         if row_i is None:
             new_row = [""] * len(header)
-            new_row[name_col    - 1] = firma_nomi
-            new_row[inn_col     - 1] = inn or ""
-            new_row[sotuv_col   - 1] = _fmt(sotuv)
-            new_row[ostatok_col - 1] = _fmt(ostatok)
-            new_row[date_col    - 1] = today
+            new_row[name_col     - 1] = firma_nomi
+            new_row[inn_col      - 1] = inn or ""
+            new_row[sotuv_col    - 1] = _fmt(sotuv)
+            new_row[ostatok_col  - 1] = _fmt(ostatok)
+            new_row[date_col     - 1] = today
+            new_row[fileid_col   - 1] = file_id   or ""
+            new_row[filename_col - 1] = file_name or ""
             ws.append_row(new_row)
         else:
-            ws.update_cell(row_i, name_col,    firma_nomi)
-            ws.update_cell(row_i, inn_col,     inn or "")
-            ws.update_cell(row_i, sotuv_col,   _fmt(sotuv))
-            ws.update_cell(row_i, ostatok_col, _fmt(ostatok))
-            ws.update_cell(row_i, date_col,    today)
+            upd = [
+                {"range": f"{_col_letter(name_col)}{row_i}",    "values": [[firma_nomi]]},
+                {"range": f"{_col_letter(inn_col)}{row_i}",     "values": [[inn or ""]]},
+                {"range": f"{_col_letter(sotuv_col)}{row_i}",   "values": [[_fmt(sotuv)]]},
+                {"range": f"{_col_letter(ostatok_col)}{row_i}", "values": [[_fmt(ostatok)]]},
+                {"range": f"{_col_letter(date_col)}{row_i}",    "values": [[today]]},
+            ]
+            if file_id:
+                upd.append({"range": f"{_col_letter(fileid_col)}{row_i}",   "values": [[file_id]]})
+                upd.append({"range": f"{_col_letter(filename_col)}{row_i}", "values": [[file_name or ""]]})
+            ws.batch_update(upd)
 
         return "ok"
     except Exception as e:
         logger.error(f"[MONTHLY] _save_to_monthly_sheet xato: {e}")
         return str(e)
+
+
+def _col_letter(col: int) -> str:
+    """1 → 'A', 2 → 'B', ..., 26 → 'Z', 27 → 'AA'"""
+    s = ""
+    while col > 0:
+        col, r = divmod(col - 1, 26)
+        s = chr(65 + r) + s
+    return s
 
 
 def _list_monthly_sheets_for_firm(firma_nomi: str, inn: str) -> list:
@@ -2607,6 +2632,8 @@ def _get_firm_monthly_data(firma_nomi: str, inn: str, month_key: str) -> dict | 
                     "priod":       str(record.get("Priod (so'm)",   "")).strip(),
                     "ostatok":     str(record.get("Ostatok (so'm)", "")).strip(),
                     "yangilangan": str(record.get("Yangilangan",    "")).strip(),
+                    "file_id":     str(record.get("FileID",         "")).strip(),
+                    "file_name":   str(record.get("FileName",       "")).strip(),
                 }
         return None
     except gspread.exceptions.WorksheetNotFound:
@@ -2786,6 +2813,9 @@ async def firm_report_receive_file(update: Update, ctx: ContextTypes.DEFAULT_TYP
                 "sotuv": sotuv, "priod": priod, "ostatok": ostatok, "n_prod": n_prod
             }
             ctx.user_data["firm_upload_contracts"] = all_rows
+            ctx.user_data["firm_upload_doc"] = {
+                "file_id": doc.file_id, "file_name": doc.file_name
+            }
             firma_nomi_display = all_rows[0]["firma_nomi"] or caption
             back_txt = "⬅️ Nazad" if language == "ru" else "⬅️ Orqaga"
             contract_btns = [
@@ -2820,9 +2850,17 @@ async def firm_report_receive_file(update: Update, ctx: ContextTypes.DEFAULT_TYP
         # 4a) To'lovlar varag'ini yangilash
         err = await run_write(_update_firm_totals_by_row_index, row_i, sotuv, priod, ostatok)
 
+        # 4a-2) Firmalar varag'iga FileID va FileName saqlash
+        #        (firma vakili keyinchalik "Hisobot olish" bosganda shu fayl yuboriladi)
+        try:
+            await run_write(save_firma_file, firma_nomi, doc.file_id, doc.file_name)
+        except Exception as _fe:
+            logger.warning(f"[FIRM_REPORT] FileID saqlashda xato: {_fe}")
+
         # 4b) Oylik varaqqa yozish (oldingi oy — hisobot har doim o'tgan oy uchun)
         cur_month  = _prev_month_key()
-        month_err  = await run_write(_save_to_monthly_sheet, firma_nomi, inn_val, cur_month, sotuv, priod, ostatok)
+        month_err  = await run_write(_save_to_monthly_sheet, firma_nomi, inn_val, cur_month, sotuv, priod, ostatok,
+                                     doc.file_id, doc.file_name)
         if month_err != "ok":
             logger.warning(f"[FIRM_REPORT] Oylik varaqqa yozish xato: {month_err}")
 
@@ -3024,8 +3062,18 @@ async def firm_contract_select_handler(update: Update, ctx: ContextTypes.DEFAULT
     try:
         err = await run_write(_update_firm_totals_by_row_index, row_i, sotuv, priod, ostatok)
 
+        # Firmalar varag'iga FileID saqlash (firma vakili hisobot olishi uchun)
+        try:
+            doc_ctx = ctx.user_data.get("firm_upload_doc")
+            if doc_ctx:
+                await run_write(save_firma_file, firma_nomi, doc_ctx["file_id"], doc_ctx["file_name"])
+        except Exception as _fe:
+            logger.warning(f"[FIRM_CONTRACT] FileID saqlashda xato: {_fe}")
+
         cur_month = _prev_month_key()
-        month_err = await run_write(_save_to_monthly_sheet, firma_nomi, inn_val, cur_month, sotuv, priod, ostatok)
+        _doc_ctx  = ctx.user_data.get("firm_upload_doc", {})
+        month_err = await run_write(_save_to_monthly_sheet, firma_nomi, inn_val, cur_month, sotuv, priod, ostatok,
+                                    _doc_ctx.get("file_id", ""), _doc_ctx.get("file_name", ""))
         await run_write(_cleanup_old_monthly_sheets, 3)
 
         month_disp = _month_display(cur_month, language)
@@ -4152,6 +4200,21 @@ async def firm_month_select_handler(update: Update, ctx: ContextTypes.DEFAULT_TY
             lines.append("  ❌ Ma'lumot topilmadi." if language == "uz" else "  ❌ Данные не найдены.")
 
         await msg.edit_text("\n".join(lines), parse_mode="Markdown")
+
+        # Oylik varaqdan fayl yuborish
+        fid = (mdata or {}).get("file_id", "")
+        fname = (mdata or {}).get("file_name", "") or f"hisobot_{month_key}.xlsx"
+        if fid:
+            await update.message.reply_document(
+                document=fid,
+                filename=fname,
+                caption=f"📎 {_month_display(month_key, language)}",
+            )
+        else:
+            await update.message.reply_text(
+                "📂 Bu oy uchun fayl yuklanmagan." if language == "uz"
+                else "📂 Файл за этот месяц не загружен."
+            )
 
     except Exception as e:
         logger.error(f"[MONTHLY] firm_month_select_handler xato: {e}")
