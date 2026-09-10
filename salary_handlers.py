@@ -4121,15 +4121,16 @@ async def firm_add_name_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return FIRM_ADD_NAME
 
     ctx.user_data["new_firma_nomi"] = txt
+    import html as _html
     await update.message.reply_text(
-        f"✅ Firma nomi: *{txt}*\n\n"
-        "📱 Endi firma vakili Telegram *@username* ni kiriting:\n"
-        "_(Masalan: @sardor\\_med yoki sardor\\_med)_"
+        f"✅ Firma nomi: <b>{_html.escape(txt)}</b>\n\n"
+        "📱 Endi firma vakili Telegram <b>@username</b> ni kiriting:\n"
+        "<i>(Masalan: @sardormed yoki sardormed)</i>"
         if language == "uz" else
-        f"✅ Название фирмы: *{txt}*\n\n"
-        "📱 Теперь введите Telegram *@username* представителя:\n"
-        "_(Например: @sardor\\_med или sardor\\_med)_",
-        parse_mode="Markdown",
+        f"✅ Название фирмы: <b>{_html.escape(txt)}</b>\n\n"
+        "📱 Теперь введите Telegram <b>@username</b> представителя:\n"
+        "<i>(Например: @sardormed или sardormed)</i>",
+        parse_mode="HTML",
         reply_markup=_RKM([[back_txt]], resize_keyboard=True),
     )
     return FIRM_ADD_USERNAME
@@ -4172,22 +4173,23 @@ async def firm_add_username_handler(update: Update, ctx: ContextTypes.DEFAULT_TY
 
     ok = await run_write(save_new_firma, firma_nomi, username)
 
+    import html as _html
     if ok:
         await msg.edit_text(
-            f"✅ *{firma_nomi}* — qo'shildi!\n\n"
-            f"👤 Telegram: *@{username}*\n\n"
+            f"✅ <b>{_html.escape(firma_nomi)}</b> — qo'shildi!\n\n"
+            f"👤 Telegram: <b>@{_html.escape(username)}</b>\n\n"
             "ℹ️ Firma vakili 'Hisobot olish' bosganida yoki admin hisobot "
             "yuklaganida avtomatik aniqlanadi.\n\n"
-            "📋 *Google Sheets eslatma:* Firmalar varag'ida 6-ustun "
-            "'Username' sarlavhali bo'lishi kerak."
+            "📋 <i>Eslatma: Firmalar varag'ida 6-ustun sarlavhasi "
+            "'Username' bo'lishi kerak.</i>"
             if language == "uz" else
-            f"✅ *{firma_nomi}* — добавлена!\n\n"
-            f"👤 Telegram: *@{username}*\n\n"
+            f"✅ <b>{_html.escape(firma_nomi)}</b> — добавлена!\n\n"
+            f"👤 Telegram: <b>@{_html.escape(username)}</b>\n\n"
             "ℹ️ Представитель будет определён автоматически при нажатии "
-            "'Получить отчёт' или при загрузке отчёта администратором.\n\n"
-            "📋 *Заметка Google Sheets:* В листе «Firmalar» 6-й столбец "
-            "должен называться «Username».",
-            parse_mode="Markdown",
+            "'Получить отчёт' или при загрузке отчёта.\n\n"
+            "<i>Заметка: в листе «Firmalar» 6-й столбец должен называться "
+            "«Username».</i>",
+            parse_mode="HTML",
         )
     else:
         await msg.edit_text(
