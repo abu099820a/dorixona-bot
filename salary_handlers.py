@@ -924,6 +924,37 @@ def save_new_firma(firma_nomi: str, username: str = "",
         return False
 
 
+def save_firma_contact_to_tolovlar(firma_nomi: str, phone: str = "",
+                                   telegram_id=None) -> int:
+    """
+    To'lovlar varag'ida firma nomi bo'yicha mos qatorlarni topib,
+    D ustun (Тел рақами) va E ustun (ID) ni yangilaydi.
+    Bir firma uchun bir nechta shartnoma qatori bo'lsa — hammasini yangilaydi.
+    Yangilangan qatorlar sonini qaytaradi.
+    """
+    try:
+        client = _get_client()
+        sh = client.open_by_key(SALARY_SHEET_ID)
+        ws = _find_worksheet_flexible(sh, TOLOVLAR_WS_NAME)
+        all_values = ws.get_all_values()
+        target = _norm_firma_nomi(firma_nomi)
+        ph  = _norm_phone_for_firma(phone) if phone else ""
+        tid = str(telegram_id) if telegram_id else ""
+        updated = 0
+        for i, row in enumerate(all_values[1:], start=2):  # 1-satr sarlavha
+            if row and _norm_firma_nomi(row[0]) == target:
+                if ph:
+                    ws.update_cell(i, 4, ph)   # D ustun = Тел рақами
+                if tid:
+                    ws.update_cell(i, 5, tid)  # E ustun = ID (TelegramID)
+                updated += 1
+        logger.info(f"[FIRMS] To'lovlar yangilandi: '{firma_nomi}' — {updated} qator")
+        return updated
+    except Exception as e:
+        logger.error(f"[FIRMS] save_firma_contact_to_tolovlar xato: {e}")
+        return 0
+
+
 TOLOVLAR_WS_NAME = "To'lovlar"
 
 
@@ -4191,6 +4222,8 @@ async def firm_add_username_handler(update: Update, ctx: ContextTypes.DEFAULT_TY
         )
         ok = await run_write(save_new_firma, firma_nomi, "", phone, tid)
         if ok:
+            # To'lovlar varag'iga ham yoz (D=Тел рақами, E=ID)
+            await run_write(save_firma_contact_to_tolovlar, firma_nomi, phone, tid)
             if tid:
                 tid_note = (
                     f"\n🆔 TelegramID: <b>{tid}</b>\n✅ Hisobot avtomatik yuboriladi!"
