@@ -930,6 +930,7 @@ def save_firma_contact_to_tolovlar(firma_nomi: str, phone: str = "",
     To'lovlar varag'ida firma nomi bo'yicha mos qatorlarni topib,
     D ustun (Тел рақами) va E ustun (ID) ni yangilaydi.
     Bir firma uchun bir nechta shartnoma qatori bo'lsa — hammasini yangilaydi.
+    Barcha o'zgarishlarni BITTA batch_update da yuboradi (rate-limit xavfsiz).
     Yangilangan qatorlar sonini qaytaradi.
     """
     try:
@@ -940,14 +941,19 @@ def save_firma_contact_to_tolovlar(firma_nomi: str, phone: str = "",
         target = _norm_firma_nomi(firma_nomi)
         ph  = _norm_phone_for_firma(phone) if phone else ""
         tid = str(telegram_id) if telegram_id else ""
+
+        batch = []  # batch_update uchun ro'yxat
         updated = 0
         for i, row in enumerate(all_values[1:], start=2):  # 1-satr sarlavha
             if row and _norm_firma_nomi(row[0]) == target:
                 if ph:
-                    ws.update_cell(i, 4, ph)   # D ustun = Тел рақами
+                    batch.append({"range": f"D{i}", "values": [[ph]]})
                 if tid:
-                    ws.update_cell(i, 5, tid)  # E ustun = ID (TelegramID)
+                    batch.append({"range": f"E{i}", "values": [[tid]]})
                 updated += 1
+
+        if batch:
+            ws.batch_update(batch)  # 1 ta API call — rate-limit muammosi yo'q
         logger.info(f"[FIRMS] To'lovlar yangilandi: '{firma_nomi}' — {updated} qator")
         return updated
     except Exception as e:
@@ -4208,6 +4214,17 @@ async def firm_add_username_handler(update: Update, ctx: ContextTypes.DEFAULT_TY
         return FIRM_REPORTS_MENU
 
     firma_nomi = ctx.user_data.pop("new_firma_nomi", "").strip()
+
+    # Agar firma nomi yo'q bo'lsa (bot redeploydan keyin user_data yo'qolgan)
+    if not firma_nomi:
+        await update.message.reply_text(
+            "⚠️ Sessiya tugadi. Iltimos, qaytadan bosing."
+            if language == "uz" else
+            "⚠️ Сессия истекла. Пожалуйста, начните заново.",
+            reply_markup=firm_reports_keyboard(language, is_admin),
+        )
+        return FIRM_REPORTS_MENU
+
     msg = await update.message.reply_text(
         "⏳ Saqlanmoqda..." if language == "uz" else "⏳ Сохраняется..."
     )
