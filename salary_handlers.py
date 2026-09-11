@@ -1922,6 +1922,19 @@ async def _send_firm_direct_report(
             f"📊 *Sotish hisoboti ({mdisp}):*" if language == "uz"
             else f"📊 *Отчёт по продажам ({mdisp}):*"
         )
+
+        # Ta'minotchilar bo'yicha taqsimot — faylni qayta tahlil qilamiz
+        by_supplier: dict = {}
+        _fid = (mdata or {}).get("file_id", "") or firm_info.get("file_id", "")
+        if _fid:
+            try:
+                _fobj   = await ctx.bot.get_file(_fid)
+                _fbytes = bytes(await _fobj.download_as_bytearray())
+                _parsed = await run_read(_parse_report_xlsx_totals, _fbytes)
+                by_supplier = _parsed.get("by_supplier", {})
+            except Exception as _pe:
+                logger.warning(f"[FIRMS] Faylni qayta tahlil xato: {_pe}")
+
         if mdata:
             if mdata.get("sotuv"):
                 lines.append(f"  💰 {'Sotuv' if language == 'uz' else 'Продажи'}: *{mdata['sotuv']}*")
@@ -1931,7 +1944,37 @@ async def _send_firm_direct_report(
                 lines.append(f"  🕐 {'Yangilangan' if language == 'uz' else 'Обновлено'}: {mdata['yangilangan']}")
         else:
             lines.append("  ❌ Ma'lumot topilmadi." if language == "uz" else "  ❌ Данные не найдены.")
+
+        def _fmt_s(n: float) -> str:
+            return f"{int(round(n)):,}".replace(",", " ")
+
+        _sup_lines = _format_supplier_lines(by_supplier, _fmt_s, language)
+        if _sup_lines:
+            lines.append("")
+            lines.append(
+                "🏭 Ta'minotchilar bo'yicha:" if language == "uz"
+                else "🏭 По поставщикам:"
+            )
+            lines.append(_sup_lines)
+
         await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+
+        # Admin xabardorligi — firma hisobot olganda
+        _sotuv_str  = (mdata or {}).get("sotuv", "—")
+        _ostatok_str = (mdata or {}).get("ostatok", "—")
+        for _aid in ADMIN_IDS:
+            try:
+                _notif = (
+                    f"📩 *Firma hisobot oldi*\n🏢 {firma_nomi}\n📅 {mdisp}\n"
+                    f"💰 Sotuv: *{_sotuv_str}*\n📦 Qoldiq: *{_ostatok_str}*"
+                    if language == "uz" else
+                    f"📩 *Фирма запросила отчёт*\n🏢 {firma_nomi}\n📅 {mdisp}\n"
+                    f"💰 Продажи: *{_sotuv_str}*\n📦 Остаток: *{_ostatok_str}*"
+                )
+                await ctx.bot.send_message(chat_id=_aid, text=_notif, parse_mode="Markdown")
+            except Exception as _ne:
+                logger.warning(f"[FIRMS] Admin xabardorlik xato: {_ne}")
+
         if from_menu:
             from bot import main_keyboard, T, MENU
             is_admin = update.effective_user.id in ADMIN_IDS
@@ -2234,6 +2277,101 @@ def _parse_report_xlsx_totals(xlsx_bytes: bytes) -> dict:
         "products":    products_found,
         "by_supplier": by_supplier,
     }
+
+
+def _build_xulosа_sheet(
+    xlsx_bytes: bytes,
+    by_supplier: dict,
+    sotuv: float,
+    ostatok: float,
+) -> bytes:
+    """
+    xlsx_bytes ichiga 'Хулоса' nomli yangi лист qo'shadi —
+    ta'minotchilar bo'yicha sotuv/qoldiq jadvali va jami summalar.
+    Qaytaradi: yangilangan xlsx bytes.
+    """
+    import openpyxl as _xl
+    import io as _io
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+
+    wb = _xl.load_workbook(_io.BytesIO(xlsx_bytes), data_only=True)
+
+    if "Хулоса" in wb.sheetnames:
+        del wb["Хулоса"]
+    ws = wb.create_sheet("Хулоса")
+
+    ws.column_dimensions["A"].width = 32
+    ws.column_dimensions["B"].width = 20
+    ws.column_dimensions["C"].width = 20
+
+    thin   = Side(style="thin", color="AAAAAA")
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+    h_font = Font(bold=True, color="FFFFFF", size=11)
+    h_fill = PatternFill("solid", fgColor="2E5E8E")
+    t_font = Font(bold=True, size=11)
+    t_fill = PatternFill("solid", fgColor="D6E4F0")
+    row_fills = [PatternFill("solid", fgColor="EBF3FB"),
+                 PatternFill("solid", fgColor="FFFFFF")]
+    center = Alignment(horizontal="center", vertical="center")
+    right  = Alignment(horizontal="right",  vertical="center")
+    left   = Alignment(horizontal="left",   vertical="center")
+
+    def _fmt(n: float) -> str:
+        return f"{int(round(n)):,}".replace(",", " ")
+
+    r = 1
+    ws.merge_cells(f"A{r}:C{r}")
+    cell = ws.cell(row=r, column=1, value="Таъминотчилар бўйича хулоса")
+    cell.font = Font(bold=True, size=13, color="1A3A5C")
+    cell.alignment = center
+    ws.row_dimensions[r].height = 26
+    r += 1
+
+    for col, txt in enumerate(
+        ["Таъминотчи", "Sotuv (so'm)", "Qoldiq (so'm)"], 1
+    ):
+        cell = ws.cell(row=r, column=col, value=txt)
+        cell.font = h_font
+        cell.fill = h_fill
+        cell.alignment = center
+        cell.border = border
+    ws.row_dimensions[r].height = 20
+    r += 1
+
+    sorted_items = sorted(
+        [(sup, v.get("sotuv", 0.0), v.get("ostatok", 0.0))
+         for sup, v in by_supplier.items()],
+        key=lambda x: (-x[1], -x[2]),
+    )
+    for i, (sup, s, o) in enumerate(sorted_items):
+        fill = row_fills[i % 2]
+        a = ws.cell(row=r, column=1, value=sup)
+        b = ws.cell(row=r, column=2, value=_fmt(s) if s else "—")
+        c = ws.cell(row=r, column=3, value=_fmt(o) if o else "—")
+        for cell in (a, b, c):
+            cell.fill = fill
+            cell.border = border
+        a.alignment = left
+        b.alignment = right
+        c.alignment = right
+        r += 1
+
+    # Jami
+    a = ws.cell(row=r, column=1, value="JAMI SOTUV / QOLDIQ")
+    b = ws.cell(row=r, column=2, value=_fmt(sotuv))
+    c = ws.cell(row=r, column=3, value=_fmt(ostatok))
+    for cell in (a, b, c):
+        cell.font = t_font
+        cell.fill = t_fill
+        cell.border = border
+    a.alignment = left
+    b.alignment = right
+    c.alignment = right
+    ws.row_dimensions[r].height = 20
+
+    out = _io.BytesIO()
+    wb.save(out)
+    return out.getvalue()
 
 
 def _format_supplier_lines(by_supplier: dict, fmt_fn, language: str,
@@ -2892,6 +3030,26 @@ async def firm_report_receive_file(update: Update, ctx: ContextTypes.DEFAULT_TYP
         n_prod      = totals["products"]
         by_supplier = totals.get("by_supplier", {})
 
+        # 2b) Хулоса лист — ta'minotchilar jadvalini xlsx ga qo'shamiz
+        # Yangilangan faylni Telegram ga yuklab, yangi file_id olamiz
+        new_file_id   = doc.file_id
+        new_file_name = doc.file_name
+        if by_supplier and n_prod > 0:
+            try:
+                _mod_bytes = await run_read(
+                    _build_xulosа_sheet, xlsx_bytes, by_supplier, sotuv, ostatok
+                )
+                _upload_msg = await update.message.reply_document(
+                    document=io.BytesIO(_mod_bytes),
+                    filename=doc.file_name or "hisobot.xlsx",
+                    caption=None,
+                )
+                new_file_id   = _upload_msg.document.file_id
+                new_file_name = _upload_msg.document.file_name or doc.file_name
+                await _upload_msg.delete()
+            except Exception as _be:
+                logger.warning(f"[FIRM_REPORT] Хулоса list qo'shishda xato: {_be}")
+
         if n_prod == 0:
             await msg.edit_text(
                 "❌ Fayl ichida hech qanday ma'lumot topilmadi. Format to'g'riligini tekshiring."
@@ -2941,7 +3099,7 @@ async def firm_report_receive_file(update: Update, ctx: ContextTypes.DEFAULT_TYP
             }
             ctx.user_data["firm_upload_contracts"] = all_rows
             ctx.user_data["firm_upload_doc"] = {
-                "file_id": doc.file_id, "file_name": doc.file_name
+                "file_id": new_file_id, "file_name": new_file_name
             }
             firma_nomi_display = all_rows[0]["firma_nomi"] or caption
             back_txt = "⬅️ Nazad" if language == "ru" else "⬅️ Orqaga"
@@ -2980,14 +3138,14 @@ async def firm_report_receive_file(update: Update, ctx: ContextTypes.DEFAULT_TYP
         # 4a-2) Firmalar varag'iga FileID va FileName saqlash
         #        (firma vakili keyinchalik "Hisobot olish" bosganda shu fayl yuboriladi)
         try:
-            await run_write(save_firma_file, firma_nomi, doc.file_id, doc.file_name)
+            await run_write(save_firma_file, firma_nomi, new_file_id, new_file_name)
         except Exception as _fe:
             logger.warning(f"[FIRM_REPORT] FileID saqlashda xato: {_fe}")
 
         # 4b) Oylik varaqqa yozish (oldingi oy — hisobot har doim o'tgan oy uchun)
         cur_month  = _prev_month_key()
         month_err  = await run_write(_save_to_monthly_sheet, firma_nomi, inn_val, cur_month, sotuv, priod, ostatok,
-                                     doc.file_id, doc.file_name)
+                                     new_file_id, new_file_name)
         if month_err != "ok":
             logger.warning(f"[FIRM_REPORT] Oylik varaqqa yozish xato: {month_err}")
 
@@ -3105,7 +3263,7 @@ async def firm_report_receive_file(update: Update, ctx: ContextTypes.DEFAULT_TYP
                         auto_caption = auto_caption[:1020] + "…"
                     await ctx.bot.send_document(
                         chat_id=int(auto_tid),
-                        document=doc.file_id,
+                        document=new_file_id,
                         caption=auto_caption,
                         parse_mode="Markdown",
                     )
@@ -4381,6 +4539,21 @@ async def firm_month_select_handler(update: Update, ctx: ContextTypes.DEFAULT_TY
         mdata = await run_read(_get_firm_monthly_data, firma_nomi, inn_val, month_key)
         mdisp = _month_display(month_key, language)
 
+        # Ta'minotchilar bo'yicha taqsimot — faylni qayta tahlil qilamiz
+        by_supplier: dict = {}
+        _fid = (mdata or {}).get("file_id", "")
+        if _fid:
+            try:
+                _fobj   = await ctx.bot.get_file(_fid)
+                _fbytes = bytes(await _fobj.download_as_bytearray())
+                _parsed = await run_read(_parse_report_xlsx_totals, _fbytes)
+                by_supplier = _parsed.get("by_supplier", {})
+            except Exception as _pe:
+                logger.warning(f"[MONTHLY] Faylni qayta tahlil xato: {_pe}")
+
+        def _fmt(n: float) -> str:
+            return f"{int(round(n)):,}".replace(",", " ")
+
         lines = [
             f"🏢 *{firma_nomi}*",
             f"📅 {'Oy' if language == 'uz' else 'Месяц'}: {mdisp}",
@@ -4397,22 +4570,79 @@ async def firm_month_select_handler(update: Update, ctx: ContextTypes.DEFAULT_TY
         else:
             lines.append("  ❌ Ma'lumot topilmadi." if language == "uz" else "  ❌ Данные не найдены.")
 
+        _sup_lines = _format_supplier_lines(by_supplier, _fmt, language)
+        if _sup_lines:
+            lines.append("")
+            lines.append(
+                "🏭 Ta'minotchilar bo'yicha:" if language == "uz"
+                else "🏭 По поставщикам:"
+            )
+            lines.append(_sup_lines)
+
         await msg.edit_text("\n".join(lines), parse_mode="Markdown")
 
-        # Oylik varaqdan fayl yuborish
-        fid = (mdata or {}).get("file_id", "")
+        # Oylik varaqdan fayl yuborish — caption ga ta'minotchilar va summalar
+        fid   = (mdata or {}).get("file_id", "")
         fname = (mdata or {}).get("file_name", "") or f"hisobot_{month_key}.xlsx"
         if fid:
+            _s = (mdata or {}).get("sotuv", "")
+            _o = (mdata or {}).get("ostatok", "")
+            _sup_cap = _format_supplier_lines(by_supplier, _fmt, language, max_suppliers=10)
+            if language == "uz":
+                if _sup_cap:
+                    _cap_fin = (
+                        f"\n🏭 Ta'minotchilar:\n{_sup_cap}\n\n"
+                        f"💰 *Jami sotuv: {_s} so'm*\n"
+                        f"📦 *Jami qoldiq: {_o} so'm*"
+                    )
+                else:
+                    _cap_fin = (
+                        f"\n💰 Sotuv: *{_s} so'm*\n📦 Qoldiq: *{_o} so'm*"
+                        if (_s or _o) else ""
+                    )
+                _file_cap = f"📊 *{firma_nomi}* — {mdisp} hisoboti{_cap_fin}"
+            else:
+                if _sup_cap:
+                    _cap_fin = (
+                        f"\n🏭 По поставщикам:\n{_sup_cap}\n\n"
+                        f"💰 *Итого продажи: {_s} сум*\n"
+                        f"📦 *Итого остаток: {_o} сум*"
+                    )
+                else:
+                    _cap_fin = (
+                        f"\n💰 Продажи: *{_s} сум*\n📦 Остаток: *{_o} сум*"
+                        if (_s or _o) else ""
+                    )
+                _file_cap = f"📊 *{firma_nomi}* — отчёт за {mdisp}{_cap_fin}"
+            if len(_file_cap) > 1020:
+                _file_cap = _file_cap[:1020] + "…"
             await update.message.reply_document(
                 document=fid,
                 filename=fname,
-                caption=f"📎 {_month_display(month_key, language)}",
+                caption=_file_cap,
+                parse_mode="Markdown",
             )
         else:
             await update.message.reply_text(
                 "📂 Bu oy uchun fayl yuklanmagan." if language == "uz"
                 else "📂 Файл за этот месяц не загружен."
             )
+
+        # Admin xabardorligi — firma hisobot olganda
+        _sotuv_str   = (mdata or {}).get("sotuv", "—")
+        _ostatok_str = (mdata or {}).get("ostatok", "—")
+        for _aid in ADMIN_IDS:
+            try:
+                _notif = (
+                    f"📩 *Firma hisobot oldi*\n🏢 {firma_nomi}\n📅 {mdisp}\n"
+                    f"💰 Sotuv: *{_sotuv_str}*\n📦 Qoldiq: *{_ostatok_str}*"
+                    if language == "uz" else
+                    f"📩 *Фирма запросила отчёт*\n🏢 {firma_nomi}\n📅 {mdisp}\n"
+                    f"💰 Продажи: *{_sotuv_str}*\n📦 Остаток: *{_ostatok_str}*"
+                )
+                await ctx.bot.send_message(chat_id=_aid, text=_notif, parse_mode="Markdown")
+            except Exception as _ne:
+                logger.warning(f"[MONTHLY] Admin xabardorlik xato: {_ne}")
 
     except Exception as e:
         logger.error(f"[MONTHLY] firm_month_select_handler xato: {e}")
