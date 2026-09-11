@@ -1892,7 +1892,7 @@ async def _send_firm_direct_report(
             if sotuv:
                 lines.append(f"  💰 {'Sotuv' if language == 'uz' else 'Продажи'}: *{sotuv}*")
             if ostatok:
-                lines.append(f"  📦 {'Ostatok' if language == 'uz' else 'Остаток'}: *{ostatok}*")
+                lines.append(f"  📦 {'Qoldiq' if language == 'uz' else 'Остаток'}: *{ostatok}*")
             if yangi:
                 lines.append(f"  🕐 {'Yangilangan' if language == 'uz' else 'Обновлено'}: {yangi}")
         else:
@@ -1926,7 +1926,7 @@ async def _send_firm_direct_report(
             if mdata.get("sotuv"):
                 lines.append(f"  💰 {'Sotuv' if language == 'uz' else 'Продажи'}: *{mdata['sotuv']}*")
             if mdata.get("ostatok"):
-                lines.append(f"  📦 {'Ostatok' if language == 'uz' else 'Остаток'}: *{mdata['ostatok']}*")
+                lines.append(f"  📦 {'Qoldiq' if language == 'uz' else 'Остаток'}: *{mdata['ostatok']}*")
             if mdata.get("yangilangan"):
                 lines.append(f"  🕐 {'Yangilangan' if language == 'uz' else 'Обновлено'}: {mdata['yangilangan']}")
         else:
@@ -2090,7 +2090,9 @@ def _parse_report_xlsx_totals(xlsx_bytes: bytes) -> dict:
         if priod_col   is None: priod_col   = 6
         if ostatok_col is None: ostatok_col = 16
 
-        # ── Filial ustunini sarlavhadan avtomatik aniqlash ─────────────────
+        # ── Filial va поставщик ustunlarini sarlavhadan aniqlash ──────────
+        # Ba'zi fayllarda: наимен(0) | произв(1) | поставщик(2) | филиал(3)
+        # Standart format:  наимен(0) | произв(1) | филиал(2)
         filial_col = next(
             (i for i, v in enumerate(h1) if "филиал" in v),
             None,
@@ -2101,6 +2103,17 @@ def _parse_report_xlsx_totals(xlsx_bytes: bytes) -> dict:
                 2,
             )
         numeric_check_col = filial_col + 1
+
+        # поставщик ustuni: headerda topilsa — u, yo'q bo'lsa — произв (col 1)
+        supplier_col = next(
+            (i for i, v in enumerate(h1) if "поставщик" in v),
+            None,
+        )
+        if supplier_col is None:
+            supplier_col = next(
+                (i for i, v in enumerate(h2) if "поставщик" in v),
+                1,   # zaxira: производитель (col 1)
+            )
 
         # ── Ma'lumot qatorlarini qayta ishlash ────────────────────────────
         # Kalit: (dori_nomi, поставщик) — har bir juftlik alohida blok
@@ -2130,8 +2143,8 @@ def _parse_report_xlsx_totals(xlsx_bytes: bytes) -> dict:
 
             if r[0]:
                 current_drug = str(r[0]).strip()
-            if len(r) > 1 and r[1]:
-                current_supplier = str(r[1]).strip()
+            if supplier_col < len(r) and r[supplier_col]:
+                current_supplier = str(r[supplier_col]).strip()
             if current_drug is None:
                 continue
 
@@ -2247,7 +2260,7 @@ def _format_supplier_lines(by_supplier: dict, fmt_fn, language: str,
         lines.append(f"  • *{sup}*: {' | '.join(parts)}")
     if len(by_supplier) > max_suppliers:
         rest = len(by_supplier) - max_suppliers
-        lines.append(f"  ... va yana {rest} ta поставщик" if language == "uz"
+        lines.append(f"  ... va yana {rest} ta ta'minotchi" if language == "uz"
                      else f"  ... и ещё {rest} поставщик(а)")
     return "\n".join(lines)
 
@@ -2856,7 +2869,7 @@ async def firm_report_receive_file(update: Update, ctx: ContextTypes.DEFAULT_TYP
                 f"⚠️ *{caption}* nomi/INN bo'yicha firma topilmadi.\n\n"
                 f"📊 Hisoblangan natijalar:\n"
                 f"  💰 Sotuv: *{_fmt(sotuv)} so'm*\n"
-                f"  📦 Ostatok: *{_fmt(ostatok)} so'm*\n\n"
+                f"  📦 Qoldiq: *{_fmt(ostatok)} so'm*\n\n"
                 f"Firma nomini To'lovlar varag'ida tekshiring."
                 if language == "uz" else
                 f"⚠️ Фирма *{caption}* не найдена (по названию/ИНН).\n\n"
@@ -2901,7 +2914,7 @@ async def firm_report_receive_file(update: Update, ctx: ContextTypes.DEFAULT_TYP
             from telegram import ReplyKeyboardMarkup as _RKM
             await update.message.reply_text(
                 f"🏢 *{firma_nomi_display}* — bir nechta shartnoma topildi.\n\n"
-                f"📊 Hisoblangan: 💰 Sotuv *{_fmt(sotuv)} so'm* | 📦 Ostatok *{_fmt(ostatok)} so'm*\n\n"
+                f"📊 Hisoblangan: 💰 Sotuv *{_fmt(sotuv)} so'm* | 📦 Qoldiq *{_fmt(ostatok)} so'm*\n\n"
                 f"Qaysi shartnomaga yozilsin?"
                 if language == "uz" else
                 f"🏢 *{firma_nomi_display}* — найдено несколько договоров.\n\n"
@@ -2968,7 +2981,7 @@ async def firm_report_receive_file(update: Update, ctx: ContextTypes.DEFAULT_TYP
             if _sup_lines:
                 lines.append("")
                 lines.append(
-                    "🏭 Поставщиклар bo'yicha:" if language == "uz"
+                    "🏭 Ta'minotchilar bo'yicha:" if language == "uz"
                     else "🏭 По поставщикам:"
                 )
                 lines.append(_sup_lines)
@@ -2979,7 +2992,7 @@ async def firm_report_receive_file(update: Update, ctx: ContextTypes.DEFAULT_TYP
                     f"💰 *Итого продажи: {_fmt(sotuv)} сум*"
                 )
                 lines.append(
-                    f"📦 *Jami ostatok: {_fmt(ostatok)} so'm*"
+                    f"📦 *Jami qoldiq: {_fmt(ostatok)} so'm*"
                     if language == "uz" else
                     f"📦 *Итого остаток: {_fmt(ostatok)} сум*"
                 )
@@ -2990,7 +3003,7 @@ async def firm_report_receive_file(update: Update, ctx: ContextTypes.DEFAULT_TYP
                     f"💰 Продажи: *{_fmt(sotuv)} сум*"
                 )
                 lines.append(
-                    f"📦 Ostatok: *{_fmt(ostatok)} so'm*"
+                    f"📦 Qoldiq: *{_fmt(ostatok)} so'm*"
                     if language == "uz" else
                     f"📦 Остаток: *{_fmt(ostatok)} сум*"
                 )
@@ -3017,13 +3030,13 @@ async def firm_report_receive_file(update: Update, ctx: ContextTypes.DEFAULT_TYP
                     if language == "uz":
                         if _sup_cap:
                             _fin = (
-                                f"\n🏭 Поставщиклар:\n{_sup_cap}\n\n"
+                                f"\n🏭 Ta'minotchilar:\n{_sup_cap}\n\n"
                                 f"💰 *Jami sotuv: {_s} so'm*\n"
-                                f"📦 *Jami ostatok: {_o} so'm*\n"
+                                f"📦 *Jami qoldiq: {_o} so'm*\n"
                             )
                         else:
                             _fin = (
-                                f"\n💰 Sotuv: *{_s} so'm*\n📦 Ostatok: *{_o} so'm*\n"
+                                f"\n💰 Sotuv: *{_s} so'm*\n📦 Qoldiq: *{_o} so'm*\n"
                                 if (_s or _o) else ""
                             )
                         auto_caption = (
@@ -3224,7 +3237,7 @@ async def firm_contract_select_handler(update: Update, ctx: ContextTypes.DEFAULT
             if _sup_lines:
                 lines.append("")
                 lines.append(
-                    "🏭 Поставщиклар bo'yicha:" if language == "uz"
+                    "🏭 Ta'minotchilar bo'yicha:" if language == "uz"
                     else "🏭 По поставщикам:"
                 )
                 lines.append(_sup_lines)
@@ -3235,7 +3248,7 @@ async def firm_contract_select_handler(update: Update, ctx: ContextTypes.DEFAULT
                     f"💰 *Итого продажи: {_fmt(sotuv)} сум*"
                 )
                 lines.append(
-                    f"📦 *Jami ostatok: {_fmt(ostatok)} so'm*"
+                    f"📦 *Jami qoldiq: {_fmt(ostatok)} so'm*"
                     if language == "uz" else
                     f"📦 *Итого остаток: {_fmt(ostatok)} сум*"
                 )
@@ -3246,7 +3259,7 @@ async def firm_contract_select_handler(update: Update, ctx: ContextTypes.DEFAULT
                     f"💰 Продажи: *{_fmt(sotuv)} сум*"
                 )
                 lines.append(
-                    f"📦 Ostatok: *{_fmt(ostatok)} so'm*"
+                    f"📦 Qoldiq: *{_fmt(ostatok)} so'm*"
                     if language == "uz" else
                     f"📦 Остаток: *{_fmt(ostatok)} сум*"
                 )
@@ -3915,7 +3928,7 @@ def _format_admin_firm_report_lines(entry: dict, language: str) -> list:
         if sotuv:
             lines.append(f"  💰 {'Sotuv' if language == 'uz' else 'Продажи'}: *{sotuv}*")
         if ostatok:
-            lines.append(f"  📦 {'Ostatok' if language == 'uz' else 'Остаток'}: *{ostatok}*")
+            lines.append(f"  📦 {'Qoldiq' if language == 'uz' else 'Остаток'}: *{ostatok}*")
         if yangi:
             lines.append(f"  🕐 {'Yangilangan' if language == 'uz' else 'Обновлено'}: {yangi}")
     else:
@@ -4339,7 +4352,7 @@ async def firm_month_select_handler(update: Update, ctx: ContextTypes.DEFAULT_TY
             if mdata.get("sotuv"):
                 lines.append(f"  💰 {'Sotuv' if language == 'uz' else 'Продажи'}: *{mdata['sotuv']}*")
             if mdata.get("ostatok"):
-                lines.append(f"  📦 {'Ostatok' if language == 'uz' else 'Остаток'}: *{mdata['ostatok']}*")
+                lines.append(f"  📦 {'Qoldiq' if language == 'uz' else 'Остаток'}: *{mdata['ostatok']}*")
             if mdata.get("yangilangan"):
                 lines.append(f"  🕐 {'Yangilangan' if language == 'uz' else 'Обновлено'}: {mdata['yangilangan']}")
         else:
