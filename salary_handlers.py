@@ -2013,8 +2013,8 @@ APPEAL_PAROL = "офис"  # Davomat/Tolovlar bilan bir xil umumiy parol
 
 def _parse_report_xlsx_totals(xlsx_bytes: bytes) -> dict:
     """
-    Aylanma hisoboti xlsx faylidan jami sotuv summasi va oxirgi qoldiq
-    summasini hisoblab qaytaradi.
+    Aylanma hisoboti xlsx faylidan jami sotuv summasi, oxirgi qoldiq va
+    har bir поставщик (производитель) bo'yicha alohida natijalarni qaytaradi.
 
     Ikki format qo'llab-quvvatlanadi:
 
@@ -2039,15 +2039,17 @@ def _parse_report_xlsx_totals(xlsx_bytes: bytes) -> dict:
     Har ikki formatda ham:
     - "по сети" qatori dori bloki uchun umumiy summani ko'rsatadi (ustuvor)
     - "по сети" yo'q bo'lsa, barcha filial qatorlari yig'iladi
-    - 17-ustunli formatda dori nomi HAR BIR qatorda takrorlanishi mumkin;
-      bu holda bir xil nomdagi barcha qatorlar bitta dori bloki sifatida
-      birlashtiriladi
+    - "склад" va "инвентаризация" filiallar ham umumiy summaga qo'shiladi
+    - Производитель (ustun 1) bo'yicha alohida hisobot by_supplier da qaytariladi
 
-    Sarlavha qatorlaridan (row 1 / row 2) ustun nomlari avtomatik aniqlanadi.
-    Qaytaradi: {"sotuv": float, "priod": float, "ostatok": float, "products": int}
+    Qaytaradi: {
+        "sotuv": float, "priod": float, "ostatok": float, "products": int,
+        "by_supplier": {sup_name: {"sotuv": float, "ostatok": float}, ...}
+    }
     """
     import openpyxl
     import io as _io
+    from collections import defaultdict
 
     wb = openpyxl.load_workbook(_io.BytesIO(xlsx_bytes), data_only=True)
 
@@ -2056,14 +2058,17 @@ def _parse_report_xlsx_totals(xlsx_bytes: bytes) -> dict:
     total_ostatok = 0.0
     products_found = 0
 
+    # Barcha varaqlar bo'yicha поставщик yig'masi
+    all_sup_net: dict = defaultdict(lambda: {"sotuv": 0.0, "ostatok": 0.0})
+    all_sup_fil: dict = defaultdict(lambda: {"sotuv": 0.0, "ostatok": 0.0})
+    all_sup_net_keys: set = set()  # "по сети" qatori bo'lgan поставщиклар
+
     for ws in wb.worksheets:
         rows = list(ws.iter_rows(min_row=1, values_only=True))
         if len(rows) < 3:
             continue
 
         # ── Sarlavha qatorlaridan ustun indekslarini aniqlash ─────────────
-        # Row 1: merged headings (продажа, покупка, остаток на конец, ...)
-        # Row 2: кол-во / сумма subheadings
         h1 = [str(c).strip().lower() if c is not None else "" for c in rows[0]]
         h2 = [str(c).strip().lower() if c is not None else "" for c in rows[1]]
 
@@ -2081,14 +2086,11 @@ def _parse_report_xlsx_totals(xlsx_bytes: bytes) -> dict:
         priod_col   = _find_sum_col("покупка")
         ostatok_col = _find_sum_col("остаток на конец") or _find_sum_col("остаток к")
 
-        # Zaxira pozitsiyalar (sarlavha topilmasa)
         if sotuv_col   is None: sotuv_col   = 8
         if priod_col   is None: priod_col   = 6
         if ostatok_col is None: ostatok_col = 16
 
         # ── Filial ustunini sarlavhadan avtomatik aniqlash ─────────────────
-        # Ba'zi fayllarda "поставщик" ustuni qo'shimcha kiritilgan bo'ladi,
-        # bu holda "филиал" 3-indeksga (yoki undan keyinga) siljiydi.
         filial_col = next(
             (i for i, v in enumerate(h1) if "филиал" in v),
             None,
@@ -2096,27 +2098,27 @@ def _parse_report_xlsx_totals(xlsx_bytes: bytes) -> dict:
         if filial_col is None:
             filial_col = next(
                 (i for i, v in enumerate(h2) if "филиал" in v),
-                2,          # standart: наимен(0), произв(1), филиал(2)
+                2,
             )
-        numeric_check_col = filial_col + 1  # filialdan keyingi ustun (кол-во) raqam bo'lishi kerak
+        numeric_check_col = filial_col + 1
 
-        # ── Ma'lumot qatorlarini qayta ishlash (row 3 dan) ─────────────────
-        # "склад" yig'ib olmaymiz — u tarmoq emas, ichki sklad
-        # "по сети" — tarmoq bo'yicha umumiy qator, USTUVOR manba
-        SKIP_NAMES = {"склад"}
-        drug_blocks: dict = {}
-        current_drug = None
+        # ── Ma'lumot qatorlarini qayta ishlash ────────────────────────────
+        # Kalit: (dori_nomi, поставщик) — har bir juftlik alohida blok
+        drug_sup_blocks: dict = {}
+        current_drug     = None
+        current_supplier = "—"
 
-        def _block(name: str) -> dict:
-            if name not in drug_blocks:
-                drug_blocks[name] = {
+        def _block(drug: str, sup: str) -> dict:
+            key = (drug, sup)
+            if key not in drug_sup_blocks:
+                drug_sup_blocks[key] = {
                     "net_sotuv":   None, "net_priod":   None, "net_ostatok":  None,
                     "fil_sotuv":   0.0,  "fil_priod":   0.0,  "fil_ostatok":  0.0,
                     "has_filials": False,
                 }
-            return drug_blocks[name]
+            return drug_sup_blocks[key]
 
-        for r in rows[2:]:                  # sarlavha 2 qatorini o'tkazib yuborish
+        for r in rows[2:]:
             if not r or len(r) <= filial_col:
                 continue
             filial = r[filial_col]
@@ -2124,27 +2126,28 @@ def _parse_report_xlsx_totals(xlsx_bytes: bytes) -> dict:
                 continue
             num_val = r[numeric_check_col] if numeric_check_col < len(r) else None
             if not isinstance(num_val, (int, float)):
-                continue                     # sarlavha/bo'sh qator
+                continue
 
             if r[0]:
                 current_drug = str(r[0]).strip()
+            if len(r) > 1 and r[1]:
+                current_supplier = str(r[1]).strip()
             if current_drug is None:
                 continue
 
-            blk = _block(current_drug)
+            blk = _block(current_drug, current_supplier)
 
             def _v(col, _r=r):
                 v = _r[col] if col < len(_r) else None
                 return float(v) if isinstance(v, (int, float)) else 0.0
 
-            sotuv_sum   = abs(_v(sotuv_col))   # продажа manfiy bo'lishi mumkin
-            priod_sum   = abs(_v(priod_col))   # покупка ham manfiy bo'lishi mumkin
+            sotuv_sum   = abs(_v(sotuv_col))
+            priod_sum   = abs(_v(priod_col))
             ostatok_sum =     _v(ostatok_col)
 
             filial_lower = str(filial).strip().lower()
             if filial_lower == "по сети":
-                # Bir xil dori bir nechta поставщикda bo'lishi mumkin —
-                # har birining "по сети" qatorini QUSHIB BORISH kerak (ustiga yozmaslik)
+                # "по сети" — ustuvor manba; bir xil kalit bo'lsa yig'amiz
                 if blk["net_sotuv"] is None:
                     blk["net_sotuv"]   = sotuv_sum
                     blk["net_priod"]   = priod_sum
@@ -2153,30 +2156,100 @@ def _parse_report_xlsx_totals(xlsx_bytes: bytes) -> dict:
                     blk["net_sotuv"]   += sotuv_sum
                     blk["net_priod"]   += priod_sum
                     blk["net_ostatok"] += ostatok_sum
-            elif filial_lower not in SKIP_NAMES:
+                # Поставщик bo'yicha "по сети" yig'ma
+                all_sup_net[current_supplier]["sotuv"]   += sotuv_sum
+                all_sup_net[current_supplier]["ostatok"] += ostatok_sum
+                all_sup_net_keys.add(current_supplier)
+            else:
+                # Barcha filiallar: "склад", "инвентаризация" va boshqalar
+                # hammasi umumiy summaga kiradi
                 blk["fil_sotuv"]   += sotuv_sum
                 blk["fil_priod"]   += priod_sum
                 blk["fil_ostatok"] += ostatok_sum
                 blk["has_filials"]  = True
+                all_sup_fil[current_supplier]["sotuv"]   += sotuv_sum
+                all_sup_fil[current_supplier]["ostatok"] += ostatok_sum
 
-        # ── Natijalarni yig'amiz ───────────────────────────────────────────
-        for blk in drug_blocks.values():
-            products_found += 1
+        # ── Natijalarni dori bo'yicha yig'amiz ───────────────────────────
+        drug_net_s: dict = defaultdict(float)
+        drug_net_p: dict = defaultdict(float)
+        drug_net_o: dict = defaultdict(float)
+        drug_fil_s: dict = defaultdict(float)
+        drug_fil_p: dict = defaultdict(float)
+        drug_fil_o: dict = defaultdict(float)
+        drug_has_n: set  = set()
+        drug_has_f: set  = set()
+
+        for (drug, _sup), blk in drug_sup_blocks.items():
             if blk["net_sotuv"] is not None:
-                total_sotuv   += blk["net_sotuv"]
-                total_priod   += blk["net_priod"]   or 0.0
-                total_ostatok += blk["net_ostatok"] or 0.0
-            elif blk["has_filials"]:
-                total_sotuv   += blk["fil_sotuv"]
-                total_priod   += blk["fil_priod"]
-                total_ostatok += blk["fil_ostatok"]
+                drug_net_s[drug] += blk["net_sotuv"]
+                drug_net_p[drug] += blk["net_priod"]   or 0.0
+                drug_net_o[drug] += blk["net_ostatok"] or 0.0
+                drug_has_n.add(drug)
+            if blk["has_filials"]:
+                drug_fil_s[drug] += blk["fil_sotuv"]
+                drug_fil_p[drug] += blk["fil_priod"]
+                drug_fil_o[drug] += blk["fil_ostatok"]
+                drug_has_f.add(drug)
+
+        for drug in drug_has_n | drug_has_f:
+            products_found += 1
+            if drug in drug_has_n:
+                total_sotuv   += drug_net_s[drug]
+                total_priod   += drug_net_p[drug]
+                total_ostatok += drug_net_o[drug]
+            else:
+                total_sotuv   += drug_fil_s[drug]
+                total_priod   += drug_fil_p[drug]
+                total_ostatok += drug_fil_o[drug]
+
+    # ── Поставщик bo'yicha yig'ma ─────────────────────────────────────────
+    # "по сети" qatori bor поставщик uchun all_sup_net ishlatiladi (aniqroq).
+    # Faqat filial qatorlari bo'lgan поставщик uchun all_sup_fil (zaxira).
+    by_supplier: dict = {}
+    for sup, vals in all_sup_net.items():
+        if vals["sotuv"] or vals["ostatok"]:
+            by_supplier[sup] = {"sotuv": vals["sotuv"], "ostatok": vals["ostatok"]}
+    for sup, vals in all_sup_fil.items():
+        if sup not in all_sup_net_keys and (vals["sotuv"] or vals["ostatok"]):
+            by_supplier[sup] = {"sotuv": vals["sotuv"], "ostatok": vals["ostatok"]}
 
     return {
-        "sotuv":    total_sotuv,
-        "priod":    total_priod,
-        "ostatok":  total_ostatok,
-        "products": products_found,
+        "sotuv":       total_sotuv,
+        "priod":       total_priod,
+        "ostatok":     total_ostatok,
+        "products":    products_found,
+        "by_supplier": by_supplier,
     }
+
+
+def _format_supplier_lines(by_supplier: dict, fmt_fn, language: str,
+                            max_suppliers: int = 15) -> str:
+    """
+    Поставщик bo'yicha alohida qatorlar (admin xabari va auto-caption uchun).
+    Qaytaradi: "  • Supplier A: 💰 X so'm | 📦 Y so'm\\n..."
+    bo'sh string qaytarilsa — поставщик ma'lumoti yo'q.
+    """
+    if not by_supplier:
+        return ""
+    currency = "so'm" if language == "uz" else "сум"
+    lines = []
+    for sup in sorted(by_supplier.keys())[:max_suppliers]:
+        s = by_supplier[sup].get("sotuv", 0.0)
+        o = by_supplier[sup].get("ostatok", 0.0)
+        if not s and not o:
+            continue
+        parts = []
+        if s:
+            parts.append(f"💰 {fmt_fn(s)} {currency}")
+        if o:
+            parts.append(f"📦 {fmt_fn(o)} {currency}")
+        lines.append(f"  • *{sup}*: {' | '.join(parts)}")
+    if len(by_supplier) > max_suppliers:
+        rest = len(by_supplier) - max_suppliers
+        lines.append(f"  ... va yana {rest} ta поставщик" if language == "uz"
+                     else f"  ... и ещё {rest} поставщик(а)")
+    return "\n".join(lines)
 
 
 def _find_firm_row_in_tolovlar(caption: str):
@@ -2760,11 +2833,12 @@ async def firm_report_receive_file(update: Update, ctx: ContextTypes.DEFAULT_TYP
         xlsx_bytes = bytes(await file_obj.download_as_bytearray())
 
         # 2) Sotuv, priod va ostatok summalarini hisoblash
-        totals  = await run_read(_parse_report_xlsx_totals, xlsx_bytes)
-        sotuv   = totals["sotuv"]
-        priod   = totals["priod"]
-        ostatok = totals["ostatok"]
-        n_prod  = totals["products"]
+        totals      = await run_read(_parse_report_xlsx_totals, xlsx_bytes)
+        sotuv       = totals["sotuv"]
+        priod       = totals["priod"]
+        ostatok     = totals["ostatok"]
+        n_prod      = totals["products"]
+        by_supplier = totals.get("by_supplier", {})
 
         if n_prod == 0:
             await msg.edit_text(
@@ -2810,7 +2884,8 @@ async def firm_report_receive_file(update: Update, ctx: ContextTypes.DEFAULT_TYP
         if len(all_rows) > 1:
             await msg.delete()
             ctx.user_data["firm_upload_totals"] = {
-                "sotuv": sotuv, "priod": priod, "ostatok": ostatok, "n_prod": n_prod
+                "sotuv": sotuv, "priod": priod, "ostatok": ostatok,
+                "n_prod": n_prod, "by_supplier": by_supplier,
             }
             ctx.user_data["firm_upload_contracts"] = all_rows
             ctx.user_data["firm_upload_doc"] = {
@@ -2869,6 +2944,7 @@ async def firm_report_receive_file(update: Update, ctx: ContextTypes.DEFAULT_TYP
 
         if err == "ok":
             month_disp = _month_display(cur_month, language)
+            _sup_lines = _format_supplier_lines(by_supplier, _fmt, language)
             if already_filled:
                 # Avval to'ldirilgan bo'lsa — ogohlantirish bilan qayta yozildi
                 warn1 = "Bu firma hisobi avval allaqachon to'ldirilgan edi." if language == "uz" else "Данные этой фирмы уже были заполнены ранее."
@@ -2881,8 +2957,6 @@ async def firm_report_receive_file(update: Update, ctx: ContextTypes.DEFAULT_TYP
                     warn2,
                     "",
                     f"📦 Dorilar soni: {n_prod} ta" if language == "uz" else f"📦 Позиций: {n_prod}",
-                    f"💰 Sotuv: *{_fmt(sotuv)} so'm*" if language == "uz" else f"💰 Продажи: *{_fmt(sotuv)} сум*",
-                    f"📦 Ostatok: *{_fmt(ostatok)} so'm*" if language == "uz" else f"📦 Остаток: *{_fmt(ostatok)} сум*",
                 ]
             else:
                 lines = [
@@ -2890,9 +2964,36 @@ async def firm_report_receive_file(update: Update, ctx: ContextTypes.DEFAULT_TYP
                     f"📅 {'Oy' if language == 'uz' else 'Месяц'}: {month_disp}",
                     "",
                     f"📦 Dorilar soni: {n_prod} ta" if language == "uz" else f"📦 Позиций: {n_prod}",
-                    f"💰 Sotuv: *{_fmt(sotuv)} so'm*" if language == "uz" else f"💰 Продажи: *{_fmt(sotuv)} сум*",
-                    f"📦 Ostatok: *{_fmt(ostatok)} so'm*" if language == "uz" else f"📦 Остаток: *{_fmt(ostatok)} сум*",
                 ]
+            if _sup_lines:
+                lines.append("")
+                lines.append(
+                    "🏭 Поставщиклар bo'yicha:" if language == "uz"
+                    else "🏭 По поставщикам:"
+                )
+                lines.append(_sup_lines)
+                lines.append("")
+                lines.append(
+                    f"💰 *Jami sotuv: {_fmt(sotuv)} so'm*"
+                    if language == "uz" else
+                    f"💰 *Итого продажи: {_fmt(sotuv)} сум*"
+                )
+                lines.append(
+                    f"📦 *Jami ostatok: {_fmt(ostatok)} so'm*"
+                    if language == "uz" else
+                    f"📦 *Итого остаток: {_fmt(ostatok)} сум*"
+                )
+            else:
+                lines.append(
+                    f"💰 Sotuv: *{_fmt(sotuv)} so'm*"
+                    if language == "uz" else
+                    f"💰 Продажи: *{_fmt(sotuv)} сум*"
+                )
+                lines.append(
+                    f"📦 Ostatok: *{_fmt(ostatok)} so'm*"
+                    if language == "uz" else
+                    f"📦 Остаток: *{_fmt(ostatok)} сум*"
+                )
             if month_err != "ok":
                 lines.append("")
                 lines.append(
@@ -2909,29 +3010,47 @@ async def firm_report_receive_file(update: Update, ctx: ContextTypes.DEFAULT_TYP
                 firm_contact = await run_read(get_firma_file_by_name, firma_nomi)
                 auto_tid = (firm_contact or {}).get("telegram_id", "")
                 if auto_tid and str(auto_tid).strip().lstrip("-").isdigit():
-                    # Sotuv/ostatok ma'lumotlari caption ga qo'shiladi
+                    # Sotuv/ostatok + поставщик bo'yicha breakdown caption ga qo'shiladi
                     _s = _fmt(sotuv)   if sotuv   else ""
                     _o = _fmt(ostatok) if ostatok else ""
+                    _sup_cap = _format_supplier_lines(by_supplier, _fmt, language, max_suppliers=10)
                     if language == "uz":
-                        _fin = (
-                            f"\n💰 Sotuv: *{_s} so'm*\n📦 Ostatok: *{_o} so'm*\n"
-                            if (_s or _o) else ""
-                        )
+                        if _sup_cap:
+                            _fin = (
+                                f"\n🏭 Поставщиклар:\n{_sup_cap}\n\n"
+                                f"💰 *Jami sotuv: {_s} so'm*\n"
+                                f"📦 *Jami ostatok: {_o} so'm*\n"
+                            )
+                        else:
+                            _fin = (
+                                f"\n💰 Sotuv: *{_s} so'm*\n📦 Ostatok: *{_o} so'm*\n"
+                                if (_s or _o) else ""
+                            )
                         auto_caption = (
                             f"📊 *{firma_nomi}* — {month_disp} hisoboti"
                             f"{_fin}\n"
                             "✅ Administrator tomonidan yuklandi."
                         )
                     else:
-                        _fin = (
-                            f"\n💰 Продажи: *{_s} сум*\n📦 Остаток: *{_o} сум*\n"
-                            if (_s or _o) else ""
-                        )
+                        if _sup_cap:
+                            _fin = (
+                                f"\n🏭 По поставщикам:\n{_sup_cap}\n\n"
+                                f"💰 *Итого продажи: {_s} сум*\n"
+                                f"📦 *Итого остаток: {_o} сум*\n"
+                            )
+                        else:
+                            _fin = (
+                                f"\n💰 Продажи: *{_s} сум*\n📦 Остаток: *{_o} сум*\n"
+                                if (_s or _o) else ""
+                            )
                         auto_caption = (
                             f"📊 *{firma_nomi}* — отчёт за {month_disp}"
                             f"{_fin}\n"
                             "✅ Загружен администратором."
                         )
+                    # Telegram caption limiti 1024 belgi
+                    if len(auto_caption) > 1020:
+                        auto_caption = auto_caption[:1020] + "…"
                     await ctx.bot.send_document(
                         chat_id=int(auto_tid),
                         document=doc.file_id,
@@ -3016,12 +3135,13 @@ async def firm_contract_select_handler(update: Update, ctx: ContextTypes.DEFAULT
         )
         return PAYMENTS_MENU
 
-    contracts = ctx.user_data.get("firm_upload_contracts", [])
-    totals = ctx.user_data.get("firm_upload_totals", {})
-    sotuv   = totals.get("sotuv", 0.0)
-    priod   = totals.get("priod", 0.0)
-    ostatok = totals.get("ostatok", 0.0)
-    n_prod  = totals.get("n_prod", 0)
+    contracts   = ctx.user_data.get("firm_upload_contracts", [])
+    totals      = ctx.user_data.get("firm_upload_totals", {})
+    sotuv       = totals.get("sotuv", 0.0)
+    priod       = totals.get("priod", 0.0)
+    ostatok     = totals.get("ostatok", 0.0)
+    n_prod      = totals.get("n_prod", 0)
+    by_supplier = totals.get("by_supplier", {})
 
     def _fmt(n): return f"{int(round(n)):,}".replace(",", " ")
 
@@ -3080,6 +3200,7 @@ async def firm_contract_select_handler(update: Update, ctx: ContextTypes.DEFAULT
         shartnoma_lbl = f"📄 {'Shartnoma' if language == 'uz' else 'Договор'}: {shartnoma}" if shartnoma else ""
 
         if err == "ok":
+            _sup_lines = _format_supplier_lines(by_supplier, _fmt, language)
             if already_filled:
                 warn1 = "Bu firma/shartnoma avval to'ldirilgan edi." if language == "uz" else "Данные этой фирмы/договора уже были заполнены ранее."
                 warn2 = "Eski qiymat ustiga yangi ma'lumot yozildi." if language == "uz" else "Старые данные перезаписаны новыми."
@@ -3091,8 +3212,6 @@ async def firm_contract_select_handler(update: Update, ctx: ContextTypes.DEFAULT
                     warn2,
                     "",
                     f"📦 Dorilar soni: {n_prod} ta" if language == "uz" else f"📦 Позиций: {n_prod}",
-                    f"💰 Sotuv: *{_fmt(sotuv)} so'm*" if language == "uz" else f"💰 Продажи: *{_fmt(sotuv)} сум*",
-                    f"📦 Ostatok: *{_fmt(ostatok)} so'm*" if language == "uz" else f"📦 Остаток: *{_fmt(ostatok)} сум*",
                 ]
             else:
                 lines = [
@@ -3101,9 +3220,36 @@ async def firm_contract_select_handler(update: Update, ctx: ContextTypes.DEFAULT
                     f"📅 {'Oy' if language == 'uz' else 'Месяц'}: {month_disp}",
                     "",
                     f"📦 Dorilar soni: {n_prod} ta" if language == "uz" else f"📦 Позиций: {n_prod}",
-                    f"💰 Sotuv: *{_fmt(sotuv)} so'm*" if language == "uz" else f"💰 Продажи: *{_fmt(sotuv)} сум*",
-                    f"📦 Ostatok: *{_fmt(ostatok)} so'm*" if language == "uz" else f"📦 Остаток: *{_fmt(ostatok)} сум*",
                 ]
+            if _sup_lines:
+                lines.append("")
+                lines.append(
+                    "🏭 Поставщиклар bo'yicha:" if language == "uz"
+                    else "🏭 По поставщикам:"
+                )
+                lines.append(_sup_lines)
+                lines.append("")
+                lines.append(
+                    f"💰 *Jami sotuv: {_fmt(sotuv)} so'm*"
+                    if language == "uz" else
+                    f"💰 *Итого продажи: {_fmt(sotuv)} сум*"
+                )
+                lines.append(
+                    f"📦 *Jami ostatok: {_fmt(ostatok)} so'm*"
+                    if language == "uz" else
+                    f"📦 *Итого остаток: {_fmt(ostatok)} сум*"
+                )
+            else:
+                lines.append(
+                    f"💰 Sotuv: *{_fmt(sotuv)} so'm*"
+                    if language == "uz" else
+                    f"💰 Продажи: *{_fmt(sotuv)} сум*"
+                )
+                lines.append(
+                    f"📦 Ostatok: *{_fmt(ostatok)} so'm*"
+                    if language == "uz" else
+                    f"📦 Остаток: *{_fmt(ostatok)} сум*"
+                )
             if month_err != "ok":
                 lines.append(f"⚠️ Oylik varaqqa yozishda xato: {month_err}" if language == "uz" else f"⚠️ Ошибка записи в месячный лист: {month_err}")
             await msg.edit_text("\n".join(l for l in lines if l is not None), parse_mode="Markdown")
