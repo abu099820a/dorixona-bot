@@ -2239,30 +2239,69 @@ def _parse_report_xlsx_totals(xlsx_bytes: bytes) -> dict:
 def _format_supplier_lines(by_supplier: dict, fmt_fn, language: str,
                             max_suppliers: int = 15) -> str:
     """
-    Поставщик bo'yicha alohida qatorlar (admin xabari va auto-caption uchun).
-    Qaytaradi: "  • Supplier A: 💰 X so'm | 📦 Y so'm\\n..."
-    bo'sh string qaytarilsa — поставщик ma'lumoti yo'q.
+    Ta'minotchilar bo'yicha jadval (admin xabari va auto-caption uchun).
+
+    Format (monospace kod blok, dinamik ustun kengliklari):
+        Ta'minotchi          Sotuv         Qoldiq
+        ─────────────────────────────────────────
+        махмаджон нурафшон   19 325 023    78 267 062
+        склад                 1 323 432     4 996 981
+        гранд фарм               64 185             —
+
+    Tartib: sotuv bo'yicha kamayish, sotuv teng bo'lsa qoldiq bo'yicha.
+    Sotuv yoki qoldiq = 0 bo'lsa "—" ko'rsatiladi.
+    Bo'sh string qaytarilsa — ma'lumot yo'q.
     """
     if not by_supplier:
         return ""
-    currency = "so'm" if language == "uz" else "сум"
-    lines = []
-    for sup in sorted(by_supplier.keys())[:max_suppliers]:
-        s = by_supplier[sup].get("sotuv", 0.0)
-        o = by_supplier[sup].get("ostatok", 0.0)
-        if not s and not o:
-            continue
-        parts = []
-        if s:
-            parts.append(f"💰 {fmt_fn(s)} {currency}")
-        if o:
-            parts.append(f"📦 {fmt_fn(o)} {currency}")
-        lines.append(f"  • *{sup}*: {' | '.join(parts)}")
-    if len(by_supplier) > max_suppliers:
-        rest = len(by_supplier) - max_suppliers
-        lines.append(f"  ... va yana {rest} ta ta'minotchi" if language == "uz"
-                     else f"  ... и ещё {rest} поставщик(а)")
-    return "\n".join(lines)
+
+    s_lbl    = "Sotuv"       if language == "uz" else "Продажи"
+    o_lbl    = "Qoldiq"      if language == "uz" else "Остаток"
+    name_lbl = "Ta'minotchi" if language == "uz" else "Поставщик"
+
+    # 1) Filtrlash va saralash: sotuv bo'yicha kamayish, keyin qoldiq bo'yicha
+    rows = [
+        (sup, vals.get("sotuv", 0.0), vals.get("ostatok", 0.0))
+        for sup, vals in by_supplier.items()
+        if vals.get("sotuv", 0) or vals.get("ostatok", 0)
+    ]
+    rows.sort(key=lambda x: (-x[1], -x[2]))
+
+    shown  = rows[:max_suppliers]
+    hidden = len(rows) - len(shown)
+
+    def _val(v: float) -> str:
+        return fmt_fn(v) if v else "—"
+
+    # 2) Ustun kengliklari — ma'lumotlarga qarab dinamik hisoblanadi
+    s_vals = [_val(s) for _, s, _ in shown]
+    o_vals = [_val(o) for _, _, o in shown]
+
+    NAME_W = max(len(name_lbl), max((len(sup) for sup, *_ in shown), default=0))
+    NAME_W = min(NAME_W, 22)          # maksimum 22 belgi
+    S_W    = max(len(s_lbl), max((len(v) for v in s_vals), default=0))
+    O_W    = max(len(o_lbl), max((len(v) for v in o_vals), default=0))
+
+    def _trunc(s: str, n: int) -> str:
+        return s if len(s) <= n else s[:n - 1] + "…"
+
+    # 3) Jadval qatorlari
+    hdr  = f"{name_lbl.ljust(NAME_W)}  {s_lbl.rjust(S_W)}  {o_lbl.rjust(O_W)}"
+    sep  = "─" * len(hdr)
+
+    body_lines = [hdr, sep]
+    for (sup, s, o), sv, ov in zip(shown, s_vals, o_vals):
+        name = _trunc(sup, NAME_W).ljust(NAME_W)
+        body_lines.append(f"{name}  {sv.rjust(S_W)}  {ov.rjust(O_W)}")
+
+    if hidden:
+        tail = (f"... va yana {hidden} ta ta'minotchi"
+                if language == "uz" else
+                f"... и ещё {hidden} поставщик(а)")
+        body_lines.append(tail)
+
+    # 4) Monospace blok (Telegram Markdown)
+    return "```\n" + "\n".join(body_lines) + "\n```"
 
 
 def _find_firm_row_in_tolovlar(caption: str):
