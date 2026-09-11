@@ -44,6 +44,7 @@ SALARY_SHEET_ID = os.getenv("SALARY_SHEET_ID", "")
 FIRMS_SHEET_ID = os.getenv("FIRMS_SHEET_ID", "")
 ADMIN_IDS = [709544046]
 PAYMENTS_PAROL = "офис"  # Davomat bo'limi bilan bir xil umumiy parol
+PAYMENT_GROUP_ID = int(os.getenv("PAYMENT_GROUP_ID", "0"))  # Оплата хисоботи юбориладиган гуруҳ ID
 
 # Conversation states
 SAL_WAIT_ZIP = 500
@@ -73,6 +74,8 @@ FIRM_SUPPLIER_CONTRACT_SELECT = 523  # Postawchik bir necha shartnomadan birini 
 FIRM_PHONE_WAIT = 524               # Postawchik telefon raqamini yuborishi kutilmoqda
 FIRM_ADD_NAME = 525                 # Admin yangi firma nomini kiritmoqda
 FIRM_ADD_USERNAME = 526             # Admin firma vakili @username ni kiritmoqda
+OPLATA_FILE = 527                   # Oплата: admin xlsx fayl yuborishi kutilmoqda
+OPLATA_KARZ = 528                   # Оплата: admin карз miqdorini kiritishi kutilmoqda
 
 
 # ─── Google Sheets ────────────────────────────────────────────────────────────
@@ -3213,67 +3216,31 @@ async def firm_report_receive_file(update: Update, ctx: ContextTypes.DEFAULT_TYP
                 )
             await msg.edit_text("\n".join(lines), parse_mode="Markdown")
 
-            # ── Auto-yuborish firma vakiliga ────────────────────────────────
-            # Agar Firmalar varag'ida TelegramID saqlangan bo'lsa — hisobotni
-            # bevosita firma vakiliga yuboramiz (admin qo'lda yuborishiga hojat yo'q).
-            try:
-                firm_contact = await run_read(get_firma_file_by_name, firma_nomi)
-                auto_tid = (firm_contact or {}).get("telegram_id", "")
-                if auto_tid and str(auto_tid).strip().lstrip("-").isdigit():
-                    # Sotuv/ostatok + поставщик bo'yicha breakdown caption ga qo'shiladi
-                    _s = _fmt(sotuv)   if sotuv   else ""
-                    _o = _fmt(ostatok) if ostatok else ""
-                    _sup_cap = _format_supplier_lines(by_supplier, _fmt, language, max_suppliers=10)
-                    if language == "uz":
-                        if _sup_cap:
-                            _fin = (
-                                f"\n🏭 Ta'minotchilar:\n{_sup_cap}\n\n"
-                                f"💰 *Jami sotuv: {_s} so'm*\n"
-                                f"📦 *Jami qoldiq: {_o} so'm*\n"
-                            )
-                        else:
-                            _fin = (
-                                f"\n💰 Sotuv: *{_s} so'm*\n📦 Qoldiq: *{_o} so'm*\n"
-                                if (_s or _o) else ""
-                            )
-                        auto_caption = (
-                            f"📊 *{firma_nomi}* — {month_disp} hisoboti"
-                            f"{_fin}\n"
-                            "✅ Administrator tomonidan yuklandi."
-                        )
-                    else:
-                        if _sup_cap:
-                            _fin = (
-                                f"\n🏭 По поставщикам:\n{_sup_cap}\n\n"
-                                f"💰 *Итого продажи: {_s} сум*\n"
-                                f"📦 *Итого остаток: {_o} сум*\n"
-                            )
-                        else:
-                            _fin = (
-                                f"\n💰 Продажи: *{_s} сум*\n📦 Остаток: *{_o} сум*\n"
-                                if (_s or _o) else ""
-                            )
-                        auto_caption = (
-                            f"📊 *{firma_nomi}* — отчёт за {month_disp}"
-                            f"{_fin}\n"
-                            "✅ Загружен администратором."
-                        )
-                    # Telegram caption limiti 1024 belgi
-                    if len(auto_caption) > 1020:
-                        auto_caption = auto_caption[:1020] + "…"
-                    await ctx.bot.send_document(
-                        chat_id=int(auto_tid),
-                        document=new_file_id,
-                        caption=auto_caption,
-                        parse_mode="Markdown",
-                    )
-                    await update.message.reply_text(
-                        "✉️ Hisobot firma vakiliga avtomatik yuborildi."
-                        if language == "uz" else
-                        "✉️ Отчёт автоматически отправлен представителю фирмы."
-                    )
-            except Exception as e_auto:
-                logger.warning(f"[FIRM_REPORT] Auto-yuborish xato: {e_auto}")
+            # ── Оплата: поставчик танлаш клавиатурасини кўрсатиш ────────────
+            # Auto-yuborish firma vakiliga — поставчик танлангандан КЕЙИН
+            # (фильтрланган файл билан) amalga oshiriladi. Shu sababli bu
+            # yerda faqat telegram_id olamiz va oplata'ga saqlaymiz.
+            if err == "ok" and by_supplier:
+                _firm_tid = ""
+                try:
+                    _fc = await run_read(get_firma_file_by_name, firma_nomi)
+                    _firm_tid = str((_fc or {}).get("telegram_id", "")).strip()
+                    if not _firm_tid.lstrip("-").isdigit():
+                        _firm_tid = ""
+                except Exception:
+                    pass
+                _next = await _show_oplata_supplier_keyboard(
+                    update, ctx, by_supplier,
+                    firma_nomi, inn_val, entry.get("shartnoma", ""),
+                    new_file_id, new_file_name,
+                    sotuv, ostatok,
+                    firm_telegram_id=_firm_tid,
+                    month_disp=month_disp,
+                    language=language,
+                )
+                if _next == OPLATA_KARZ:
+                    ctx.user_data.pop("firm_upload_from_new_menu", None)
+                    return OPLATA_KARZ
             # ────────────────────────────────────────────────────────────────
 
         else:
@@ -3473,7 +3440,33 @@ async def firm_contract_select_handler(update: Update, ctx: ContextTypes.DEFAULT
     # Tozalash
     ctx.user_data.pop("firm_upload_contracts", None)
     ctx.user_data.pop("firm_upload_totals", None)
-    from_new = ctx.user_data.pop("firm_upload_from_new_menu", False)
+    ctx.user_data.pop("firm_upload_from_new_menu", None)
+
+    # ── Оплата: поставчик танлаш (мувафаққиятли сақлангандан кейин) ─────────
+    _doc_saved = ctx.user_data.get("firm_upload_doc", {})
+    if err == "ok" and by_supplier:
+        _firm_tid2 = ""
+        try:
+            _fc2 = await run_read(get_firma_file_by_name, firma_nomi)
+            _firm_tid2 = str((_fc2 or {}).get("telegram_id", "")).strip()
+            if not _firm_tid2.lstrip("-").isdigit():
+                _firm_tid2 = ""
+        except Exception:
+            pass
+        _next = await _show_oplata_supplier_keyboard(
+            update, ctx, by_supplier,
+            firma_nomi, inn_val, shartnoma,
+            _doc_saved.get("file_id", ""), _doc_saved.get("file_name", ""),
+            sotuv, ostatok,
+            firm_telegram_id=_firm_tid2,
+            month_disp=_month_display(_prev_month_key(), language),
+            language=language,
+        )
+        if _next == OPLATA_KARZ:
+            return OPLATA_KARZ
+    # ────────────────────────────────────────────────────────────────────────
+
+    from_new = False  # already popped above
     if from_new:
         from bot import firm_reports_keyboard, FIRM_REPORTS_MENU
         await update.message.reply_text(
@@ -4664,6 +4657,565 @@ async def firm_month_select_handler(update: Update, ctx: ContextTypes.DEFAULT_TY
     return PAYMENTS_MENU
 
 
+# ─── Оплата ёзиш модули (Admin: Excel → поставчик танлаш → оплата) ──────────
+
+def _fmt_oplata(n: float) -> str:
+    """Оплата учун рақам форматлаш: 10 234 567"""
+    return f"{int(round(n)):,}".replace(",", " ")
+
+
+def _filter_xlsx_by_suppliers(xlsx_bytes: bytes, selected_names: set) -> bytes:
+    """
+    Excel фaйлдан фақат selected_names да бор поставчик қаторларини қолдиради.
+    Қолганларини ўчириб, янги bytes қайтаради.
+    """
+    import openpyxl as _xl
+    import io as _io
+
+    wb = _xl.load_workbook(_io.BytesIO(xlsx_bytes), data_only=True)
+    norm = {str(n).strip().lower() for n in selected_names}
+
+    for ws in wb.worksheets:
+        if ws.title == "Хулоса":
+            continue
+        rows = list(ws.iter_rows(values_only=True))
+        if len(rows) < 3:
+            continue
+
+        # Производитель устуни индексини аниқлаш (одатда 1)
+        h1 = [str(c).strip().lower() if c else "" for c in rows[0]]
+        h2 = [str(c).strip().lower() if c else "" for c in rows[1]]
+        sup_col = next(
+            (i for i, v in enumerate(h1) if "произв" in v or "ta'minotchi" in v.lower()),
+            1,
+        )
+
+        # Ўчириладиган қаторлар (охиридан бошлаб)
+        to_delete = []
+        for r_idx in range(3, ws.max_row + 1):
+            cell_val = ws.cell(row=r_idx, column=sup_col + 1).value
+            if cell_val is None:
+                continue
+            cell_str = str(cell_val).strip().lower()
+            if cell_str and cell_str not in norm:
+                to_delete.append(r_idx)
+
+        for r_idx in reversed(to_delete):
+            ws.delete_rows(r_idx)
+
+    out = _io.BytesIO()
+    wb.save(out)
+    return out.getvalue()
+
+
+async def _show_oplata_supplier_keyboard(
+    update,
+    ctx,
+    by_supplier: dict,
+    firma_nomi: str,
+    inn: str,
+    shartnoma: str,
+    file_id: str,
+    file_name: str,
+    sotuv: float,
+    ostatok: float,
+    firm_telegram_id: str = "",
+    month_disp: str = "",
+    language: str = "uz",
+) -> int:
+    """
+    Хисобот сақлангандан кейин поставчик танлаш inline клавиатурасини кўрсатади.
+    user_data["oplata"] га маълумотларни сақлайди.
+    OPLATA_KARZ ҳолатини қайтаради.
+    """
+    from telegram import InlineKeyboardMarkup, InlineKeyboardButton
+
+    sup_list = [
+        {"name": name, "sotuv": vals.get("sotuv", 0.0), "ostatok": vals.get("ostatok", 0.0)}
+        for name, vals in sorted(by_supplier.items(), key=lambda x: -x[1].get("ostatok", 0))
+        if vals.get("sotuv", 0) or vals.get("ostatok", 0)
+    ]
+
+    if not sup_list:
+        return -1  # Поставчик йўқ — ўтказиб юборамиз
+
+    ctx.user_data["oplata"] = {
+        "suppliers":        sup_list,
+        "selected":         set(range(len(sup_list))),  # Дастлаб ҳаммаси танланган
+        "firma_nomi":       firma_nomi,
+        "inn":              inn,
+        "shartnoma":        shartnoma,
+        "file_id":          file_id,
+        "file_name":        file_name,
+        "firm_telegram_id": firm_telegram_id,
+        "month_disp":       month_disp,
+        "language":         language,
+        "confirmed":        False,
+    }
+
+    buttons = []
+    for idx, sup in enumerate(sup_list):
+        o_str = _fmt_oplata(sup["ostatok"])
+        s_str = _fmt_oplata(sup["sotuv"])
+        label = f"☑️ {sup['name']}  (Q:{o_str} | S:{s_str})"
+        buttons.append([InlineKeyboardButton(label, callback_data=f"opt_t:{idx}")])
+
+    buttons.append([
+        InlineKeyboardButton("✅ Тасдиқлаш",        callback_data="opt_confirm"),
+        InlineKeyboardButton("⏭ Ўтказиб юбориш",   callback_data="opt_skip"),
+    ])
+
+    await update.message.reply_text(
+        "💳 *Оплата — поставчикларни танланг*\n\n"
+        "Ҳисобга олинмайдиганларни белгидан олинг.\n"
+        "_Тасдиқлаб, карз суммасини киритасиз._",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(buttons),
+    )
+    return OPLATA_KARZ
+
+
+def _build_oplata_keyboard(suppliers: list, selected: set, karz: float) -> tuple:
+    """
+    Поставчиклар танлаш inline клавиатурасини яратади.
+
+    suppliers: [{"name": str, "sotuv": float, "ostatok": float}, ...]
+    selected: set of indices (int) that are checked
+    karz: total debt amount
+
+    Returns: (summary_text, InlineKeyboardMarkup)
+    """
+    from telegram import InlineKeyboardMarkup, InlineKeyboardButton
+
+    total_ostatok = sum(
+        suppliers[i]["ostatok"] for i in selected if i < len(suppliers)
+    )
+    total_sotuv = sum(
+        suppliers[i]["sotuv"] for i in selected if i < len(suppliers)
+    )
+    qolgan = karz - total_ostatok
+
+    buttons = []
+    for idx, sup in enumerate(suppliers):
+        mark = "☑️" if idx in selected else "☐"
+        o_str = _fmt_oplata(sup["ostatok"])
+        s_str = _fmt_oplata(sup["sotuv"])
+        label = f"{mark} {sup['name']}  (Q:{o_str} | S:{s_str})"
+        # Callback data: opt_t:<index>
+        buttons.append([InlineKeyboardButton(label, callback_data=f"opt_t:{idx}")])
+
+    # Tanlanganlar yig'masi
+    n_sel = len(selected)
+    summary = (
+        f"📋 *Оплата хисоби*\n\n"
+        f"💳 Карз: *{_fmt_oplata(karz)}* сум\n"
+        f"📦 Танланган остаток: *{_fmt_oplata(total_ostatok)}* сум"
+        + (f"\n💰 Танланган соtuв: *{_fmt_oplata(total_sotuv)}* сум" if total_sotuv else "")
+        + f"\n━━━━━━━━━━━━━━━━━━━━\n"
+        f"📊 Карз − Остаток: *{_fmt_oplata(qolgan)}* сум\n"
+        f"✅ Танланган: {n_sel} та поставчик\n\n"
+        f"_Поставчикни танлаш/бекор қилиш учун тугмага босинг_"
+    )
+
+    # Bottom buttons
+    buttons.append([
+        InlineKeyboardButton(
+            f"✅ Тасдиқлаш ({n_sel} та)",
+            callback_data="opt_confirm"
+        ),
+        InlineKeyboardButton("❌ Бекор", callback_data="opt_cancel"),
+    ])
+
+    return summary, InlineKeyboardMarkup(buttons)
+
+
+async def oplata_enter(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """
+    Оплата жараёни бошланиши: adminга Excel фaйл юборишни сўрайди.
+    bot.py дан чақирилади (OPLATA_FILE holatiga o'tish).
+    """
+    uid = update.effective_user.id
+    if uid not in ADMIN_IDS:
+        await update.message.reply_text("⛔ Рухсат йўқ.")
+        return ConversationHandler.END
+
+    ctx.user_data["oplata"] = {}
+    await update.message.reply_text(
+        "📤 *Оплата ёзиш*\n\n"
+        "Фирма айланма ҳисоботи Excel фaйлини юборинг.\n"
+        "Бот поставчиклар рўйхатини чиқаради.",
+        parse_mode="Markdown",
+    )
+    return OPLATA_FILE
+
+
+async def oplata_file_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """
+    OPLATA_FILE: admin Excel faylni yuboradi → parse qilib поставчик рўйхатини чиқаради.
+    Keyin карз миқдорини сўрайди.
+    """
+    uid = update.effective_user.id
+    if uid not in ADMIN_IDS:
+        return ConversationHandler.END
+
+    msg = update.message
+    if not msg.document:
+        await msg.reply_text(
+            "⚠️ Илтимос, Excel (.xlsx) фaйл юборинг.\n"
+            "/bekor — бекор қилиш"
+        )
+        return OPLATA_FILE
+
+    fname = msg.document.file_name or ""
+    if not fname.lower().endswith((".xlsx", ".xls")):
+        await msg.reply_text(
+            "⚠️ Фақат Excel (.xlsx) файл қабул қилинади.\n"
+            "/bekor — бекор қилиш"
+        )
+        return OPLATA_FILE
+
+    wait = await msg.reply_text("⏳ Файл таҳлил қилинмоқда...")
+
+    try:
+        fobj = await ctx.bot.get_file(msg.document.file_id)
+        xlsx_bytes = bytes(await fobj.download_as_bytearray())
+        totals = await run_read(_parse_report_xlsx_totals, xlsx_bytes)
+    except Exception as e:
+        logger.error(f"[OPLATA] Файл ўқиш хато: {e}")
+        await wait.edit_text(f"❌ Файл ўқишда хато: {e}")
+        return OPLATA_FILE
+
+    by_supplier = totals.get("by_supplier", {})
+    if not by_supplier:
+        await wait.edit_text(
+            "⚠️ Файлда поставчик маълумоти топилмади.\n"
+            "Тўғри Excel форматда экани текширинг."
+        )
+        return OPLATA_FILE
+
+    # Поставчиклар рўйхатини index билан сақлаймиз
+    sup_list = [
+        {"name": name, "sotuv": vals.get("sotuv", 0.0), "ostatok": vals.get("ostatok", 0.0)}
+        for name, vals in sorted(by_supplier.items(), key=lambda x: -x[1].get("ostatok", 0))
+        if vals.get("sotuv", 0) or vals.get("ostatok", 0)
+    ]
+
+    ctx.user_data["oplata"] = {
+        "suppliers": sup_list,
+        "selected": set(range(len(sup_list))),  # Дастлаб ҳаммаси танланган
+        "sotuv": totals.get("sotuv", 0.0),
+        "ostatok": totals.get("ostatok", 0.0),
+    }
+
+    # Жами қисқача кўрсатиш
+    lines = [f"  {i+1}. {s['name']}  (остаток: {_fmt_oplata(s['ostatok'])})" for i, s in enumerate(sup_list)]
+    preview = "\n".join(lines[:20])
+    if len(sup_list) > 20:
+        preview += f"\n  ... ва яна {len(sup_list)-20} та"
+
+    await wait.edit_text(
+        f"✅ *{len(sup_list)} та поставчик топилди:*\n\n"
+        f"{preview}\n\n"
+        f"💳 Энди *карз миқдорини* (сумда) киритинг:\n"
+        f"_Мисол: 10500000_",
+        parse_mode="Markdown",
+    )
+    return OPLATA_KARZ
+
+
+async def oplata_karz_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """
+    OPLATA_KARZ: admin карз суммасини матн сифатида киритади.
+    Поставчик танлаш тасдиқланган бўлиши керак (opt_confirm bosилган).
+    Тасдиқланмаган бўлса — эслатма кўрсатади.
+    Тасдиқланган бўлса: Excel фильтрлаш → гуруҳга юбориш.
+    """
+    from bot import firm_reports_keyboard, FIRM_REPORTS_MENU
+    uid = update.effective_user.id
+    if uid not in ADMIN_IDS:
+        return ConversationHandler.END
+
+    language = ctx.user_data.get("lang", "uz")
+    is_admin = True
+    txt = (update.message.text or "").strip()
+
+    # Орқага тугмалари
+    if txt in ("⬅️ Orqaga", "⬅️ Назад"):
+        ctx.user_data.pop("oplata", None)
+        await update.message.reply_text(
+            "📊 Bo'limni tanlang:" if language == "uz" else "📊 Выберите раздел:",
+            reply_markup=firm_reports_keyboard(language, is_admin),
+        )
+        return FIRM_REPORTS_MENU
+
+    oplata = ctx.user_data.get("oplata", {})
+    if not oplata:
+        # Маълумот йўқ — менюга
+        await update.message.reply_text(
+            "📊 Bo'limni tanlang:" if language == "uz" else "📊 Выберите раздел:",
+            reply_markup=firm_reports_keyboard(language, is_admin),
+        )
+        return FIRM_REPORTS_MENU
+
+    if not oplata.get("confirmed"):
+        await update.message.reply_text(
+            "⚠️ Аввал поставчикларни белгилаб *Тасдиқлаш* тугмасини босинг.",
+            parse_mode="Markdown",
+        )
+        return OPLATA_KARZ
+
+    # Карз суммасини parse қилиш
+    karz_str = txt.replace(" ", "").replace(",", "").replace(".", "")
+    try:
+        karz = float(karz_str)
+        if karz <= 0:
+            raise ValueError
+    except ValueError:
+        await update.message.reply_text(
+            "⚠️ Нотўғри сумма. Рақам киритинг (масалан: 10500000)."
+        )
+        return OPLATA_KARZ
+
+    # ── Маълумотларни олиш ────────────────────────────────────────────────
+    sup_list          = oplata.get("suppliers", [])
+    selected          = oplata.get("selected", set())
+    firma_nomi        = oplata.get("firma_nomi", "")
+    inn               = oplata.get("inn", "")
+    shartnoma         = oplata.get("shartnoma", "")
+    file_id           = oplata.get("file_id", "")
+    file_name         = oplata.get("file_name", "hisobot.xlsx")
+    firm_telegram_id  = oplata.get("firm_telegram_id", "")
+    month_disp        = oplata.get("month_disp", "")
+    lang              = oplata.get("language", language)
+
+    chosen = [sup_list[i] for i in sorted(selected) if i < len(sup_list)]
+    if not chosen:
+        await update.message.reply_text("⚠️ Поставчик танланмаган.")
+        return OPLATA_KARZ
+
+    total_ostatok = sum(s["ostatok"] for s in chosen)
+    total_sotuv   = sum(s["sotuv"]   for s in chosen)
+    oplatа_summa  = karz - total_ostatok
+
+    # ── Гуруҳга юбориладиган хисобот матни ───────────────────────────────
+    sup_lines = "\n".join(
+        f"  • {s['name']} — остаток: *{_fmt_oplata(s['ostatok'])}* сум"
+        for s in chosen
+    )
+    report_text = (
+        f"📋 *ОПЛАТА ҲИСОБОТИ*\n"
+        f"{'━' * 28}\n"
+        f"🏢 Фирма: *{firma_nomi}*\n"
+        f"🏷 ИНН: `{inn}`\n"
+        f"📄 Договор: {shartnoma or '—'}\n"
+        f"{'━' * 28}\n"
+        f"💳 Карз: *{_fmt_oplata(karz)}* сум\n\n"
+        f"📦 *Танланган поставчиклар ({len(chosen)} та):*\n"
+        f"{sup_lines}\n\n"
+        f"📦 Жами остаток: *{_fmt_oplata(total_ostatok)}* сум\n"
+        f"{'━' * 28}\n"
+        f"💰 *ОПЛАТА: {_fmt_oplata(oplatа_summa)} сум*"
+    )
+
+    wait = await update.message.reply_text("⏳ Юборилмоқда...")
+
+    # ── Excel файлни фильтрлаш (танланмаган поставчиклар ўчирилади) ──────
+    sent_to_group = False
+    try:
+        selected_names = {s["name"] for s in chosen}
+        fobj   = await ctx.bot.get_file(file_id)
+        fbytes = bytes(await fobj.download_as_bytearray())
+        filtered_bytes = await run_read(_filter_xlsx_by_suppliers, fbytes, selected_names)
+
+        import io as _io
+        filtered_doc = _io.BytesIO(filtered_bytes)
+        filtered_doc.name = file_name or "hisobot.xlsx"
+
+        # ── Гуруҳга юбориш ─────────────────────────────────────────────
+        if PAYMENT_GROUP_ID:
+            await ctx.bot.send_message(
+                chat_id=PAYMENT_GROUP_ID,
+                text=report_text,
+                parse_mode="Markdown",
+            )
+            filtered_doc.seek(0)
+            await ctx.bot.send_document(
+                chat_id=PAYMENT_GROUP_ID,
+                document=filtered_doc,
+                filename=file_name or "hisobot.xlsx",
+                caption=f"📊 {firma_nomi} — {shartnoma or ''} | Оплата: {_fmt_oplata(oplatа_summa)} сум",
+            )
+            sent_to_group = True
+        else:
+            logger.warning("[OPLATA] PAYMENT_GROUP_ID ўрнатилмаган!")
+
+        # ── Фирмага фильтрланган файл юбориш ───────────────────────────
+        if firm_telegram_id:
+            try:
+                _s = _fmt_oplata(sum(s["sotuv"] for s in chosen))
+                _o = _fmt_oplata(total_ostatok)
+                sup_cap_lines = "\n".join(
+                    f"  • {s['name']} — Q: {_fmt_oplata(s['ostatok'])}, S: {_fmt_oplata(s['sotuv'])}"
+                    for s in chosen
+                )
+                if lang == "uz":
+                    firm_caption = (
+                        f"📊 *{firma_nomi}* — {month_disp} hisoboti\n\n"
+                        f"🏭 Ta'minotchilar:\n{sup_cap_lines}\n\n"
+                        f"💰 *Jami sotuv: {_s} so'm*\n"
+                        f"📦 *Jami qoldiq: {_o} so'm*\n\n"
+                        f"✅ Administrator tomonidan yuklandi."
+                    )
+                else:
+                    firm_caption = (
+                        f"📊 *{firma_nomi}* — отчёт за {month_disp}\n\n"
+                        f"🏭 По поставщикам:\n{sup_cap_lines}\n\n"
+                        f"💰 *Итого продажи: {_s} сум*\n"
+                        f"📦 *Итого остаток: {_o} сум*\n\n"
+                        f"✅ Загружен администратором."
+                    )
+                if len(firm_caption) > 1020:
+                    firm_caption = firm_caption[:1020] + "…"
+                filtered_doc.seek(0)
+                await ctx.bot.send_document(
+                    chat_id=int(firm_telegram_id),
+                    document=filtered_doc,
+                    filename=file_name or "hisobot.xlsx",
+                    caption=firm_caption,
+                    parse_mode="Markdown",
+                )
+            except Exception as _fe:
+                logger.warning(f"[OPLATA] Фирмага юборишда хато: {_fe}")
+    except Exception as _ge:
+        logger.error(f"[OPLATA] Гуруҳга юборишда хато: {_ge}")
+
+    # ── Adminга тасдиқ ────────────────────────────────────────────────────
+    grp_line  = "✅ Гуруҳга юборилди" if sent_to_group else "⚠️ Гуруҳга юборилмади (PAYMENT_GROUP_ID текширинг)"
+    firm_line = (f"✉️ Фирмага юборилди (ID: {firm_telegram_id})" if firm_telegram_id
+                 else "ℹ️ Фирма Telegram ID топилмади — фирмага юборилмади")
+    await wait.edit_text(
+        f"{report_text}\n\n{grp_line}\n{firm_line}",
+        parse_mode="Markdown",
+    )
+
+    ctx.user_data.pop("oplata", None)
+
+    await update.message.reply_text(
+        "📊 Bo'limni tanlang:" if language == "uz" else "📊 Выберите раздел:",
+        reply_markup=firm_reports_keyboard(language, is_admin),
+    )
+    return FIRM_REPORTS_MENU
+
+
+async def oplata_toggle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """
+    opt_t:<idx> callback — поставчикни танлайди/бекор қилади ва хабарни янгилайди.
+    """
+    query = update.callback_query
+    await query.answer()
+
+    uid = query.from_user.id
+    if uid not in ADMIN_IDS:
+        return
+
+    data = query.data or ""
+    if not data.startswith("opt_t:"):
+        return
+
+    try:
+        idx = int(data.split(":")[1])
+    except (IndexError, ValueError):
+        return
+
+    oplata = ctx.user_data.get("oplata", {})
+    sup_list = oplata.get("suppliers", [])
+    selected: set = oplata.get("selected", set())
+    karz = oplata.get("karz", 0.0)
+
+    if idx < 0 or idx >= len(sup_list):
+        return
+
+    # Танлашни алмаштирамиз
+    if idx in selected:
+        selected.discard(idx)
+    else:
+        selected.add(idx)
+    oplata["selected"] = selected
+    ctx.user_data["oplata"] = oplata
+
+    summary, kb = _build_oplata_keyboard(sup_list, selected, karz)
+    try:
+        await query.edit_message_text(
+            summary,
+            parse_mode="Markdown",
+            reply_markup=kb,
+        )
+    except Exception:
+        pass  # Хабар ўзгармаган бўлса — ўтказиб юборамиз
+
+
+async def oplata_confirm_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """
+    opt_confirm callback — поставчиклар тасдиқланди, карз суммасини сўрайди.
+    """
+    query = update.callback_query
+    await query.answer()
+
+    uid = query.from_user.id
+    if uid not in ADMIN_IDS:
+        return
+
+    oplata = ctx.user_data.get("oplata", {})
+    sup_list = oplata.get("suppliers", [])
+    selected: set = oplata.get("selected", set())
+
+    if not selected:
+        await query.answer("⚠️ Ҳеч бир поставчик танланмаган!", show_alert=True)
+        return
+
+    chosen = [sup_list[i] for i in sorted(selected) if i < len(sup_list)]
+    total_ostatok = sum(s["ostatok"] for s in chosen)
+
+    lines = "\n".join(f"  • {s['name']} — {_fmt_oplata(s['ostatok'])} сум" for s in chosen)
+
+    oplata["confirmed"] = True
+    ctx.user_data["oplata"] = oplata
+
+    try:
+        await query.edit_message_text(
+            f"✅ *{len(chosen)} та поставчик танланди*\n\n"
+            f"{lines}\n\n"
+            f"📦 Жами остаток: *{_fmt_oplata(total_ostatok)}* сум\n\n"
+            f"💳 Энди *карз суммасини* (сумда) киритинг:\n"
+            f"_Мисол: 10500000_",
+            parse_mode="Markdown",
+        )
+    except Exception:
+        pass
+
+
+async def oplata_skip_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """opt_skip callback — оплата қадамини ўтказиб юборади."""
+    query = update.callback_query
+    await query.answer("Ўтказиб юборилди.")
+    ctx.user_data.pop("oplata", None)
+    try:
+        await query.edit_message_text("⏭ Оплата ўтказиб юборилди.")
+    except Exception:
+        pass
+
+
+async def oplata_cancel_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """opt_cancel / opt_new callback — жараённи бекор қилади."""
+    query = update.callback_query
+    await query.answer("Бекор қилинди.")
+    ctx.user_data.pop("oplata", None)
+    try:
+        await query.edit_message_text("❌ Оплата ҳисоби бекор қилинди.")
+    except Exception:
+        pass
+
+
 # ─── Admin: Firma qo'shish handlerlari ───────────────────────────────────────
 
 async def firm_add_name_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -4847,6 +5399,23 @@ async def firm_add_username_handler(update: Update, ctx: ContextTypes.DEFAULT_TY
     return FIRM_REPORTS_MENU
 
 
+# ─── Оплата callback handlers (ConversationHandler'dan tashqarida) ────────────
+
+def get_oplata_callback_handlers():
+    """
+    bot.py da Application'ga qo'shiladigan оплата callback handler'lari.
+    ConversationHandler'dan tashqarida ishlaydi (faqat callback_data bo'yicha).
+    """
+    from telegram.ext import CallbackQueryHandler
+    return [
+        CallbackQueryHandler(oplata_toggle_callback,  pattern=r"^opt_t:\d+$"),
+        CallbackQueryHandler(oplata_confirm_callback, pattern=r"^opt_confirm$"),
+        CallbackQueryHandler(oplata_cancel_callback,  pattern=r"^opt_cancel$"),
+        CallbackQueryHandler(oplata_cancel_callback,  pattern=r"^opt_new$"),
+        CallbackQueryHandler(oplata_skip_callback,    pattern=r"^opt_skip$"),
+    ]
+
+
 # ─── States ───────────────────────────────────────────────────────────────────
 
 def get_sal_states():
@@ -4896,6 +5465,9 @@ def get_sal_states():
         FIRM_ADD_USERNAME: [
             MessageHandler(filters.CONTACT, firm_add_username_handler),
             MessageHandler(filters.TEXT & ~filters.COMMAND, firm_add_username_handler),
+        ],
+        OPLATA_KARZ: [
+            MessageHandler(filters.TEXT & ~filters.COMMAND, oplata_karz_handler),
         ],
         ADMIN_FIRM_REPORT_SEARCH: [
             MessageHandler(filters.TEXT & ~filters.COMMAND, admin_firm_report_search_handler),
