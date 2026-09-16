@@ -5101,30 +5101,21 @@ async def oplata_karz_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                     f"  • {s['name']} — Q: {_fmt_oplata(s['ostatok'])}, S: {_fmt_oplata(s['sotuv'])}"
                     for s in chosen
                 )
-                if lang == "uz":
-                    firm_caption = (
-                        f"📊 *{firma_nomi}* — {month_disp} hisoboti\n\n"
-                        f"🏭 Ta'minotchilar:\n{sup_cap_lines}\n\n"
-                        f"💰 *Jami sotuv: {_s} so'm*\n"
-                        f"📦 *Jami qoldiq: {_o} so'm*\n\n"
-                        f"✅ Administrator tomonidan yuklandi."
-                    )
-                else:
-                    firm_caption = (
-                        f"📊 *{firma_nomi}* — отчёт за {month_disp}\n\n"
-                        f"🏭 По поставщикам:\n{sup_cap_lines}\n\n"
-                        f"💰 *Итого продажи: {_s} сум*\n"
-                        f"📦 *Итого остаток: {_o} сум*\n\n"
-                        f"✅ Загружен администратором."
-                    )
-                if len(firm_caption) > 1020:
-                    firm_caption = firm_caption[:1020] + "…"
                 filtered_doc.seek(0)
                 await ctx.bot.send_document(
                     chat_id=int(firm_telegram_id),
                     document=filtered_doc,
                     filename=file_name or "hisobot.xlsx",
-                    caption=firm_caption,
+                )
+                firm_msg = (
+                    f"Фирма: `{firma_nomi}`\n"
+                    f"Сумма: `{int(oplatа_summa)}`\n"
+                    f"ИНН: `{inn}`\n"
+                    f"Договор: `{shartnoma or '—'}`"
+                )
+                await ctx.bot.send_message(
+                    chat_id=int(firm_telegram_id),
+                    text=firm_msg,
                     parse_mode="Markdown",
                 )
             except Exception as _fe:
