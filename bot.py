@@ -1198,6 +1198,17 @@ def main():
     app.add_handler(CmdHandler("send_salaries", cmd_send_salaries))
     app.add_handler(CmdHandler("eksklyuziv", cmd_eksklyuziv))
     app.add_handler(CmdHandler("sync_oylik", cmd_sync_oylik))
+
+    # Vaqtinchalik: chat ID ni qaytaruvchi buyruq (PAYMENT_GROUP_ID topish uchun)
+    async def cmd_chatid(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+        chat = update.effective_chat
+        await ctx.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text=f"Chat ID: `{chat.id}`\nTuri: {chat.type}\nNomi: {chat.title or chat.username or '—'}",
+            parse_mode="Markdown",
+        )
+    app.add_handler(CmdHandler("chatid", cmd_chatid))
+
     # MUHIM: /add_filial_headers, /add_filial_headers_salary,
     # /reorder_lavozim_salary, /sync_all_filials_salary — bu 4 eski,
     # bir martalik buyruqning asl kodi loyihada topilmadi (register_handlers.py
