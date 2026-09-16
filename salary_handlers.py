@@ -5019,24 +5019,31 @@ async def oplata_karz_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     total_sotuv   = sum(s["sotuv"]   for s in chosen)
     oplatа_summa  = karz - total_ostatok
 
-    # ── Гуруҳга юбориладиган хисобот матни ───────────────────────────────
+    # ── Тўлиқ хисобот матни (биринчи хабар) ─────────────────────────────
     sup_lines = "\n".join(
-        f"  • {s['name']} — остаток: *{_fmt_oplata(s['ostatok'])}* сум"
+        f"• {s['name']} — остаток: *{_fmt_oplata(s['ostatok'])}* сум"
         for s in chosen
     )
+    total_sotuv_chosen = sum(s["sotuv"] for s in chosen)
     report_text = (
         f"📋 *ОПЛАТА ҲИСОБОТИ*\n"
-        f"{'━' * 28}\n"
         f"🏢 Фирма: *{firma_nomi}*\n"
-        f"🏷 ИНН: `{inn}`\n"
-        f"📄 Договор: {shartnoma or '—'}\n"
-        f"{'━' * 28}\n"
-        f"💳 Карз: *{_fmt_oplata(karz)}* сум\n\n"
-        f"📦 *Танланган поставчиклар ({len(chosen)} та):*\n"
-        f"{sup_lines}\n\n"
+        f"💳 Карз: *{_fmt_oplata(karz)}* сум\n"
+        f"📦 Поставчиклар ({len(chosen)} та):\n"
+        f"{sup_lines}\n"
         f"📦 Жами остаток: *{_fmt_oplata(total_ostatok)}* сум\n"
-        f"{'━' * 28}\n"
+        f"📈 Жами продажа: *{_fmt_oplata(total_sotuv_chosen)}* сум\n"
         f"💰 *ОПЛАТА: {_fmt_oplata(oplatа_summa)} сум*"
+    )
+
+    # ── Қисқа хабар — бир босиш билан нусха оладиган (иккинчи хабар) ───
+    # Telegram'да monospace (`...`) матнни бир тап билан нусхалаш мумкин
+    _opl_int = int(oplatа_summa)
+    short_text = (
+        f"Фирма: `{firma_nomi}`\n"
+        f"Сумма: `{_opl_int}`\n"
+        f"ИНН: `{inn}`\n"
+        f"Договор: `{shartnoma or '—'}`"
     )
 
     wait = await update.message.reply_text("⏳ Юборилмоқда...")
@@ -5075,6 +5082,13 @@ async def oplata_karz_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             document=filtered_doc,
             filename=file_name or "hisobot.xlsx",
             caption=f"📊 {firma_nomi} — {shartnoma or ''} | Оплата: {_fmt_oplata(oplatа_summa)} сум",
+        )
+        # ── Қисқа хабар алоҳида ───────────────────────────────────────────
+        target_chat = PAYMENT_GROUP_ID if PAYMENT_GROUP_ID else update.effective_chat.id
+        await ctx.bot.send_message(
+            chat_id=target_chat,
+            text=short_text,
+            parse_mode="Markdown",
         )
         sent_to_group = True
 
