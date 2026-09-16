@@ -4937,6 +4937,11 @@ async def oplata_karz_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     language = ctx.user_data.get("lang", "uz")
     is_admin = True
+
+    # Callback query update — update.message is None, faqat matn xabarlari qayta ishlanadi
+    if not update.message:
+        return OPLATA_KARZ
+
     txt = (update.message.text or "").strip()
 
     # Орқага тугмалари
@@ -5031,23 +5036,22 @@ async def oplata_karz_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         filtered_doc = _io.BytesIO(filtered_bytes)
         filtered_doc.name = file_name or "hisobot.xlsx"
 
-        # ── Гуруҳга юбориш ─────────────────────────────────────────────
-        if PAYMENT_GROUP_ID:
-            await ctx.bot.send_message(
-                chat_id=PAYMENT_GROUP_ID,
-                text=report_text,
-                parse_mode="Markdown",
-            )
-            filtered_doc.seek(0)
-            await ctx.bot.send_document(
-                chat_id=PAYMENT_GROUP_ID,
-                document=filtered_doc,
-                filename=file_name or "hisobot.xlsx",
-                caption=f"📊 {firma_nomi} — {shartnoma or ''} | Оплата: {_fmt_oplata(oplatа_summa)} сум",
-            )
-            sent_to_group = True
-        else:
-            logger.warning("[OPLATA] PAYMENT_GROUP_ID ўрнатилмаган!")
+        # ── Админ чатига юбориш ─────────────────────────────────────────
+        # PAYMENT_GROUP_ID ўрнатилган бўлса — гуруҳга, акс ҳолда — админ чатига
+        target_chat = PAYMENT_GROUP_ID if PAYMENT_GROUP_ID else update.effective_chat.id
+        await ctx.bot.send_message(
+            chat_id=target_chat,
+            text=report_text,
+            parse_mode="Markdown",
+        )
+        filtered_doc.seek(0)
+        await ctx.bot.send_document(
+            chat_id=target_chat,
+            document=filtered_doc,
+            filename=file_name or "hisobot.xlsx",
+            caption=f"📊 {firma_nomi} — {shartnoma or ''} | Оплата: {_fmt_oplata(oplatа_summa)} сум",
+        )
+        sent_to_group = True
 
         # ── Фирмага фильтрланган файл юбориш ───────────────────────────
         if firm_telegram_id:
