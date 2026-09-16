@@ -9,6 +9,7 @@ from salary_handlers import (
     appeal_response_button, appeal_comment_catcher,
     ADMIN_IDS, ADMIN_FIRM_REPORT_SEARCH,
     FIRM_ADD_NAME, FIRM_ADD_USERNAME,
+    get_oplata_callback_handlers,
 )
 from exclusive_handlers import cmd_eksklyuziv, get_eks_states
 from attendance_handlers import (
@@ -351,9 +352,10 @@ def main_keyboard(language, is_admin=False):
     rows = [
         [T[language]["search_btn"]],
         [T[language]["reports_btn"]],
-        [T[language]["chat_btn"], T[language]["channel_btn"]],
+        [T[language]["channel_btn"]],
     ]
     if is_admin:
+        rows.append([T[language]["chat_btn"]])  # Telegram chat — faqat admin uchun
         rows.append([T[language]["admin_panel_btn"]])
     rows.append([T[language]["lang_btn"]])
     return ReplyKeyboardMarkup(rows, resize_keyboard=True)
@@ -1168,6 +1170,10 @@ def main():
     #    hech narsaga aralashmaydi, shuning uchun conv bilan bir xil
     #    guruhda (0), undan KEYIN qo'shiladi.
     app.add_handler(CallbackQueryHandler(appeal_response_button, pattern="^appealresp:"))
+
+    # ── Оплата ёзиш — поставчик танлаш callback'лари (ConversationHandler'дан ташқарида) ──
+    for _h in get_oplata_callback_handlers():
+        app.add_handler(_h)
 
     # 2) Izohni "ushlab olish" — bu esa CONV DAN OLDIN (group=-1) ishga
     #    tushishi kerak, chunki oddiy matn xabari. Agar bu foydalanuvchi
