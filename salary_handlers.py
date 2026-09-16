@@ -23,7 +23,7 @@ import logging
 
 from telegram import Update
 from telegram.ext import (
-    MessageHandler, CommandHandler,
+    MessageHandler, CommandHandler, CallbackQueryHandler,
     ContextTypes, filters, ConversationHandler,
 )
 from google.oauth2.service_account import Credentials
@@ -5150,8 +5150,8 @@ async def oplata_toggle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE)
             parse_mode="Markdown",
             reply_markup=kb,
         )
-    except Exception:
-        pass  # Хабар ўзгармаган бўлса — ўтказиб юборамиз
+    except Exception as _e:
+        logger.warning("oplata_toggle edit_message_text error: %s", _e)
 
 
 async def oplata_confirm_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -5467,6 +5467,12 @@ def get_sal_states():
             MessageHandler(filters.TEXT & ~filters.COMMAND, firm_add_username_handler),
         ],
         OPLATA_KARZ: [
+            # Callback handlers — ConversationHandler ичида ҳам ишлаши учун
+            CallbackQueryHandler(oplata_toggle_callback,  pattern=r"^opt_t:\d+$"),
+            CallbackQueryHandler(oplata_confirm_callback, pattern=r"^opt_confirm$"),
+            CallbackQueryHandler(oplata_skip_callback,    pattern=r"^opt_skip$"),
+            CallbackQueryHandler(oplata_cancel_callback,  pattern=r"^opt_cancel$"),
+            CallbackQueryHandler(oplata_cancel_callback,  pattern=r"^opt_new$"),
             MessageHandler(filters.TEXT & ~filters.COMMAND, oplata_karz_handler),
         ],
         ADMIN_FIRM_REPORT_SEARCH: [
