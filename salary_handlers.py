@@ -4681,37 +4681,31 @@ def _filter_xlsx_by_suppliers(xlsx_bytes: bytes, selected_names: set) -> bytes:
         if ws.title == "Хулоса":
             continue
         rows = list(ws.iter_rows(values_only=True))
-        if len(rows) < 2:
+        if len(rows) < 3:
             continue
 
-        # Производитель устуни индексини аниқлаш — барча устунларни текшириш
-        h1 = [str(c).strip().lower() if c else "" for c in rows[0]]
-        sup_col = next(
-            (i for i, v in enumerate(h1)
-             if "произв" in v or "ta'minotchi" in v or "поставщ" in v or "supplier" in v),
-            None,
-        )
-        # Топилмаса — биринчи бўш бўлмаган устунни олиш
+        h1 = [str(c).strip().lower() if c is not None else "" for c in rows[0]]
+        h2 = [str(c).strip().lower() if c is not None else "" for c in rows[1]]
+
+        # Ўқиш функцияси билан бир хил: "поставщик" устунини ахтарамиз
+        sup_col = next((i for i, v in enumerate(h1) if "поставщик" in v), None)
         if sup_col is None:
-            sup_col = next((i for i, v in enumerate(h1) if v), 0)
+            sup_col = next((i for i, v in enumerate(h2) if "поставщик" in v), 1)
 
         _log.getLogger(__name__).info(
-            "[FILTER] sheet=%s sup_col=%s header=%s", ws.title, sup_col, h1
+            "[FILTER] sheet=%s sup_col=%s h1=%s", ws.title, sup_col, h1
         )
 
-        # data_row_start: иккинчи сарлавҳа бор-йўқлигини аниқлаш
-        data_row_start = 3 if len(rows) > 2 else 2
-
-        # Ўчириладиган қаторлар (охиридан бошлаб)
+        # Ўчириладиган қаторлар — data rows 3-қатордан бошлайди
         to_delete = []
-        for r_idx in range(data_row_start, ws.max_row + 1):
+        for r_idx in range(3, ws.max_row + 1):
             cell_val = ws.cell(row=r_idx, column=sup_col + 1).value
             if cell_val is None:
                 continue
             cell_str = str(cell_val).strip().lower()
             if not cell_str:
                 continue
-            # Мослашувчан солиштириш: тўлиқ ёки қисман мос
+            # Тўлиқ мос ёки қисман мос (иккала томондан)
             matched = any(
                 n == cell_str or n in cell_str or cell_str in n
                 for n in norm
@@ -4720,7 +4714,8 @@ def _filter_xlsx_by_suppliers(xlsx_bytes: bytes, selected_names: set) -> bytes:
                 to_delete.append(r_idx)
 
         _log.getLogger(__name__).info(
-            "[FILTER] sheet=%s deleting %d rows of %d", ws.title, len(to_delete), ws.max_row
+            "[FILTER] sheet=%s total_rows=%d deleting=%d norm=%s",
+            ws.title, ws.max_row, len(to_delete), norm
         )
         for r_idx in reversed(to_delete):
             ws.delete_rows(r_idx)
