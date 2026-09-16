@@ -4674,32 +4674,54 @@ def _filter_xlsx_by_suppliers(xlsx_bytes: bytes, selected_names: set) -> bytes:
 
     wb = _xl.load_workbook(_io.BytesIO(xlsx_bytes), data_only=True)
     norm = {str(n).strip().lower() for n in selected_names}
+    import logging as _log
+    _log.getLogger(__name__).info("[FILTER] selected_names norm=%s", norm)
 
     for ws in wb.worksheets:
         if ws.title == "Хулоса":
             continue
         rows = list(ws.iter_rows(values_only=True))
-        if len(rows) < 3:
+        if len(rows) < 2:
             continue
 
-        # Производитель устуни индексини аниқлаш (одатда 1)
+        # Производитель устуни индексини аниқлаш — барча устунларни текшириш
         h1 = [str(c).strip().lower() if c else "" for c in rows[0]]
-        h2 = [str(c).strip().lower() if c else "" for c in rows[1]]
         sup_col = next(
-            (i for i, v in enumerate(h1) if "произв" in v or "ta'minotchi" in v.lower()),
-            1,
+            (i for i, v in enumerate(h1)
+             if "произв" in v or "ta'minotchi" in v or "поставщ" in v or "supplier" in v),
+            None,
         )
+        # Топилмаса — биринчи бўш бўлмаган устунни олиш
+        if sup_col is None:
+            sup_col = next((i for i, v in enumerate(h1) if v), 0)
+
+        _log.getLogger(__name__).info(
+            "[FILTER] sheet=%s sup_col=%s header=%s", ws.title, sup_col, h1
+        )
+
+        # data_row_start: иккинчи сарлавҳа бор-йўқлигини аниқлаш
+        data_row_start = 3 if len(rows) > 2 else 2
 
         # Ўчириладиган қаторлар (охиридан бошлаб)
         to_delete = []
-        for r_idx in range(3, ws.max_row + 1):
+        for r_idx in range(data_row_start, ws.max_row + 1):
             cell_val = ws.cell(row=r_idx, column=sup_col + 1).value
             if cell_val is None:
                 continue
             cell_str = str(cell_val).strip().lower()
-            if cell_str and cell_str not in norm:
+            if not cell_str:
+                continue
+            # Мослашувчан солиштириш: тўлиқ ёки қисман мос
+            matched = any(
+                n == cell_str or n in cell_str or cell_str in n
+                for n in norm
+            )
+            if not matched:
                 to_delete.append(r_idx)
 
+        _log.getLogger(__name__).info(
+            "[FILTER] sheet=%s deleting %d rows of %d", ws.title, len(to_delete), ws.max_row
+        )
         for r_idx in reversed(to_delete):
             ws.delete_rows(r_idx)
 
@@ -5036,17 +5058,25 @@ async def oplata_karz_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         filtered_doc = _io.BytesIO(filtered_bytes)
         filtered_doc.name = file_name or "hisobot.xlsx"
 
-        # ── Админ чатига юбориш ─────────────────────────────────────────
-        # PAYMENT_GROUP_ID ўрнатилган бўлса — гуруҳга, акс ҳолда — админ чатига
-        target_chat = PAYMENT_GROUP_ID if PAYMENT_GROUP_ID else update.effective_chat.id
-        await ctx.bot.send_message(
-            chat_id=target_chat,
-            text=report_text,
-            parse_mode="Markdown",
-        )
+        # ── Гуруҳга юбориш (фақат PAYMENT_GROUP_ID ўрнатилган бўлса) ─────
+        if PAYMENT_GROUP_ID:
+            await ctx.bot.send_message(
+                chat_id=PAYMENT_GROUP_ID,
+                text=report_text,
+                parse_mode="Markdown",
+            )
+            filtered_doc.seek(0)
+            await ctx.bot.send_document(
+                chat_id=PAYMENT_GROUP_ID,
+                document=filtered_doc,
+                filename=file_name or "hisobot.xlsx",
+                caption=f"📊 {firma_nomi} — {shartnoma or ''} | Оплата: {_fmt_oplata(oplatа_summa)} сум",
+            )
+
+        # ── Доим админ чатига файл юбориш ─────────────────────────────────
         filtered_doc.seek(0)
         await ctx.bot.send_document(
-            chat_id=target_chat,
+            chat_id=update.effective_chat.id,
             document=filtered_doc,
             filename=file_name or "hisobot.xlsx",
             caption=f"📊 {firma_nomi} — {shartnoma or ''} | Оплата: {_fmt_oplata(oplatа_summa)} сум",
@@ -5094,11 +5124,13 @@ async def oplata_karz_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         logger.error(f"[OPLATA] Гуруҳга юборишда хато: {_ge}")
 
     # ── Adminга тасдиқ ────────────────────────────────────────────────────
-    grp_line  = "✅ Гуруҳга юборилди" if sent_to_group else "⚠️ Гуруҳга юборилмади (PAYMENT_GROUP_ID текширинг)"
+    grp_line  = "✅ Чатга юборилди" if sent_to_group else "⚠️ Юборилмади (хато текширинг)"
+    if PAYMENT_GROUP_ID and sent_to_group:
+        grp_line = "✅ Гуруҳга ва чатга юборилди"
     firm_line = (f"✉️ Фирмага юборилди (ID: {firm_telegram_id})" if firm_telegram_id
                  else "ℹ️ Фирма Telegram ID топилмади — фирмага юборилмади")
     await wait.edit_text(
-        f"{report_text}\n\n{grp_line}\n{firm_line}",
+        f"{grp_line}\n{firm_line}",
         parse_mode="Markdown",
     )
 
