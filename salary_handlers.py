@@ -44,6 +44,7 @@ SALARY_SHEET_ID = os.getenv("SALARY_SHEET_ID", "")
 FIRMS_SHEET_ID = os.getenv("FIRMS_SHEET_ID", "")
 ADMIN_IDS = [709544046]
 PAYMENTS_PAROL = "офис"  # Davomat bo'limi bilan bir xil umumiy parol
+FIRM_UPLOAD_PAROL = os.getenv("FIRM_UPLOAD_PAROL", "офис")  # Firma otchyot yuklash paroli
 PAYMENT_GROUP_ID = int(os.getenv("PAYMENT_GROUP_ID", "0"))  # Оплата хисоботи юбориладиган гуруҳ ID
 
 # Conversation states
@@ -2997,25 +2998,37 @@ def _cleanup_old_monthly_sheets(keep: int = 3) -> str:
 # ─────────────────────────────────────────────────────────────────────────────
 
 async def firm_report_enter(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """Admin 'Firma otchyotini yuklash' bosganda chaqiriladi."""
+    """'Firma otchyotini yuklash' bosganda chaqiriladi — avval parol so'raydi."""
     language = ctx.user_data.get("lang", "uz")
     back_txt = "⬅️ Назад" if language == "ru" else "⬅️ Orqaga"
     from telegram import ReplyKeyboardMarkup
+    is_admin = update.effective_user.id in ADMIN_IDS
 
-    text = (
-        "📥 *Firma otchyotini yuklash*\n\n"
-        "Aylanma hisoboti (.xlsx) faylini yuboring.\n"
-        "Fayl *izohiga* (caption) firma *nomini* yoki *INN raqamini* yozing.\n\n"
-        "Misol izoh: `АВЕНСИС ГРУПП` yoki `123456789`"
-        if language == "uz" else
-        "📥 *Загрузить отчёт фирмы*\n\n"
-        "Отправьте файл оборота (.xlsx).\n"
-        "В *описании* (caption) файла укажите *название* фирмы или *ИНН*.\n\n"
-        "Пример: `АВЕНСИС ГРУПП` или `123456789`"
-    )
+    # Admin bo'lsa yoki allaqachon parol kiritilgan bo'lsa — to'g'ri fayl yuklashga o'tish
+    if is_admin or ctx.user_data.get("firm_upload_auth"):
+        text = (
+            "📥 *Firma otchyotini yuklash*\n\n"
+            "Aylanma hisoboti (.xlsx) faylini yuboring.\n"
+            "Fayl *izohiga* (caption) firma *nomini* yoki *INN raqamini* yozing.\n\n"
+            "Misol izoh: `АВЕНСИС ГРУПП` yoki `123456789`"
+            if language == "uz" else
+            "📥 *Загрузить отчёт фирмы*\n\n"
+            "Отправьте файл оборота (.xlsx).\n"
+            "В *описании* (caption) файла укажите *название* фирмы или *ИНН*.\n\n"
+            "Пример: `АВЕНСИС ГРУПП` или `123456789`"
+        )
+        ctx.user_data.pop("firm_upload_awaiting_password", None)
+        await update.message.reply_text(
+            text,
+            parse_mode="Markdown",
+            reply_markup=ReplyKeyboardMarkup([[back_txt]], resize_keyboard=True),
+        )
+        return FIRM_REPORT_WAIT
+
+    # Parol so'rash
+    ctx.user_data["firm_upload_awaiting_password"] = True
     await update.message.reply_text(
-        text,
-        parse_mode="Markdown",
+        "🔐 Parolni kiriting:" if language == "uz" else "🔐 Введите пароль:",
         reply_markup=ReplyKeyboardMarkup([[back_txt]], resize_keyboard=True),
     )
     return FIRM_REPORT_WAIT
@@ -3023,13 +3036,66 @@ async def firm_report_enter(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def firm_report_receive_file(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """
-    FIRM_REPORT_WAIT holatida — faylni (xlsx) yoki 'Orqaga' matni qabul qiladi.
+    FIRM_REPORT_WAIT holatida — parol, faylni (xlsx) yoki 'Orqaga' matni qabul qiladi.
     """
     language = ctx.user_data.get("lang", "uz")
     is_admin = update.effective_user.id in ADMIN_IDS
 
     back_txt = "⬅️ Назад" if language == "ru" else "⬅️ Orqaga"
     txt = update.message.text.strip() if update.message and update.message.text else ""
+
+    # ── Parol kutilmoqda ────────────────────────────────────────────────────
+    if ctx.user_data.get("firm_upload_awaiting_password") and not update.message.document:
+        if txt in (back_txt, "⬅️ Orqaga", "⬅️ Назад"):
+            ctx.user_data.pop("firm_upload_awaiting_password", None)
+            ctx.user_data.pop("firm_upload_auth", None)
+            from_new = ctx.user_data.pop("firm_upload_from_new_menu", False)
+            if from_new:
+                from bot import firm_reports_keyboard, FIRM_REPORTS_MENU
+                await update.message.reply_text(
+                    "📊 Bo'limni tanlang:" if language == "uz" else "📊 Выберите раздел:",
+                    reply_markup=firm_reports_keyboard(language, is_admin),
+                )
+                return FIRM_REPORTS_MENU
+            await update.message.reply_text(
+                "📊 *Отчёт va to'lovlar*\n\nBo'limni tanlang:" if language == "uz"
+                else "📊 *Отчёт и оплаты*\n\nВыберите раздел:",
+                parse_mode="Markdown",
+                reply_markup=payments_keyboard(language, is_admin),
+            )
+            return PAYMENTS_MENU
+
+        if txt == FIRM_UPLOAD_PAROL:
+            ctx.user_data["firm_upload_auth"] = True
+            ctx.user_data.pop("firm_upload_awaiting_password", None)
+            from telegram import ReplyKeyboardMarkup
+            upload_text = (
+                "✅ Parol to'g'ri!\n\n"
+                "📥 *Firma otchyotini yuklash*\n\n"
+                "Aylanma hisoboti (.xlsx) faylini yuboring.\n"
+                "Fayl *izohiga* (caption) firma *nomini* yoki *INN raqamini* yozing.\n\n"
+                "Misol izoh: `АВЕНСИС ГРУПП` yoki `123456789`"
+                if language == "uz" else
+                "✅ Пароль верный!\n\n"
+                "📥 *Загрузить отчёт фирмы*\n\n"
+                "Отправьте файл оборота (.xlsx).\n"
+                "В *описании* (caption) файла укажите *название* фирмы или *ИНН*.\n\n"
+                "Пример: `АВЕНСИС ГРУПП` или `123456789`"
+            )
+            await update.message.reply_text(
+                upload_text,
+                parse_mode="Markdown",
+                reply_markup=ReplyKeyboardMarkup([[back_txt]], resize_keyboard=True),
+            )
+            return FIRM_REPORT_WAIT
+        else:
+            await update.message.reply_text(
+                "❌ Parol noto'g'ri. Qayta kiriting:"
+                if language == "uz" else
+                "❌ Неверный пароль. Введите снова:"
+            )
+            return FIRM_REPORT_WAIT
+    # ── Parol kutilmoqda tugadi ─────────────────────────────────────────────
 
     if txt in (back_txt, "⬅️ Orqaga", "⬅️ Назад"):
         from_new = ctx.user_data.pop("firm_upload_from_new_menu", False)
