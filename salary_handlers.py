@@ -2732,49 +2732,68 @@ def _month_key_from_display(display: str, language: str = "uz") -> str | None:
 
 def _get_or_create_monthly_sheet(sh, month_key: str):
     """'YYYY-MM' nomli varaqni topadi yoki yangi yaratadi.
-    Yangi varaq ochilganda oldingi oyning firmalar tartibini ko'chiradi (summalarsiz)."""
+    Yangi varaq ochilganda avval 'туловлар' varag'idan, yo'q bo'lsa oldingi
+    oylik varaqdan firmalar tartibini ko'chiradi (summalarsiz)."""
     try:
         return sh.worksheet(month_key)
     except gspread.exceptions.WorksheetNotFound:
         ws = sh.add_worksheet(title=month_key, rows=200, cols=10)
         ws.append_row(MONTHLY_SHEET_COLUMNS)
 
-        # Oldingi oyni hisoblash (month_key dan 1 oy oldin)
-        import datetime as _dt
-        try:
-            year, month = map(int, month_key.split("-"))
-        except ValueError:
-            return ws
-        if month == 1:
-            prev_year, prev_month = year - 1, 12
-        else:
-            prev_year, prev_month = year, month - 1
-        prev_key = f"{prev_year:04d}-{prev_month:02d}"
+        # Shablon varaqni topish: avval "туловлар", yo'q bo'lsa oldingi oy
+        template_ws = None
+        template_name = ""
 
-        # Oldingi oy varag'idagi firmalar tartibini yangi varaqqa ko'chirish
+        # 1-urinish: "туловлар" varag'i
+        for candidate in ["туловлар", "Туловлар", "ТУЛОВЛАР", "tulovlar", "Tulovlar"]:
+            try:
+                template_ws = sh.worksheet(candidate)
+                template_name = candidate
+                break
+            except gspread.exceptions.WorksheetNotFound:
+                continue
+
+        # 2-urinish: oldingi oy (YYYY-MM)
+        if template_ws is None:
+            try:
+                year, month = map(int, month_key.split("-"))
+                if month == 1:
+                    prev_year, prev_month = year - 1, 12
+                else:
+                    prev_year, prev_month = year, month - 1
+                prev_key = f"{prev_year:04d}-{prev_month:02d}"
+                template_ws = sh.worksheet(prev_key)
+                template_name = prev_key
+            except (ValueError, gspread.exceptions.WorksheetNotFound):
+                pass
+
+        if template_ws is None:
+            logger.info(f"[MONTHLY] Shablon varaq topilmadi — {month_key} bo'sh boshlanadi")
+            return ws
+
+        # Shablon varaqdan firma nomi + INN ko'chirish
         try:
-            prev_ws = sh.worksheet(prev_key)
-            prev_vals = prev_ws.get_all_values()
-            if len(prev_vals) > 1:
-                prev_header = prev_vals[0]
-                firma_col = next((i for i, h in enumerate(prev_header)
+            tmpl_vals = template_ws.get_all_values()
+            if len(tmpl_vals) > 1:
+                tmpl_header = tmpl_vals[0]
+                firma_col = next((i for i, h in enumerate(tmpl_header)
                                   if "firma" in h.strip().lower()), 0)
-                inn_col = next((i for i, h in enumerate(prev_header)
-                                if "inn" in h.strip().lower()), 1)
+                inn_col   = next((i for i, h in enumerate(tmpl_header)
+                                  if "inn" in h.strip().lower()), 1)
                 rows_to_add = []
-                for row in prev_vals[1:]:
+                for row in tmpl_vals[1:]:
                     firma = row[firma_col] if firma_col < len(row) else ""
                     inn   = row[inn_col]   if inn_col   < len(row) else ""
                     if firma or inn:
-                        # Faqat Firma nomi va INN, qolgan ustunlar bo'sh
                         rows_to_add.append([firma, inn, "", "", "", "", ""])
                 if rows_to_add:
                     ws.append_rows(rows_to_add)
-                    logger.info(f"[MONTHLY] {prev_key} dan {len(rows_to_add)} ta firma {month_key} ga ko'chirildi")
-        except gspread.exceptions.WorksheetNotFound:
-            logger.info(f"[MONTHLY] Oldingi oy varag'i ({prev_key}) topilmadi — bo'sh varaq bilan boshlanadi")
+                    logger.info(
+                        f"[MONTHLY] '{template_name}' dan {len(rows_to_add)} ta firma "
+                        f"{month_key} ga ko'chirildi"
+                    )
         except Exception as _e:
-            logger.warning(f"[MONTHLY] Oldingi oy ro'yxatini ko'chirishda xato: {_e}")
+            logger.warning(f"[MONTHLY] Shablon ko'chirishda xato: {_e}")
 
         return ws
 
