@@ -5275,7 +5275,7 @@ async def oplata_toggle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE)
     await query.answer()
 
     uid = query.from_user.id
-    if uid not in ADMIN_IDS:
+    if uid not in ADMIN_IDS and not ctx.user_data.get("firm_upload_auth"):
         return
 
     data = query.data or ""
@@ -5322,7 +5322,7 @@ async def oplata_confirm_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE
     await query.answer()
 
     uid = query.from_user.id
-    if uid not in ADMIN_IDS:
+    if uid not in ADMIN_IDS and not ctx.user_data.get("firm_upload_auth"):
         return
 
     oplata = ctx.user_data.get("oplata", {})
