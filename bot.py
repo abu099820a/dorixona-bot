@@ -384,8 +384,8 @@ def firm_reports_keyboard(language, is_admin=False):
     - "⬅️ Orqaga"         → asosiy menyuga qaytish
     """
     rows = [[T[language]["get_report_btn"]]]
+    rows.append([T[language]["upload_report_btn"]])  # Hamma ko'radi, parol bilan kiradi
     if is_admin:
-        rows.append([T[language]["upload_report_btn"]])
         rows.append(["➕ Firma qo'shish" if language == "uz" else "➕ Добавить фирму"])
     rows.append([T[language]["back"]])
     return ReplyKeyboardMarkup(rows, resize_keyboard=True)
@@ -618,8 +618,8 @@ async def firm_reports_menu_handler(update: Update, ctx: ContextTypes.DEFAULT_TY
         )
         return FIRM_PHONE_WAIT
 
-    elif is_admin and txt == T[language]["upload_report_btn"]:
-        # Admin xlsx fayl yuklaydi — yangi menyudan chaqirilganini belgilaymiz
+    elif txt == T[language]["upload_report_btn"]:
+        # Hisobot yuklash — parol orqali hamma kirishi mumkin (admin uchun parol so'ralmaydi)
         from salary_handlers import firm_report_enter
         ctx.user_data["firm_upload_from_new_menu"] = True
         return await firm_report_enter(update, ctx)
