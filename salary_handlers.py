@@ -2745,7 +2745,7 @@ def _get_or_create_monthly_sheet(sh, month_key: str):
         template_name = ""
 
         # 1-urinish: "туловлар" varag'i
-        for candidate in ["туловлар", "Туловлар", "ТУЛОВЛАР", "tulovlar", "Tulovlar"]:
+        for candidate in ["To'lovlar", "to'lovlar", "TO'LOVLAR", "туловлар", "Туловлар", "ТУЛОВЛАР", "tulovlar", "Tulovlar", "Tolovlar", "tolovlar"]:
             try:
                 template_ws = sh.worksheet(candidate)
                 template_name = candidate
