@@ -5073,11 +5073,11 @@ async def oplata_karz_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """
     from bot import firm_reports_keyboard, FIRM_REPORTS_MENU
     uid = update.effective_user.id
-    if uid not in ADMIN_IDS:
+    if uid not in ADMIN_IDS and not ctx.user_data.get("firm_upload_auth"):
         return ConversationHandler.END
 
     language = ctx.user_data.get("lang", "uz")
-    is_admin = True
+    is_admin = uid in ADMIN_IDS
 
     # Callback query update — update.message is None, faqat matn xabarlari qayta ishlanadi
     if not update.message:
