@@ -3344,7 +3344,9 @@ async def firm_report_receive_file(update: Update, ctx: ContextTypes.DEFAULT_TYP
             # Auto-yuborish firma vakiliga — поставчик танлангандан КЕЙИН
             # (фильтрланган файл билан) amalga oshiriladi. Shu sababli bu
             # yerda faqat telegram_id olamiz va oplata'ga saqlaymiz.
-            if err == "ok" and by_supplier:
+            # Фақат асосий admin учун — паролли ноадмин фойдаланувчилар
+            # оплата жараёнига кирмайди.
+            if err == "ok" and by_supplier and is_admin:
                 _firm_tid = ""
                 try:
                     _fc = await run_read(get_firma_file_by_name, firma_nomi)
@@ -3567,8 +3569,10 @@ async def firm_contract_select_handler(update: Update, ctx: ContextTypes.DEFAULT
     ctx.user_data.pop("firm_upload_from_new_menu", None)
 
     # ── Оплата: поставчик танлаш (мувафаққиятли сақлангандан кейин) ─────────
+    # Фақат асосий admin учун — паролли ноадмин фойдаланувчилар
+    # оплата жараёнига кирмайди.
     _doc_saved = ctx.user_data.get("firm_upload_doc", {})
-    if err == "ok" and by_supplier:
+    if err == "ok" and by_supplier and is_admin:
         _firm_tid2 = ""
         try:
             _fc2 = await run_read(get_firma_file_by_name, firma_nomi)
