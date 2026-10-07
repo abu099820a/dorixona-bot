@@ -3344,9 +3344,7 @@ async def firm_report_receive_file(update: Update, ctx: ContextTypes.DEFAULT_TYP
             # Auto-yuborish firma vakiliga — поставчик танлангандан КЕЙИН
             # (фильтрланган файл билан) amalga oshiriladi. Shu sababli bu
             # yerda faqat telegram_id olamiz va oplata'ga saqlaymiz.
-            # Фақат асосий admin учун — паролли ноадмин фойдаланувчилар
-            # оплата жараёнига кирмайди.
-            if err == "ok" and by_supplier and is_admin:
+            if err == "ok" and by_supplier:
                 _firm_tid = ""
                 try:
                     _fc = await run_read(get_firma_file_by_name, firma_nomi)
@@ -3569,10 +3567,8 @@ async def firm_contract_select_handler(update: Update, ctx: ContextTypes.DEFAULT
     ctx.user_data.pop("firm_upload_from_new_menu", None)
 
     # ── Оплата: поставчик танлаш (мувафаққиятли сақлангандан кейин) ─────────
-    # Фақат асосий admin учун — паролли ноадмин фойдаланувчилар
-    # оплата жараёнига кирмайди.
     _doc_saved = ctx.user_data.get("firm_upload_doc", {})
-    if err == "ok" and by_supplier and is_admin:
+    if err == "ok" and by_supplier:
         _firm_tid2 = ""
         try:
             _fc2 = await run_read(get_firma_file_by_name, firma_nomi)
@@ -5164,8 +5160,7 @@ async def oplata_karz_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"💰 *ОПЛАТА: {_fmt_oplata(oplatа_summa)} сум*"
     )
 
-    # ── Қисқа хабар — бир босиш билан нусха оладиган (иккинчи хабар) ───
-    # Telegram'да monospace (`...`) матнни бир тап билан нусхалаш мумкин
+    # ── Қисқа хабар — нусха оладиган (monospace) ──────────────────────────
     _opl_int = int(oplatа_summa)
     short_text = (
         f"Фирма: `{firma_nomi}`\n"
@@ -5203,18 +5198,23 @@ async def oplata_karz_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 caption=f"📊 {firma_nomi} — {shartnoma or ''} | Оплата: {_fmt_oplata(oplatа_summa)} сум",
             )
 
-        # ── Доим админ чатига файл юбориш ─────────────────────────────────
-        filtered_doc.seek(0)
-        await ctx.bot.send_document(
-            chat_id=update.effective_chat.id,
-            document=filtered_doc,
-            filename=file_name or "hisobot.xlsx",
-            caption=f"📊 {firma_nomi} — {shartnoma or ''} | Оплата: {_fmt_oplata(oplatа_summa)} сум",
-        )
+        # ── Файл ва қисқа хабар юбориш ────────────────────────────────────
+        # Агар PAYMENT_GROUP_ID ўрнатилган бўлса — фақат гуруҳга юборилди,
+        # бошқа чатга юборилмайди (ноадмин профиллар ҳам шундай).
+        # Агар PAYMENT_GROUP_ID йўқ бўлса — жорий чатга юборилади.
+        _result_chat = PAYMENT_GROUP_ID if PAYMENT_GROUP_ID else update.effective_chat.id
+        if not PAYMENT_GROUP_ID:
+            # Гуруҳ йўқ — жорий чатга файл юборамиз
+            filtered_doc.seek(0)
+            await ctx.bot.send_document(
+                chat_id=update.effective_chat.id,
+                document=filtered_doc,
+                filename=file_name or "hisobot.xlsx",
+                caption=f"📊 {firma_nomi} — {shartnoma or ''} | Оплата: {_fmt_oplata(oplatа_summa)} сум",
+            )
         # ── Қисқа хабар алоҳида ───────────────────────────────────────────
-        target_chat = PAYMENT_GROUP_ID if PAYMENT_GROUP_ID else update.effective_chat.id
         await ctx.bot.send_message(
-            chat_id=target_chat,
+            chat_id=_result_chat,
             text=short_text,
             parse_mode="Markdown",
         )
@@ -5223,28 +5223,18 @@ async def oplata_karz_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         # ── Фирмага фильтрланган файл юбориш ───────────────────────────
         if firm_telegram_id:
             try:
-                _s = _fmt_oplata(sum(s["sotuv"] for s in chosen))
-                _o = _fmt_oplata(total_ostatok)
-                sup_cap_lines = "\n".join(
-                    f"  • {s['name']} — Q: {_fmt_oplata(s['ostatok'])}, S: {_fmt_oplata(s['sotuv'])}"
-                    for s in chosen
+                # Фирмага: 1) ОПЛАТА ҲИСОБОТИ матни, 2) фильтрланган Excel
+                await ctx.bot.send_message(
+                    chat_id=int(firm_telegram_id),
+                    text=report_text,
+                    parse_mode="Markdown",
                 )
                 filtered_doc.seek(0)
                 await ctx.bot.send_document(
                     chat_id=int(firm_telegram_id),
                     document=filtered_doc,
                     filename=file_name or "hisobot.xlsx",
-                )
-                firm_msg = (
-                    f"Фирма: `{firma_nomi}`\n"
-                    f"Сумма: `{int(oplatа_summa)}`\n"
-                    f"ИНН: `{inn}`\n"
-                    f"Договор: `{shartnoma or '—'}`"
-                )
-                await ctx.bot.send_message(
-                    chat_id=int(firm_telegram_id),
-                    text=firm_msg,
-                    parse_mode="Markdown",
+                    caption=f"📊 {firma_nomi} — {shartnoma or ''} | Оплата: {_fmt_oplata(oplatа_summa)} сум",
                 )
             except Exception as _fe:
                 logger.warning(f"[OPLATA] Фирмага юборишда хато: {_fe}")
