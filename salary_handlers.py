@@ -5223,16 +5223,18 @@ async def oplata_karz_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         # ── Фирмага фильтрланган файл юбориш ───────────────────────────
         if firm_telegram_id:
             try:
+                # Янги BytesIO — seek() ишламаслиги мумкин
+                firm_doc = _io.BytesIO(filtered_bytes)
+                firm_doc.name = file_name or "hisobot.xlsx"
                 # Фирмага: 1) ОПЛАТА ҲИСОБОТИ матни, 2) фильтрланган Excel
                 await ctx.bot.send_message(
                     chat_id=int(firm_telegram_id),
                     text=report_text,
                     parse_mode="Markdown",
                 )
-                filtered_doc.seek(0)
                 await ctx.bot.send_document(
                     chat_id=int(firm_telegram_id),
-                    document=filtered_doc,
+                    document=firm_doc,
                     filename=file_name or "hisobot.xlsx",
                     caption=f"📊 {firma_nomi} — {shartnoma or ''} | Оплата: {_fmt_oplata(oplatа_summa)} сум",
                 )
