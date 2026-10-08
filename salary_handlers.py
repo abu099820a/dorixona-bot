@@ -5160,13 +5160,16 @@ async def oplata_karz_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"💰 *ОПЛАТА: {_fmt_oplata(oplatа_summa)} сум*"
     )
 
-    # ── Қисқа хабар — лейбл оддий, қиймат копирланадиган ─────────────────
+    # ── Қисқа хабар — лейбл оддий, қиймат bold (қалин) ──────────────────
     _opl_int = int(oplatа_summa)
+    _fn  = firma_nomi.replace("*", "").replace("_", "").replace("`", "")
+    _inn = inn.replace("*", "").replace("_", "").replace("`", "")
+    _dog = (shartnoma or "—").replace("*", "").replace("_", "").replace("`", "")
     short_text = (
-        f"Фирма: `{firma_nomi}`\n"
-        f"Сумма: `{_opl_int}`\n"
-        f"ИНН: `{inn}`\n"
-        f"Договор: `{shartnoma or '—'}`"
+        f"Фирма: *{_fn}*\n"
+        f"Сумма: *{_opl_int}*\n"
+        f"ИНН: *{_inn}*\n"
+        f"Договор: *{_dog}*"
     )
 
     wait = await update.message.reply_text("⏳ Юборилмоқда...")
