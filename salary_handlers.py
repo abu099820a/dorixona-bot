@@ -5160,13 +5160,13 @@ async def oplata_karz_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"💰 *ОПЛАТА: {_fmt_oplata(oplatа_summa)} сум*"
     )
 
-    # ── Қисқа хабар — форматсиз оддий матн ────────────────────────────────
+    # ── Қисқа хабар — лейбл оддий, қиймат копирланадиган ─────────────────
     _opl_int = int(oplatа_summa)
     short_text = (
-        f"Фирма: {firma_nomi}\n"
-        f"Сумма: {_opl_int}\n"
-        f"ИНН: {inn}\n"
-        f"Договор: {shartnoma or '—'}"
+        f"Фирма: `{firma_nomi}`\n"
+        f"Сумма: `{_opl_int}`\n"
+        f"ИНН: `{inn}`\n"
+        f"Договор: `{shartnoma or '—'}`"
     )
 
     wait = await update.message.reply_text("⏳ Юборилмоқда...")
@@ -5216,6 +5216,7 @@ async def oplata_karz_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await ctx.bot.send_message(
             chat_id=_result_chat,
             text=short_text,
+            parse_mode="Markdown",
         )
         sent_to_group = True
 
