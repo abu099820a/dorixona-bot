@@ -11,7 +11,7 @@ from salary_handlers import (
     FIRM_ADD_NAME, FIRM_ADD_USERNAME,
     get_oplata_callback_handlers,
 )
-from exclusive_handlers import cmd_eksklyuziv, get_eks_states
+from exclusive_handlers import cmd_eksklyuziv, get_eks_states, get_eks_callbacks
 from attendance_handlers import (
     att_enter, get_att_states,
     ATT_PHONE, ATT_MENU, ATT_LOCATION,
@@ -1173,6 +1173,10 @@ def main():
 
     # ── Оплата ёзиш — поставчик танлаш callback'лари (ConversationHandler'дан ташқарида) ──
     for _h in get_oplata_callback_handlers():
+        app.add_handler(_h)
+
+    # ── Эксклюзив перекидка тасдиқ callback'лари ──
+    for _h in get_eks_callbacks():
         app.add_handler(_h)
 
     # 2) Izohni "ushlab olish" — bu esa CONV DAN OLDIN (group=-1) ishga

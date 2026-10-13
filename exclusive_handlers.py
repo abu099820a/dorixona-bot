@@ -38,8 +38,8 @@ from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 from thefuzz import fuzz, process as fuzz_process
 
-from telegram import Update
-from telegram.ext import MessageHandler, CommandHandler, ContextTypes, filters
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import MessageHandler, CommandHandler, CallbackQueryHandler, ContextTypes, filters
 
 from attendance import run_read
 from salary_handlers import ADMIN_IDS
@@ -48,12 +48,14 @@ logger = logging.getLogger(__name__)
 
 SHEETS_ID = os.getenv("SHEETS_ID", "1CfuogH-yY--y5kiBK0qXsl5AFi_Hmzj_onWcA-Qyvco")
 LOCATION_SHEET_NAME = "Sheet1"
+FARMATSEVTLAR_SHEET_NAME = "Farmatsevtlar"
 DEFAULT_RADIUS_KM = 2.0
 
 # Suhbat holati (bot.py dagi boshqa state raqamlari bilan TO'QNASHMASLIGI
 # uchun 700 dan boshlangan; agar bot.py da allaqachon 700+ band bo'lsa,
 # shu raqamni bot.py bilan birga o'zgartiring).
 EKS_WAIT_XLSX = 700
+EKS_WAIT_CONFIRM = 701
 
 # Ba'zi filiallar nomi aylanma hisobotida va Sheet1'da tizimli ravishda
 # har xil yozilishi ma'lum bo'lgan holatlar uchun qo'lda mos yozuv.
@@ -157,6 +159,42 @@ def _load_location_df():
     if missing:
         raise RuntimeError(f"Sheet1 da kerakli ustunlar topilmadi: {missing}")
     return df
+
+
+def _load_farmatsevtlar_df():
+    """Farmatsevtlar varaqidan filial nomi va TelegramID ni yuklaydi."""
+    url = (
+        f"https://docs.google.com/spreadsheets/d/{SHEETS_ID}"
+        f"/export?format=xlsx&sheet={FARMATSEVTLAR_SHEET_NAME}"
+    )
+    resp = requests.get(url, timeout=30)
+    resp.raise_for_status()
+    df = pd.read_excel(io.BytesIO(resp.content)).fillna("")
+    return df
+
+
+def _get_filial_chat_ids(filial_name: str, farm_df) -> list[int]:
+    """
+    Filial nomiga qarab Dorixona mudiri TelegramID larini qaytaradi.
+    Farmatsevtlar varag'idagi "Filial" ustuni "0 - АСКИЯ" formatda,
+    shuning uchun prefixsiz nomi bilan solishtiradi.
+    """
+    norm = _norm_name(filial_name)
+    result = []
+    for _, row in farm_df.iterrows():
+        raw_filial = str(row.get("Filial", ""))
+        # "0 - АСКИЯ" → "АСКИЯ" qismini olish
+        parts = raw_filial.split(" - ", 1)
+        sheet_nom = parts[1].strip() if len(parts) == 2 else raw_filial.strip()
+        if _norm_name(sheet_nom) == norm:
+            tg_id = row.get("TelegramID", "")
+            lavozim = str(row.get("Lavozim", "")).strip().lower()
+            if tg_id and lavozim == "dorixona mudiri":
+                try:
+                    result.append(int(float(str(tg_id))))
+                except (ValueError, TypeError):
+                    pass
+    return result
 
 
 def classify(sold: int, ost_boshi, peremeshenie) -> str:
@@ -697,7 +735,97 @@ async def eks_receive_xlsx(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     file_io.name = out_name
     await ctx.bot.send_document(chat_id=update.effective_chat.id, document=file_io, filename=out_name)
 
+    # ── Перекидка борми? Тасдиқ сўра ─────────────────────────────────────
+    total_prek = sum(len(p.get("perekidka", [])) for p in products)
+    if total_prek > 0:
+        ctx.user_data["eks_products"] = products
+        keyboard = InlineKeyboardMarkup([[
+            InlineKeyboardButton("✅ Ҳа, юборилсин", callback_data="eks_prek_yes"),
+            InlineKeyboardButton("❌ Йўқ", callback_data="eks_prek_no"),
+        ]])
+        await ctx.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text=(
+                f"🔀 *{total_prek}* та перекидка аниқланди.\n\n"
+                f"Зав аптекаларга хабар юборилсинми?"
+            ),
+            parse_mode="Markdown",
+            reply_markup=keyboard,
+        )
     return None
+
+
+async def eks_prek_confirm(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Перекидка тасдиқ тугмаси."""
+    query = update.callback_query
+    await query.answer()
+
+    if query.data == "eks_prek_no":
+        await query.edit_message_text("❌ Хабар юборилмади.")
+        return
+
+    await query.edit_message_text("⏳ Хабарлар юборилмоқда...")
+
+    products = ctx.user_data.get("eks_products", [])
+    if not products:
+        await query.edit_message_text("❌ Маълумот топилмади.")
+        return
+
+    # ── Перекидка хабарларини аптекаларга юбориш ─────────────────────────
+    try:
+        farm_df = await run_read(_load_farmatsevtlar_df)
+        sent_count = 0
+        for p in products:
+            drug = p["product_name"]
+            for prek in p.get("perekidka", []):
+                from_filial = prek["from_filial"]
+                to_filial   = prek["to_filial"]
+                stock       = prek["from_stock"]
+                dist        = prek["distance_km"]
+
+                from_ids = _get_filial_chat_ids(from_filial, farm_df)
+                to_ids   = _get_filial_chat_ids(to_filial,   farm_df)
+
+                from_msg = (
+                    f"⚠️ *Перекидка буйруги!*\n\n"
+                    f"📦 Дори: *«{drug}»*\n"
+                    f"🔴 Сизнинг аптекада ушбу дори кетмаяпди ({stock} дона захира бор).\n\n"
+                    f"✅ Илтимос, ушбу дорини:\n"
+                    f"*{to_filial}* аптекасига юборинг.\n\n"
+                    f"📍 Масофа: {dist} км"
+                )
+                to_msg = (
+                    f"📦 *Перекидка хабари!*\n\n"
+                    f"💊 Дори: *«{drug}»*\n"
+                    f"🔴 *{from_filial}* аптекасидан сизга юборилади.\n\n"
+                    f"Миqdor: *{stock} дона*\n"
+                    f"📍 Масофа: {dist} км"
+                )
+
+                for cid in from_ids:
+                    try:
+                        await ctx.bot.send_message(chat_id=cid, text=from_msg, parse_mode="Markdown")
+                        sent_count += 1
+                    except Exception as _e:
+                        logger.warning(f"[EKS] FROM xabar yuborilmadi {cid}: {_e}")
+
+                for cid in to_ids:
+                    try:
+                        await ctx.bot.send_message(chat_id=cid, text=to_msg, parse_mode="Markdown")
+                        sent_count += 1
+                    except Exception as _e:
+                        logger.warning(f"[EKS] TO xabar yuborilmadi {cid}: {_e}")
+
+        if sent_count:
+            await query.message.reply_text(
+                f"✅ Перекидка хабарлари *{sent_count}* та аптека мудирига юборилди.",
+                parse_mode="Markdown",
+            )
+        else:
+            await query.message.reply_text("⚠️ Мос аптека мудири топилмади (TelegramID йўқ).")
+    except Exception as _pe:
+        logger.warning(f"[EKS] Perekidka xabar yuborish xatosi: {_pe}")
+        await query.message.reply_text(f"❌ Хато: {_pe}")
 
 
 def get_eks_states():
@@ -706,3 +834,10 @@ def get_eks_states():
             MessageHandler(filters.Document.ALL, eks_receive_xlsx),
         ],
     }
+
+
+def get_eks_callbacks():
+    """bot.py ga qo'shish uchun callback handler."""
+    return [
+        CallbackQueryHandler(eks_prek_confirm, pattern="^eks_prek_(yes|no)$"),
+    ]
