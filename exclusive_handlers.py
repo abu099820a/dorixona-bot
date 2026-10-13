@@ -334,9 +334,40 @@ def _analyze_product(turnover_rows, loc_df, name_choices, name_to_row, radius_km
                     candidates_by_no[key] = cand
 
     dedup_candidates = sorted(candidates_by_no.values(), key=lambda x: x["distance_km"])
+
+    # ── Перекидка: ҳар бир номзод апека учун энг яқин кетмаган топ ──────────
+    # (масофа чекловсиз — барча номзодлар учун кўрсатилади)
+    ketmagan = [t for t in matched if t["category"] == "Ketmagan (zaxira bor, sotuv yo'q)"]
+    perekidka_dedup = []
+    for cand in dedup_candidates:
+        if not ketmagan:
+            break
+        # Ушбу номзодга энг яқин кетмаган апекани топ (захираси > 0 бўлсин)
+        best_k = None
+        best_dist = float("inf")
+        for k in ketmagan:
+            stock = int(k.get("ost_oxiri") or 0)
+            if stock <= 0:
+                continue
+            dist = haversine_km(k["lat"], k["lon"],
+                                cand["candidate_lat"], cand["candidate_lon"])
+            if dist < best_dist:
+                best_dist = dist
+                best_k = k
+        if best_k is not None:
+            perekidka_dedup.append({
+                "from_filial":    best_k["loc_nom"] or best_k["filial_raw"],
+                "from_stock":     int(best_k.get("ost_oxiri") or 0),
+                "to_filial":      cand["candidate_nom"],
+                "distance_km":    round(best_dist, 2),
+                "near_good":      cand["good_filial"],
+                "near_good_sold": cand["good_sold"],
+            })
+
     return {
         "matched": matched, "unmatched": unmatched,
         "good": good, "candidates": dedup_candidates,
+        "perekidka": perekidka_dedup,
     }
 
 
@@ -399,6 +430,8 @@ def _build_report_xlsx(products, radius_km):
     NORMAL_FONT = Font(name=FONT, size=10)
     BOLD_FONT = Font(name=FONT, bold=True, size=10)
     THIN = Side(style="thin", color="D0D0D0")
+    FROM_FILL = PatternFill("solid", fgColor="FFC7CE")   # қизил — кетмаган
+    TO_FILL   = PatternFill("solid", fgColor="C6EFCE")   # яшил — номзод
     BORDER = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
     CAT_COLORS = {
         "Yaxshi ketmoqda": "C6EFCE",
@@ -451,29 +484,117 @@ def _build_report_xlsx(products, radius_km):
              f"{radius_km} km ichida joylashgan aptekalar")
     s3["A1"] = title
     s3["A1"].font = TITLE_FONT
-    s3.merge_cells("A1:G1")
-    headers3 = ["Dori", "Nomzod apteka (dori yo'q)", "Masofa (km)", "Eng yaqin \"yaxshi ketayotgan\" filial",
-                "O'sha filialda sotilgan (dona)", "Nomzod Latitude", "Nomzod Longitude"]
+    s3.merge_cells("A1:I1")
+    headers3 = [
+        "Dori",
+        "Nomzod apteka (dori yo'q)",
+        "Masofa (km)",
+        "Eng yaqin \"yaxshi ketayotgan\" filial",
+        "O'sha filialda sotilgan (dona)",
+        "Nomzod Latitude",
+        "Nomzod Longitude",
+        "⬅️ Кайси апекадан юбориш (кетмаган)",
+        "Ўша апекадаги захира (дона)",
+    ]
     for i, h in enumerate(headers3, 1):
         c = s3.cell(row=3, column=i, value=h)
         c.font = HEADER_FONT
         c.fill = HEADER_FILL
         c.alignment = Alignment(wrap_text=True, vertical="center")
     s3.freeze_panes = "A4"
+
+    # Перекидка маълумотларини nomzod bo'yicha индексла
+    prek_by_to = {}
+    for p in products:
+        for pk in p.get("perekidka", []):
+            prek_by_to[pk["to_filial"]] = pk
+
     row_i = 4
     for p in products:
         product_name = p["product_name"]
         for c in p["candidates"]:
-            vals = [product_name, c["candidate_nom"], c["distance_km"], c["good_filial"], c["good_sold"],
-                    c["candidate_lat"], c["candidate_lon"]]
+            pk = prek_by_to.get(c["candidate_nom"], {})
+            vals = [
+                product_name,
+                c["candidate_nom"],
+                c["distance_km"],
+                c["good_filial"],
+                c["good_sold"],
+                c["candidate_lat"],
+                c["candidate_lon"],
+                pk.get("from_filial", "—"),
+                pk.get("from_stock", "—"),
+            ]
             for i, v in enumerate(vals, 1):
                 cell = s3.cell(row=row_i, column=i, value=v)
-                cell.font = BOLD_FONT if i == 1 else NORMAL_FONT
                 cell.border = BORDER
+                if i == 8:
+                    cell.font = BOLD_FONT
+                    cell.fill = FROM_FILL
+                elif i == 2:
+                    cell.font = BOLD_FONT
+                    cell.fill = TO_FILL
+                else:
+                    cell.font = NORMAL_FONT
             row_i += 1
-    widths3 = [22, 34, 12, 34, 20, 14, 14]
+    widths3 = [22, 34, 12, 34, 20, 14, 14, 34, 16]
     for i, w in enumerate(widths3, 1):
         s3.column_dimensions[get_column_letter(i)].width = w
+
+    # ── 3-варақ: Перекидка рўйхати ──────────────────────────────────────────
+    s4 = wb.create_sheet("Перекидка рўйхати")
+    prek_title = "Кетмаган филиаллардан номзод апекаларга кўчириш рўйхати"
+    s4["A1"] = prek_title
+    s4["A1"].font = TITLE_FONT
+    s4.merge_cells("A1:G1")
+    p_headers = [
+        "Дори",
+        "Кўчирувчи филиал (дори кетмаяпди)",
+        "Захира (дона)",
+        "Қабул қилувчи (номзод апека)",
+        "Маsofa (km)",
+        "Яқин «Yaxshi ketmoqda» филиал",
+        "У филиалда сотилган (дона)",
+    ]
+    for i, h in enumerate(p_headers, 1):
+        c = s4.cell(row=3, column=i, value=h)
+        c.font = HEADER_FONT
+        c.fill = HEADER_FILL
+        c.alignment = Alignment(wrap_text=True, vertical="center")
+    s4.freeze_panes = "A4"
+
+    row_i = 4
+    for p in products:
+        product_name = p["product_name"]
+        for pk in p.get("perekidka", []):
+            vals = [
+                product_name,
+                pk["from_filial"],
+                pk["from_stock"],
+                pk["to_filial"],
+                pk["distance_km"],
+                pk["near_good"],
+                pk["near_good_sold"],
+            ]
+            for i, v in enumerate(vals, 1):
+                c = s4.cell(row=row_i, column=i, value=v)
+                c.border = BORDER
+                if i == 2:
+                    c.font = BOLD_FONT
+                    c.fill = FROM_FILL
+                elif i == 4:
+                    c.font = BOLD_FONT
+                    c.fill = TO_FILL
+                else:
+                    c.font = NORMAL_FONT
+            row_i += 1
+
+    if row_i == 4:
+        s4.cell(row=4, column=1, value="Перекидка учун маълумот топилмади").font = NORMAL_FONT
+
+    p_widths = [22, 34, 14, 34, 12, 34, 18]
+    for i, w in enumerate(p_widths, 1):
+        s4.column_dimensions[get_column_letter(i)].width = w
 
     buf = io.BytesIO()
     wb.save(buf)
@@ -538,29 +659,35 @@ async def eks_receive_xlsx(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         p = products[0]
         n_matched, n_unmatched = len(p["matched"]), len(p["unmatched"])
         n_good, n_cand = len(p["good"]), len(p["candidates"])
+        n_prek = len(p.get("perekidka", []))
         lines = [
             f"✅ *«{p['product_name']}»* tahlili tayyor",
             f"",
             f"🏪 Jami filial (dori bor): {n_matched + n_unmatched}",
             f"📍 Lokatsiyasi topildi: {n_matched}" + (f" (⚠️ {n_unmatched} tasi topilmadi)" if n_unmatched else ""),
             f"🟢 Yaxshi ketmoqda: {n_good}",
+            f"🔴 Ketmagan (zaxira bor, sotuv yo'q): {len([t for t in p['matched'] if t['category'] == 'Ketmagan (zaxira bor, sotuv yo\\'q)'])}",
             f"",
-            f"🎯 {radius} km radiusda topilgan, dori HALI YO'Q nomzod aptekalar: *{n_cand}*",
+            f"🎯 {radius} km radiusda nomzod aptekalar: *{n_cand}*",
+            f"🔀 Перекидка (кўчириш) рўйхати: *{n_prek}* та",
         ]
     else:
         lines = [f"✅ *{len(products)} ta dori* tahlili tayyor", ""]
         total_cand = 0
+        total_prek = 0
         for p in products:
             n_matched, n_unmatched = len(p["matched"]), len(p["unmatched"])
             n_good, n_cand = len(p["good"]), len(p["candidates"])
+            n_prek = len(p.get("perekidka", []))
             total_cand += n_cand
+            total_prek += n_prek
             lines.append(
                 f"📦 *«{p['product_name']}»*: {n_matched + n_unmatched} filial"
                 + (f" (⚠️ {n_unmatched} lokatsiyasi topilmadi)" if n_unmatched else "")
-                + f", 🟢 yaxshi ketmoqda: {n_good}, 🎯 nomzod aptekalar: {n_cand}"
+                + f", 🟢 yaxshi: {n_good}, 🎯 nomzod: {n_cand}, 🔀 перекидка: {n_prek}"
             )
         lines.append("")
-        lines.append(f"📍 Radius: {radius} km · Jami nomzod aptekalar (barcha dorilar bo'yicha): *{total_cand}*")
+        lines.append(f"📍 Radius: {radius} km · Nomzod: *{total_cand}* · Перекидка: *{total_prek}*")
     await msg.edit_text("\n".join(lines), parse_mode="Markdown")
 
     first_name = products[0]["product_name"][:20]
