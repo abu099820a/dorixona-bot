@@ -346,7 +346,7 @@ def _analyze_product(turnover_rows, loc_df, name_choices, name_to_row, radius_km
         best_k = None
         best_dist = float("inf")
         for k in ketmagan:
-            stock = int(k.get("ost_oxiri") or 0)
+            stock = max(int(k.get("ost_oxiri") or 0), int(k.get("ost_boshi") or 0))
             if stock <= 0:
                 continue
             dist = haversine_km(k["lat"], k["lon"],
@@ -357,7 +357,7 @@ def _analyze_product(turnover_rows, loc_df, name_choices, name_to_row, radius_km
         if best_k is not None:
             perekidka_dedup.append({
                 "from_filial":    best_k["loc_nom"] or best_k["filial_raw"],
-                "from_stock":     int(best_k.get("ost_oxiri") or 0),
+                "from_stock":     max(int(best_k.get("ost_oxiri") or 0), int(best_k.get("ost_boshi") or 0)),
                 "to_filial":      cand["candidate_nom"],
                 "distance_km":    round(best_dist, 2),
                 "near_good":      cand["good_filial"],
