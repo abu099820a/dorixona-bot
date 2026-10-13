@@ -666,7 +666,7 @@ async def eks_receive_xlsx(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"🏪 Jami filial (dori bor): {n_matched + n_unmatched}",
             f"📍 Lokatsiyasi topildi: {n_matched}" + (f" (⚠️ {n_unmatched} tasi topilmadi)" if n_unmatched else ""),
             f"🟢 Yaxshi ketmoqda: {n_good}",
-            f"🔴 Ketmagan (zaxira bor, sotuv yo'q): {len([t for t in p['matched'] if t['category'] == 'Ketmagan (zaxira bor, sotuv yo\\'q)'])}",
+            "🔴 Ketmagan (zaxira bor, sotuv yo'q): " + str(len([t for t in p['matched'] if t['category'] == "Ketmagan (zaxira bor, sotuv yo'q)"])),
             f"",
             f"🎯 {radius} km radiusda nomzod aptekalar: *{n_cand}*",
             f"🔀 Перекидка (кўчириш) рўйхати: *{n_prek}* та",
