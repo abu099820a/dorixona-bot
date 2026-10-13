@@ -5166,10 +5166,10 @@ async def oplata_karz_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     _inn = inn.replace("*", "").replace("_", "").replace("`", "")
     _dog = (shartnoma or "—").replace("*", "").replace("_", "").replace("`", "")
     short_text = (
-        f"Фирма: *{_fn}*\n"
-        f"Сумма: *{_opl_int}*\n"
-        f"ИНН: *{_inn}*\n"
-        f"Договор: *{_dog}*"
+        f"Фирма: `{_fn}`\n"
+        f"Сумма: `{_opl_int}`\n"
+        f"ИНН: `{_inn}`\n"
+        f"Договор: `{_dog}`"
     )
 
     wait = await update.message.reply_text("⏳ Юборилмоқда...")
@@ -5187,6 +5187,7 @@ async def oplata_karz_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         filtered_doc.name = file_name or "hisobot.xlsx"
 
         # ── Гуруҳга юбориш (фақат PAYMENT_GROUP_ID ўрнатилган бўлса) ─────
+        _sent_filtered_msg = None
         if PAYMENT_GROUP_ID:
             await ctx.bot.send_message(
                 chat_id=PAYMENT_GROUP_ID,
@@ -5194,7 +5195,7 @@ async def oplata_karz_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 parse_mode="Markdown",
             )
             filtered_doc.seek(0)
-            await ctx.bot.send_document(
+            _sent_filtered_msg = await ctx.bot.send_document(
                 chat_id=PAYMENT_GROUP_ID,
                 document=filtered_doc,
                 filename=file_name or "hisobot.xlsx",
@@ -5209,12 +5210,25 @@ async def oplata_karz_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         if not PAYMENT_GROUP_ID:
             # Гуруҳ йўқ — жорий чатга файл юборамиз
             filtered_doc.seek(0)
-            await ctx.bot.send_document(
+            _sent_filtered_msg = await ctx.bot.send_document(
                 chat_id=update.effective_chat.id,
                 document=filtered_doc,
                 filename=file_name or "hisobot.xlsx",
                 caption=f"📊 {firma_nomi} — {shartnoma or ''} | Оплата: {_fmt_oplata(oplatа_summa)} сум",
             )
+
+        # ── Фильтрланган файл file_id ни "Firmalar" листига сақлаш ──────
+        # (Фирма кейин рўйхатдан ўтганда ўша файлни олади)
+        if _sent_filtered_msg and _sent_filtered_msg.document:
+            try:
+                await run_write(
+                    save_firma_file,
+                    firma_nomi,
+                    _sent_filtered_msg.document.file_id,
+                    file_name or "hisobot.xlsx",
+                )
+            except Exception as _sf_e:
+                logger.warning(f"[OPLATA] save_firma_file xato: {_sf_e}")
         # ── Қисқа хабар алоҳида ───────────────────────────────────────────
         await ctx.bot.send_message(
             chat_id=_result_chat,
