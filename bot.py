@@ -9,6 +9,7 @@ from salary_handlers import (
     appeal_response_button, appeal_comment_catcher,
     ADMIN_IDS, ADMIN_FIRM_REPORT_SEARCH,
     FIRM_ADD_NAME, FIRM_ADD_USERNAME,
+    FIRM_UPLOAD_MONTH_PICK, FIRM_GET_MONTH_PICK,
     get_oplata_callback_handlers,
 )
 from exclusive_handlers import cmd_eksklyuziv, get_eks_states, get_eks_callbacks
