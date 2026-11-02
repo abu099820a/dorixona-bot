@@ -2012,22 +2012,15 @@ async def _send_firm_direct_report(
     if len(available_months) <= 1:
         # Oy tanlash yo'q — faylni hoziroq yuborish
         if not _months:
-            if 5 <= _today_day <= 10:
-                _no_file_msg = (
-                    "📭 Hisobot ҳали юкланмаган.\n\n"
-                    "🗓 Ҳисобот ҳар ойнинг *5-санасидан 10-санасигача* юкланади.\n"
-                    "Илтимос, кейинроқ уриниб кўринг."
-                    if language == "uz" else
-                    "📭 Отчёт ещё не загружен.\n\n"
-                    "🗓 Отчёт загружается с *5 по 10 число* каждого месяца.\n"
-                    "Пожалуйста, попробуйте позже."
-                )
-            else:
-                _no_file_msg = (
-                    "📭 Hisobot fayli hali yuklanmagan."
-                    if language == "uz" else
-                    "📭 Файл отчёта ещё не загружен."
-                )
+            _no_file_msg = (
+                "📭 Hisobot fayli hali yuklanmagan.\n\n"
+                "🗓 Hisobot har oyning *5-sanasidan 10-sanasigacha* yuklanadi.\n"
+                "Shu oraliqda qayta harakat qilib ko'ring."
+                if language == "uz" else
+                "📭 Файл отчёта ещё не загружен.\n\n"
+                "🗓 Отчёт загружается с *5 по 10 число* каждого месяца.\n"
+                "Попробуйте снова в этот период."
+            )
             await update.message.reply_text(_no_file_msg, parse_mode="Markdown")
         elif len(_months) == 1:
             _only_month    = sorted(_months.keys(), reverse=True)[0]
@@ -4985,8 +4978,14 @@ async def firm_month_select_handler(update: Update, ctx: ContextTypes.DEFAULT_TY
             )
         else:
             await update.message.reply_text(
-                "📂 Bu oy uchun fayl yuklanmagan." if language == "uz"
-                else "📂 Файл за этот месяц не загружен."
+                f"📭 *{mdisp}* uchun hisobot fayli hali yuklanmagan.\n\n"
+                "🗓 Hisobot har oyning *5-sanasidan 10-sanasigacha* yuklanadi.\n"
+                "Shu oraliqda qayta harakat qilib ko'ring."
+                if language == "uz" else
+                f"📭 Файл отчёта за *{mdisp}* ещё не загружен.\n\n"
+                "🗓 Отчёт загружается с *5 по 10 число* каждого месяца.\n"
+                "Попробуйте снова в этот период.",
+                parse_mode="Markdown",
             )
 
         # Admin xabardorligi — firma hisobot olganda
