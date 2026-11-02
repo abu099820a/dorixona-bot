@@ -1966,83 +1966,8 @@ async def _send_firm_direct_report(
     firma_nomi  = firm_info.get("firma_nomi", "")
     back_txt    = "⬅️ Назад" if language == "ru" else "⬅️ Orqaga"
 
-    # ── 1. Hisobot faylini yuborish yoki oy tanlash ──────────────────────────
-    from datetime import date as _date
-    _today_day = _date.today().day
-    _months    = firm_info.get("months", {})  # {"2026-10": {"file_id":..., "file_name":...}, ...}
-
-    if not _months:
-        # Hech qanday oy yuklanmagan
-        if 5 <= _today_day <= 10:
-            _no_file_msg = (
-                "📭 Hisobot ҳали юкланмаган.\n\n"
-                "🗓 Ҳисобот ҳар ойнинг *5-санасидан 10-санасигача* юкланади.\n"
-                "Илтимос, кейинроқ уриниб кўринг."
-                if language == "uz" else
-                "📭 Отчёт ещё не загружен.\n\n"
-                "🗓 Отчёт загружается с *5 по 10 число* каждого месяца.\n"
-                "Пожалуйста, попробуйте позже."
-            )
-        else:
-            _no_file_msg = (
-                "📭 Hisobot fayli hali yuklanmagan."
-                if language == "uz" else
-                "📭 Файл отчёта ещё не загружен."
-            )
-        await update.message.reply_text(_no_file_msg, parse_mode="Markdown")
-    elif len(_months) == 1:
-        # Faqat bitta oy bor
-        _only_month    = sorted(_months.keys(), reverse=True)[0]
-        _fdata         = _months[_only_month]
-        _month_lbl     = _month_display(_only_month, language)
-        _expected_month = _prev_month_key()   # Odatda o'tgan oy
-
-        if _only_month != _expected_month:
-            # Kutilgan oy yuklanmagan — ogohlantir, keyin eski faylni yuborish
-            _exp_lbl = _month_display(_expected_month, language)
-            _warn = (
-                f"📭 *{_exp_lbl}* hisoboti hali yuklanmagan.\n\n"
-                f"🗓 Hisobot har oyning *5-sanasidan 10-sanasigacha* yuklanadi.\n"
-                f"Shu oraliqda qayta harakat qilib ko'ring.\n\n"
-                f"📁 Quyida bazadagi oxirgi hisobot — *{_month_lbl}*:"
-                if language == "uz" else
-                f"📭 Отчёт за *{_exp_lbl}* ещё не загружен.\n\n"
-                f"🗓 Отчёт загружается с *5 по 10 число* каждого месяца.\n"
-                f"Попробуйте снова в этот период.\n\n"
-                f"📁 Ниже последний доступный отчёт — *{_month_lbl}*:"
-            )
-            await update.message.reply_text(_warn, parse_mode="Markdown")
-
-        await ctx.bot.send_document(
-            chat_id=update.effective_chat.id,
-            document=_fdata["file_id"],
-            filename=_fdata.get("file_name") or "hisobot.xlsx",
-            caption=f"📊 {_month_lbl} hisoboti" if language == "uz" else f"📊 Отчёт за {_month_lbl}",
-        )
-    else:
-        # Bir nechta oy bor — tanlash so'rash
-        _sorted_months = sorted(_months.keys(), reverse=True)
-        _btns = [
-            [_month_display(m, language) + f" ({m})"]
-            for m in _sorted_months
-        ]
-        _btns.append(["⬅️ Orqaga" if language == "uz" else "⬅️ Назад"])
-        from telegram import ReplyKeyboardMarkup as _RKM
-        ctx.user_data["firm_get_months"]   = _months
-        ctx.user_data["firm_get_firm_info"] = firm_info
-        ctx.user_data["firm_get_from_menu"] = from_menu
-        await update.message.reply_text(
-            "📅 *Qaysi oy hisobotini olmoqchisiz?*"
-            if language == "uz" else
-            "📅 *За какой месяц хотите получить отчёт?*",
-            parse_mode="Markdown",
-            reply_markup=_RKM(_btns, resize_keyboard=True, one_time_keyboard=True),
-        )
-        return FIRM_GET_MONTH_PICK
-
-    # ── 2. To'lovlar varag'idan asosiy ma'lumotlar ───────────────────────────
+    # ── 1. To'lovlar / shartnoma ma'lumotlari (ERTA — file yuborishdan oldin) ──
     if summa_info_override is not None:
-        # Postawchik shartnoma tanlashdan keyin — to'g'ridan ma'lumot uzatilgan
         summa_info = summa_info_override
         inn_val    = summa_info.get("inn", "")
     else:
@@ -2074,8 +1999,82 @@ async def _send_firm_direct_report(
             summa_info = None
             inn_val    = ""
 
-    # ── 3. Oylik varaqlar ro'yxati ───────────────────────────────────────────
+    # ── 2. Oylik varaqlar ro'yxati (file yuborishdan OLDIN) ──────────────────
     available_months = await run_read(_list_monthly_sheets_for_firm, firma_nomi, inn_val)
+
+    # ── 3. Hisobot faylini yuborish (faqat oy tanlash kerak bo'lmasa) ─────────
+    # Agar available_months > 1 bo'lsa — faylni YUBORMAY qo'yamiz:
+    # firm_month_select_handler o'zi tanlangan oy faylini yuboradi.
+    from datetime import date as _date
+    _today_day = _date.today().day
+    _months    = firm_info.get("months", {})  # {"2026-10": {"file_id":..., "file_name":...}, ...}
+
+    if len(available_months) <= 1:
+        # Oy tanlash yo'q — faylni hoziroq yuborish
+        if not _months:
+            if 5 <= _today_day <= 10:
+                _no_file_msg = (
+                    "📭 Hisobot ҳали юкланмаган.\n\n"
+                    "🗓 Ҳисобот ҳар ойнинг *5-санасидан 10-санасигача* юкланади.\n"
+                    "Илтимос, кейинроқ уриниб кўринг."
+                    if language == "uz" else
+                    "📭 Отчёт ещё не загружен.\n\n"
+                    "🗓 Отчёт загружается с *5 по 10 число* каждого месяца.\n"
+                    "Пожалуйста, попробуйте позже."
+                )
+            else:
+                _no_file_msg = (
+                    "📭 Hisobot fayli hali yuklanmagan."
+                    if language == "uz" else
+                    "📭 Файл отчёта ещё не загружен."
+                )
+            await update.message.reply_text(_no_file_msg, parse_mode="Markdown")
+        elif len(_months) == 1:
+            _only_month    = sorted(_months.keys(), reverse=True)[0]
+            _fdata         = _months[_only_month]
+            _month_lbl     = _month_display(_only_month, language)
+            _expected_month = _prev_month_key()
+            if _only_month != _expected_month:
+                _exp_lbl = _month_display(_expected_month, language)
+                _warn = (
+                    f"📭 *{_exp_lbl}* hisoboti hali yuklanmagan.\n\n"
+                    f"🗓 Hisobot har oyning *5-sanasidan 10-sanasigacha* yuklanadi.\n"
+                    f"Shu oraliqda qayta harakat qilib ko'ring.\n\n"
+                    f"📁 Quyida bazadagi oxirgi hisobot — *{_month_lbl}*:"
+                    if language == "uz" else
+                    f"📭 Отчёт за *{_exp_lbl}* ещё не загружен.\n\n"
+                    f"🗓 Отчёт загружается с *5 по 10 число* каждого месяца.\n"
+                    f"Попробуйте снова в этот период.\n\n"
+                    f"📁 Ниже последний доступный отчёт — *{_month_lbl}*:"
+                )
+                await update.message.reply_text(_warn, parse_mode="Markdown")
+            await ctx.bot.send_document(
+                chat_id=update.effective_chat.id,
+                document=_fdata["file_id"],
+                filename=_fdata.get("file_name") or "hisobot.xlsx",
+                caption=f"📊 {_month_lbl} hisoboti" if language == "uz" else f"📊 Отчёт за {_month_lbl}",
+            )
+        else:
+            # Bir nechta oy bor — tanlash so'rash (FIRM_GET_MONTH_PICK)
+            _sorted_months = sorted(_months.keys(), reverse=True)
+            _btns = [
+                [_month_display(m, language) + f" ({m})"]
+                for m in _sorted_months
+            ]
+            _btns.append(["⬅️ Orqaga" if language == "uz" else "⬅️ Назад"])
+            from telegram import ReplyKeyboardMarkup as _RKM
+            ctx.user_data["firm_get_months"]    = _months
+            ctx.user_data["firm_get_firm_info"] = firm_info
+            ctx.user_data["firm_get_from_menu"] = from_menu
+            await update.message.reply_text(
+                "📅 *Qaysi oy hisobotini olmoqchisiz?*"
+                if language == "uz" else
+                "📅 *За какой месяц хотите получить отчёт?*",
+                parse_mode="Markdown",
+                reply_markup=_RKM(_btns, resize_keyboard=True, one_time_keyboard=True),
+            )
+            return FIRM_GET_MONTH_PICK
+    # else: available_months > 1 → fayl firm_month_select_handler da yuboriladi
 
     # ── 4. Shartnoma / INN / To'lov bloki ────────────────────────────────────
     lines = [f"🏢 *{firma_nomi}*", ""]
