@@ -621,8 +621,22 @@ async def firm_reports_menu_handler(update: Update, ctx: ContextTypes.DEFAULT_TY
 
     elif txt == T[language]["upload_report_btn"]:
         # Hisobot yuklash — parol orqali hamma kirishi mumkin (admin uchun parol so'ralmaydi)
-        from salary_handlers import firm_report_enter
         ctx.user_data["firm_upload_from_new_menu"] = True
+        if is_admin:
+            # Admin: avval oy tanlash
+            from salary_handlers import _recent_months, _month_display
+            ctx.user_data["upload_flow"] = "individual"
+            months = _recent_months(4)
+            btns = [[m + " — " + _month_display(m, "uz")] for m in months]
+            btns.append(["❌ Bekor qilish"])
+            from telegram import ReplyKeyboardMarkup as _RKM
+            await update.message.reply_text(
+                "📅 *Qaysi oy hisoboti yuklanmoqda?*\n\nOyni tanlang:",
+                parse_mode="Markdown",
+                reply_markup=_RKM(btns, resize_keyboard=True, one_time_keyboard=True),
+            )
+            return FIRM_UPLOAD_MONTH_PICK
+        from salary_handlers import firm_report_enter
         return await firm_report_enter(update, ctx)
 
     elif is_admin and txt in ("➕ Firma qo'shish", "➕ Добавить фирму"):

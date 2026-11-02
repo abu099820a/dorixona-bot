@@ -1667,6 +1667,21 @@ async def firm_upload_month_pick_handler(update: Update, ctx: ContextTypes.DEFAU
     ctx.user_data["upload_month"] = month_key
     month_label = _month_display(month_key, "uz")
 
+    # Agar individual upload flow bo'lsa — firm_report_enter ga yo'naltirish
+    if ctx.user_data.pop("upload_flow", None) == "individual":
+        from telegram import ReplyKeyboardMarkup as _RKM
+        back_txt = "⬅️ Orqaga"
+        await update.message.reply_text(
+            f"✅ *{month_label}* oyi tanlandi.\n\n"
+            "📥 *Firma otchyotini yuklash*\n\n"
+            "Aylanma hisoboti (.xlsx) faylini yuboring.\n"
+            "Fayl *izohiga* (caption) firma *nomini* yoki *INN raqamini* yozing.\n\n"
+            "Misol izoh: `АВЕНСИС ГРУПП` yoki `123456789`",
+            parse_mode="Markdown",
+            reply_markup=_RKM([[back_txt]], resize_keyboard=True),
+        )
+        return FIRM_REPORT_WAIT
+
     from telegram import ReplyKeyboardMarkup as _RKM
     await update.message.reply_text(
         f"✅ *{month_label}* oyi tanlandi.\n\n"
