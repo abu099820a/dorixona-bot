@@ -4370,8 +4370,43 @@ def _resolve_target_ids(name_map: dict, selected_names) -> list:
     return list(ids)
 
 
+def _resolve_target_pairs(name_map: dict, selected_names) -> list:
+    """
+    name_map: {NOM(upper): telegram_id}. selected_names: None (hammaga)
+    yoki tanlangan nomlar ro'yxati. Qisman moslikni ham qidiradi.
+    (firma_nomi, telegram_id) juftliklari ro'yxatini qaytaradi — Excel
+    hisoboti uchun firma nomini saqlab qolish maqsadida ishlatiladi.
+    """
+    if selected_names is None:
+        seen = set()
+        pairs = []
+        for name, tid in name_map.items():
+            if tid not in seen:
+                pairs.append((name, tid))
+                seen.add(tid)
+        return pairs
+
+    pairs = []
+    seen_ids = set()
+    for wanted in selected_names:
+        wanted_u = wanted.strip().upper()
+        if wanted_u in name_map:
+            tid = name_map[wanted_u]
+            if tid not in seen_ids:
+                pairs.append((wanted_u, tid))
+                seen_ids.add(tid)
+            continue
+        for key, tid in name_map.items():
+            if wanted_u in key or key in wanted_u:
+                if tid not in seen_ids:
+                    pairs.append((key, tid))
+                    seen_ids.add(tid)
+                break
+    return pairs
+
+
 async def appeal_firm_msg_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """Firmalarga yuboriladigan xabar matni qabul qilinadi va yuboriladi."""
+    """Firmalarga yuboriladigan xabar matni qabul qilinadi, yuboriladi va Excel hisobot hosil qilinadi."""
     language = ctx.user_data.get("lang", "uz")
     back_txt = "⬅️ Назад" if language == "ru" else "⬅️ Orqaga"
     from bot import main_keyboard, get_lang, MENU
@@ -4393,13 +4428,105 @@ async def appeal_firm_msg_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE
     msg = await update.message.reply_text("⏳ Yuborilmoqda...")
     firma_map = await run_read(get_firma_map)
     selected_names = ctx.user_data.get("appeal_names")
-    ids = _resolve_target_ids(firma_map, selected_names) if firma_map else []
+    firma_pairs = _resolve_target_pairs(firma_map, selected_names) if firma_map else []
 
-    if not ids:
+    if not firma_pairs:
         await msg.edit_text("❌ Mos firma topilmadi.")
     else:
-        sent, failed = await _broadcast_send(update, ctx, ids, text)
+        # ── Xabar yuborish + per-firma natija kuzatish ──────────────────────
+        from telegram import InlineKeyboardMarkup, InlineKeyboardButton
+        user = update.effective_user
+        sender_name = " ".join(filter(None, [user.first_name, user.last_name])).strip()
+        if not sender_name:
+            sender_name = f"@{user.username}" if user.username else "Administrator"
+        admin_chat_id = update.effective_chat.id
+
+        kb = InlineKeyboardMarkup([[
+            InlineKeyboardButton("✅ Bajarildi", callback_data=f"appealresp:done:{admin_chat_id}"),
+            InlineKeyboardButton("❌ Bekor qilish", callback_data=f"appealresp:cancel:{admin_chat_id}"),
+        ]])
+
+        log_rows = ctx.bot_data.setdefault("appeal_log_rows", {})
+        results = []   # [(firma_nomi, holat_emoji)]
+        sent, failed = 0, 0
+
+        for firma_nomi, tid in firma_pairs:
+            try:
+                await ctx.bot.send_message(
+                    chat_id=int(tid),
+                    text=f"📩 Murojaat\n👤 Kimdan: {sender_name}\n\n{text}",
+                    reply_markup=kb,
+                )
+                sent += 1
+                results.append((firma_nomi, "✅ Yuborildi"))
+                row_idx = await run_write(log_murojaat, tid, text)
+                if row_idx and row_idx > 0:
+                    log_rows[int(tid)] = row_idx
+            except Exception as exc:
+                failed += 1
+                results.append((firma_nomi, "❌ Yuborilmadi"))
+                logger.warning(f"[APPEAL] Yuborilmadi ({firma_nomi}/{tid}): {exc}")
+
         await msg.edit_text(f"✅ Yuborildi: {sent} ta\n❌ Yuborilmadi: {failed} ta")
+
+        # ── Excel hisobot ────────────────────────────────────────────────────
+        try:
+            import openpyxl
+            from openpyxl.styles import Font, PatternFill, Alignment
+            import io as _io
+            from datetime import datetime as _dt
+
+            wb = openpyxl.Workbook()
+            ws_xl = wb.active
+            ws_xl.title = "Xabar hisoboti"
+
+            # Sarlavha
+            headers = ["Firma nomi", "Holat", "Xabar matni"]
+            ws_xl.append(headers)
+            for col_idx in range(1, 4):
+                cell = ws_xl.cell(row=1, column=col_idx)
+                cell.font = Font(bold=True, color="FFFFFF")
+                cell.fill = PatternFill("solid", fgColor="1F4E79")
+                cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+            # Ma'lumotlar
+            for firma_nomi, holat in results:
+                ws_xl.append([firma_nomi, holat, text])
+
+            # Qator balandligi va ustun kengligi
+            ws_xl.row_dimensions[1].height = 22
+            ws_xl.column_dimensions["A"].width = 42
+            ws_xl.column_dimensions["B"].width = 20
+            ws_xl.column_dimensions["C"].width = 60
+
+            # Ma'lumot qatorlarini formatlash
+            green_fill = PatternFill("solid", fgColor="E2EFDA")
+            red_fill   = PatternFill("solid", fgColor="FCE4D6")
+            for row_cells in ws_xl.iter_rows(min_row=2, max_col=3):
+                holat_val = row_cells[1].value or ""
+                bg = green_fill if "Yuborildi" in holat_val else red_fill
+                for cell in row_cells:
+                    cell.fill = bg
+                    cell.alignment = Alignment(vertical="center", wrap_text=True)
+
+            buf = _io.BytesIO()
+            wb.save(buf)
+            buf.seek(0)
+
+            fname = f"murojaat_hisobot_{_dt.now().strftime('%Y%m%d_%H%M')}.xlsx"
+            from telegram import InputFile as _IF
+            await ctx.bot.send_document(
+                chat_id=update.effective_chat.id,
+                document=_IF(buf, filename=fname),
+                caption=(
+                    f"📊 *Xabar yuborish hisoboti*\n\n"
+                    f"✅ Yuborildi: *{sent}* ta\n"
+                    f"❌ Yuborilmadi: *{failed}* ta"
+                ),
+                parse_mode="Markdown",
+            )
+        except Exception as exc_xl:
+            logger.error(f"[APPEAL] Excel hisobot xatosi: {exc_xl}")
 
     ctx.user_data.pop("appeal_names", None)
     ctx.user_data.pop("appeal_kind", None)
