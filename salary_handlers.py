@@ -42,6 +42,7 @@ SCOPES = [
 PHARMACY_SHEET_ID = os.getenv("PHARMACY_SHEET_ID", "")
 SALARY_SHEET_ID = os.getenv("SALARY_SHEET_ID", "")
 FIRMS_SHEET_ID = os.getenv("FIRMS_SHEET_ID", "")
+SHEETS_ID = os.getenv("SHEETS_ID", "1CfuogH-yY--y5kiBK0qXsl5AFi_Hmzj_onWcA-Qyvco")
 ADMIN_IDS = [709544046]
 PAYMENTS_PAROL = "офис"  # Davomat bo'limi bilan bir xil umumiy parol
 FIRM_UPLOAD_PAROL = os.getenv("FIRM_UPLOAD_PAROL", "офис")  # Firma otchyot yuklash paroli
@@ -977,6 +978,36 @@ def save_new_firma(firma_nomi: str, username: str = "",
         # Yangi firma — qator qo'shish
         ws.append_row([firma_nomi, ph, tid, "", "", uname])
         logger.info(f"[FIRMS] Yangi firma qo'shildi: '{firma_nomi}'")
+
+        # SHEETS_ID → "Firmalar" ga ham yozish (dorixonalar_yangi)
+        try:
+            if SHEETS_ID:
+                gc2 = _get_client()
+                sh2 = gc2.open_by_key(SHEETS_ID)
+                ws2 = sh2.worksheet("Firmalar")
+                all2 = ws2.get_all_values()
+                target2 = _norm_firma_nomi(firma_nomi)
+                found2 = False
+                for i2, row2 in enumerate(all2[1:], start=2):
+                    if row2 and _norm_firma_nomi(row2[0]) == target2:
+                        batch2 = []
+                        if ph:
+                            batch2.append({"range": f"B{i2}", "values": [[ph]]})
+                        if tid:
+                            batch2.append({"range": f"C{i2}", "values": [[tid]]})
+                        if uname:
+                            batch2.append({"range": f"F{i2}", "values": [[uname]]})
+                        if batch2:
+                            ws2.batch_update(batch2)
+                        found2 = True
+                        logger.info(f"[FIRMS2] SHEETS_ID Firmalar yangilandi: '{firma_nomi}'")
+                        break
+                if not found2:
+                    ws2.append_row([firma_nomi, ph, tid, "", "", uname])
+                    logger.info(f"[FIRMS2] SHEETS_ID Firmalar ga qo'shildi: '{firma_nomi}'")
+        except Exception as e2:
+            logger.error(f"[FIRMS2] SHEETS_ID yozishda xato: {e2}")
+
         return True
     except Exception as e:
         logger.error(f"[FIRMS] save_new_firma xato: {e}")
