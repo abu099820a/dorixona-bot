@@ -356,7 +356,8 @@ def main_keyboard(language, is_admin=False):
         [T[language]["channel_btn"]],
     ]
     if is_admin:
-        rows.append([T[language]["chat_btn"]])  # Telegram chat — faqat admin uchun
+        rows.append([T[language]["appeal_btn"]])   # Murojaat — faqat admin
+        rows.append([T[language]["chat_btn"]])     # Telegram chat — faqat admin
         rows.append([T[language]["admin_panel_btn"]])
     rows.append([T[language]["lang_btn"]])
     return ReplyKeyboardMarkup(rows, resize_keyboard=True)
@@ -370,8 +371,7 @@ def admin_panel_keyboard(language):
     """
     return ReplyKeyboardMarkup([
         [T[language]["attendance_btn"], T[language]["register_btn"]],
-        [T[language]["reports_btn"], T[language]["appeal_btn"]],
-        [T[language]["eksklyuziv_btn"]],
+        [T[language]["reports_btn"], T[language]["eksklyuziv_btn"]],
         [T[language]["back"]],
     ], resize_keyboard=True)
 
@@ -513,6 +513,9 @@ async def menu_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(T[language]["search_menu"],
                                          reply_markup=search_keyboard(language), parse_mode="Markdown")
         return SEARCH_MENU
+
+    elif is_admin and txt == T[language]["appeal_btn"]:
+        return await appeal_menu_enter(update, ctx)
 
     elif is_admin and txt == T[language]["admin_panel_btn"]:
         await update.message.reply_text(T[language]["admin_panel_menu"],
@@ -694,9 +697,6 @@ async def admin_panel_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     elif txt == T[language]["reports_btn"]:
         return await reports_menu_enter(update, ctx)
-
-    elif txt == T[language]["appeal_btn"]:
-        return await appeal_menu_enter(update, ctx)
 
     elif txt == T[language]["eksklyuziv_btn"]:
         return await cmd_eksklyuziv(update, ctx)
