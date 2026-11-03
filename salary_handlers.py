@@ -42,12 +42,7 @@ SCOPES = [
 PHARMACY_SHEET_ID = os.getenv("PHARMACY_SHEET_ID", "")
 SALARY_SHEET_ID = os.getenv("SALARY_SHEET_ID", "")
 FIRMS_SHEET_ID = os.getenv("FIRMS_SHEET_ID", "")
-SHEETS_ID = os.getenv("SHEETS_ID", "1CfuogH-yY--y5kiBK0qXsl5AFi_Hmzj_onWcA-Qyvco")
-SUPER_ADMIN_ID = 709544046   # Bosh admin — o'zgartirilmaydi
-ADMIN_IDS = {SUPER_ADMIN_ID}  # Mutable set — botstart da Sheet dan to'ldiriladi
-# Permission matrix: {telegram_id: set_of_panel_keys}
-# Panel keys: "davomat", "royxat", "hisobot", "eksklyuziv", "murojaat"
-ADMIN_PERMISSIONS: dict = {}
+ADMIN_IDS = [709544046]
 PAYMENTS_PAROL = "офис"  # Davomat bo'limi bilan bir xil umumiy parol
 FIRM_UPLOAD_PAROL = os.getenv("FIRM_UPLOAD_PAROL", "офис")  # Firma otchyot yuklash paroli
 PAYMENT_GROUP_ID = int(os.getenv("PAYMENT_GROUP_ID", "0"))  # Оплата хисоботи юбориладиган гуруҳ ID
@@ -82,11 +77,6 @@ FIRM_ADD_NAME = 525                 # Admin yangi firma nomini kiritmoqda
 FIRM_ADD_USERNAME = 526             # Admin firma vakili @username ni kiritmoqda
 OPLATA_FILE = 527                   # Oплата: admin xlsx fayl yuborishi kutilmoqda
 OPLATA_KARZ = 528                   # Оплата: admin карз miqdorini kiritishi kutilmoqda
-FIRM_UPLOAD_MONTH_PICK = 529        # Admin qaysi oy uchun fayl yuklayotganini tanlaydi
-FIRM_GET_MONTH_PICK = 530           # Firma/admin qaysi oy hisobotini olmoqchi tanlaydi
-ADMIN_LIST_STATE = 532              # Super admin adminlar ro'yxatini boshqaradi
-ADMIN_NEW_ID = 533                  # Super admin yangi admin ID kiritadi
-ADMIN_NEW_NAME = 534                # Super admin yangi admin ismini kiritadi
 
 
 # ─── Google Sheets ────────────────────────────────────────────────────────────
@@ -105,328 +95,6 @@ def _get_client():
         creds = Credentials.from_service_account_file("credentials.json", scopes=SCOPES)
     _CACHED_CLIENT = gspread.authorize(creds)
     return _CACHED_CLIENT
-
-
-# ─── Admin boshqaruvi (Permission matrix) ────────────────────────────────────
-# "Adminlar" varaq tuzilishi:
-#   A: TelegramID | B: Ismi | C: Davomat | D: Ro'yxat |
-#   E: Hisobot olish | F: Hisobot yuklash | G: Firma qo'shish |
-#   H: Eksklyuziv | I: Murojaat
-# Panel * belgisi bo'lgan ustun o'sha adminga ko'rinadi.
-PANEL_COLS = {
-    "davomat":         2,   # ustun indeksi (0-indexed)
-    "royxat":          3,
-    "hisobot_olish":   4,
-    "hisobot_yuklash": 5,
-    "firma_qoshish":   6,
-    "eksklyuziv":      7,
-    "murojaat":        8,
-}
-PANEL_HEADERS = [
-    "TelegramID", "Ismi", "Davomat", "Ro'yxat",
-    "Hisobot olish", "Hisobot yuklash", "Firma qo'shish",
-    "Eksklyuziv", "Murojaat"
-]
-
-
-def _get_adminlar_ws():
-    """SHEETS_ID → 'Adminlar' varag'ini qaytaradi. Yo'q bo'lsa yaratadi."""
-    client = _get_client()
-    sh = client.open_by_key(SHEETS_ID)
-    try:
-        ws = sh.worksheet("Adminlar")
-        # Sarlavha yangiligini tekshiramiz (eski 4-ustunli format bo'lsa kengaytiramiz)
-        first_row = ws.row_values(1)
-        if len(first_row) < len(PANEL_HEADERS):
-            ws.resize(rows=200, cols=len(PANEL_HEADERS))
-            ws.update("A1", [PANEL_HEADERS])
-            logger.info("[ADMIN] Adminlar varag'i yangi formatga o'tkazildi")
-        return ws
-    except Exception:
-        ws = sh.add_worksheet(title="Adminlar", rows=200, cols=len(PANEL_HEADERS))
-        ws.append_row(PANEL_HEADERS)
-        return ws
-
-
-def reload_admin_permissions():
-    """
-    SHEETS_ID → 'Adminlar' varag'idan ruxsatlar matritsasini yuklab
-    ADMIN_PERMISSIONS va ADMIN_IDS ni yangilaydi.
-    Bot ishga tushganda va o'zgarishlardan keyin chaqiriladi.
-    """
-    global ADMIN_PERMISSIONS
-    try:
-        ws = _get_adminlar_ws()
-        rows = ws.get_all_values()
-        new_ids = {SUPER_ADMIN_ID}
-        new_perms = {}
-        for row in rows[1:]:
-            if not row or not row[0].strip().lstrip("-").isdigit():
-                continue
-            tid = int(row[0].strip())
-            new_ids.add(tid)
-            panels = set()
-            for panel_key, col_idx in PANEL_COLS.items():
-                if len(row) > col_idx and str(row[col_idx]).strip() == "*":
-                    panels.add(panel_key)
-            new_perms[tid] = panels
-        ADMIN_IDS.clear()
-        ADMIN_IDS.update(new_ids)
-        ADMIN_PERMISSIONS.clear()
-        ADMIN_PERMISSIONS.update(new_perms)
-        logger.info(f"[ADMIN] {len(new_ids)} ta admin, ruxsatlar: {new_perms}")
-    except Exception as e:
-        logger.error(f"[ADMIN] reload_admin_permissions xato: {e}")
-
-
-# Qadimiy nom bilan ham chaqirish mumkin bo'lsin (bot.py import uchun)
-def reload_admin_ids():
-    reload_admin_permissions()
-
-
-def has_panel(uid: int, panel: str) -> bool:
-    """
-    uid ushbu panelni ko'ra oladimi?
-    Super admin har doim ko'radi.
-    Boshqa adminlar — faqat ADMIN_PERMISSIONS da * bo'lsa.
-    """
-    if uid == SUPER_ADMIN_ID:
-        return True
-    return panel in ADMIN_PERMISSIONS.get(uid, set())
-
-
-def add_admin_to_sheet(telegram_id: int, name: str) -> bool:
-    """Yangi adminni 'Adminlar' varag'iga qo'shadi va ruxsatlarni yangilaydi."""
-    try:
-        ws = _get_adminlar_ws()
-        rows = ws.get_all_values()
-        for row in rows[1:]:
-            if row and row[0].strip() == str(telegram_id):
-                return False  # Allaqachon bor
-        # Yangi qator: ID, Ismi, va barcha panel ustunlari bo'sh (panal tanlash admin zimmasida)
-        new_row = [str(telegram_id), name] + [""] * len(PANEL_COLS)
-        ws.append_row(new_row)
-        ADMIN_IDS.add(telegram_id)
-        logger.info(f"[ADMIN] Yangi admin qo'shildi: {name} ({telegram_id})")
-        return True
-    except Exception as e:
-        logger.error(f"[ADMIN] add_admin_to_sheet xato: {e}")
-        return False
-
-
-def remove_admin_from_sheet(telegram_id: int) -> bool:
-    """Adminni 'Adminlar' varag'idan o'chiradi va ma'lumotlarini tozalaydi."""
-    try:
-        if telegram_id == SUPER_ADMIN_ID:
-            return False  # Super adminni o'chirib bo'lmaydi
-        ws = _get_adminlar_ws()
-        rows = ws.get_all_values()
-        for i, row in enumerate(rows[1:], start=2):
-            if row and row[0].strip() == str(telegram_id):
-                ws.delete_rows(i)
-                ADMIN_IDS.discard(telegram_id)
-                ADMIN_PERMISSIONS.pop(telegram_id, None)
-                logger.info(f"[ADMIN] Admin o'chirildi: {telegram_id}")
-                return True
-        return False
-    except Exception as e:
-        logger.error(f"[ADMIN] remove_admin_from_sheet xato: {e}")
-        return False
-
-
-def get_admin_list_from_sheet() -> list:
-    """[(telegram_id, ismi, panel_set)] ro'yxatini qaytaradi."""
-    try:
-        ws = _get_adminlar_ws()
-        rows = ws.get_all_values()
-        result = []
-        for row in rows[1:]:
-            if row and row[0].strip().lstrip("-").isdigit():
-                tid = int(row[0].strip())
-                name = row[1].strip() if len(row) > 1 else "Noma'lum"
-                panels = set()
-                for panel_key, col_idx in PANEL_COLS.items():
-                    if len(row) > col_idx and str(row[col_idx]).strip() == "*":
-                        panels.add(panel_key)
-                result.append((tid, name, panels))
-        return result
-    except Exception as e:
-        logger.error(f"[ADMIN] get_admin_list_from_sheet xato: {e}")
-        return []
-
-
-def admin_list_keyboard(language):
-    return ReplyKeyboardMarkup([
-        ["➕ Admin qo'shish" if language == "uz" else "➕ Добавить админа"],
-        ["➖ Admin o'chirish" if language == "uz" else "➖ Удалить админа"],
-        ["⬅️ Orqaga" if language == "uz" else "⬅️ Назад"],
-    ], resize_keyboard=True)
-
-
-async def admin_list_enter(update, ctx):
-    """'👥 Adminlar' tugmasi bosilganda — faqat super admin."""
-    language = ctx.user_data.get("lang", "uz")
-    uid = update.effective_user.id
-    if uid != SUPER_ADMIN_ID:
-        return None
-
-    admins = await run_read(get_admin_list_from_sheet)
-    panel_name_map = {
-        "davomat": "Davomat", "royxat": "Ro'yxat",
-        "hisobot": "Hisobot", "eksklyuziv": "Eksklyuziv", "murojaat": "Murojaat",
-    }
-    lines = [f"👑 Super admin: {SUPER_ADMIN_ID} (siz)"]
-    for tid, name, panels in admins:
-        panel_str = ", ".join(panel_name_map.get(p, p) for p in sorted(panels)) if panels else "—"
-        lines.append(f"👤 {name} — `{tid}`\n   Panellar: {panel_str}")
-    text = "*👥 Adminlar ro'yxati:*\n\n" + "\n".join(lines) if language == "uz" \
-        else "*👥 Список админов:*\n\n" + "\n".join(lines)
-
-    await update.message.reply_text(
-        text, parse_mode="Markdown",
-        reply_markup=admin_list_keyboard(language)
-    )
-    return ADMIN_LIST_STATE
-
-
-async def admin_list_handler(update, ctx):
-    language = ctx.user_data.get("lang", "uz")
-    txt = update.message.text
-    uid = update.effective_user.id
-    from bot import main_keyboard, get_lang, MENU, ADMIN_PANEL, admin_panel_keyboard, T as BT
-
-    if uid != SUPER_ADMIN_ID:
-        return MENU
-
-    back_txt = "⬅️ Orqaga" if language == "uz" else "⬅️ Назад"
-    add_txt  = "➕ Admin qo'shish" if language == "uz" else "➕ Добавить админа"
-    del_txt  = "➖ Admin o'chirish" if language == "uz" else "➖ Удалить админа"
-
-    if txt == back_txt:
-        await update.message.reply_text(
-            BT[language]["admin_panel_menu"],
-            parse_mode="Markdown",
-            reply_markup=admin_panel_keyboard(language, is_super=True)
-        )
-        return ADMIN_PANEL
-
-    elif txt == add_txt:
-        await update.message.reply_text(
-            "Yangi adminning *Telegram ID* sini yuboring:\n_(Botga /start bosgan bo'lishi kerak)_"
-            if language == "uz" else
-            "Введите *Telegram ID* нового админа:\n_(Должен был нажать /start боту)_",
-            parse_mode="Markdown",
-            reply_markup=ReplyKeyboardMarkup([["⬅️ Orqaga" if language == "uz" else "⬅️ Назад"]],
-                                              resize_keyboard=True)
-        )
-        return ADMIN_NEW_ID
-
-    elif txt == del_txt:
-        admins = await run_read(get_admin_list_from_sheet)
-        if not admins:
-            await update.message.reply_text("Qo'shilgan adminlar yo'q." if language == "uz"
-                                             else "Нет добавленных админов.")
-            return ADMIN_LIST_STATE
-        kb_rows = []
-        for tid, name, _ in admins:
-            kb_rows.append([InlineKeyboardButton(
-                f"🗑 {name} ({tid})",
-                callback_data=f"deladmin:{tid}"
-            )])
-        from telegram import InlineKeyboardMarkup as IKM
-        await update.message.reply_text(
-            "O'chirish uchun adminni tanlang:" if language == "uz"
-            else "Выберите админа для удаления:",
-            reply_markup=IKM(kb_rows)
-        )
-        return ADMIN_LIST_STATE
-
-    return ADMIN_LIST_STATE
-
-
-async def admin_new_id_handler(update, ctx):
-    language = ctx.user_data.get("lang", "uz")
-    txt = update.message.text.strip()
-    back_txt = "⬅️ Orqaga" if language == "uz" else "⬅️ Назад"
-
-    if txt == back_txt:
-        return await admin_list_enter(update, ctx)
-
-    try:
-        new_id = int(txt.lstrip("-"))
-    except ValueError:
-        await update.message.reply_text("❌ Faqat raqam kiriting (masalan: 123456789)")
-        return ADMIN_NEW_ID
-
-    if new_id == SUPER_ADMIN_ID:
-        await update.message.reply_text("✅ Bu allaqachon super admin.")
-        return ADMIN_LIST_STATE
-
-    ctx.user_data["new_admin_id"] = new_id
-    await update.message.reply_text(
-        f"ID: `{new_id}`\n\nAdmin *ismini* kiriting:" if language == "uz"
-        else f"ID: `{new_id}`\n\nВведите *имя* админа:",
-        parse_mode="Markdown"
-    )
-    return ADMIN_NEW_NAME
-
-
-async def admin_new_name_handler(update, ctx):
-    language = ctx.user_data.get("lang", "uz")
-    txt = update.message.text.strip()
-    back_txt = "⬅️ Orqaga" if language == "uz" else "⬅️ Назад"
-
-    if txt == back_txt:
-        return await admin_list_enter(update, ctx)
-
-    new_id = ctx.user_data.pop("new_admin_id", None)
-    if not new_id:
-        return await admin_list_enter(update, ctx)
-
-    ok = await run_write(add_admin_to_sheet, new_id, txt)
-    if ok:
-        await update.message.reply_text(
-            f"✅ *{txt}* admin sifatida qo'shildi!" if language == "uz"
-            else f"✅ *{txt}* добавлен как админ!",
-            parse_mode="Markdown"
-        )
-    else:
-        await update.message.reply_text("⚠️ Bu admin allaqachon ro'yxatda." if language == "uz"
-                                         else "⚠️ Этот админ уже в списке.")
-    return await admin_list_enter(update, ctx)
-
-
-async def admin_delete_callback(update, ctx):
-    """'🗑 Admin' inline tugmasi bosilganda."""
-    query = update.callback_query
-    await query.answer()
-    language = ctx.user_data.get("lang", "uz")
-    _, tid_str = query.data.split(":", 1)
-    tid = int(tid_str)
-
-    ok = await run_write(remove_admin_from_sheet, tid)
-    if ok:
-        await query.edit_message_text(
-            f"✅ Admin `{tid}` o'chirildi." if language == "uz"
-            else f"✅ Админ `{tid}` удалён.",
-            parse_mode="Markdown"
-        )
-    else:
-        await query.edit_message_text("❌ O'chirib bo'lmadi (super admin yoki topilmadi).")
-
-
-def get_admin_mgmt_states():
-    from telegram.ext import MessageHandler, CallbackQueryHandler, filters
-    return {
-        ADMIN_LIST_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_list_handler)],
-        ADMIN_NEW_ID:     [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_new_id_handler)],
-        ADMIN_NEW_NAME:   [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_new_name_handler)],
-    }
-
-
-def get_admin_mgmt_callbacks():
-    from telegram.ext import CallbackQueryHandler
-    return [CallbackQueryHandler(admin_delete_callback, pattern=r"^deladmin:")]
 
 
 def get_mudir_map() -> dict:
@@ -1015,62 +683,47 @@ def get_farmatsevt_salary(telegram_id) -> dict | None:
 
 def get_firma_map() -> dict:
     """
-    PHARMACY_SHEET_ID → "To'lovlar" varag'idan firma nomi -> TelegramID lug'atini qaytaradi.
-    Jadval tuzilishi:
-      A (0): Firma nomi | B (1): ... | C (2): ... | D (3): Telefon | E (4): TelegramID
-    Bitta firmaning bir necha qatori bo'lsa — birinchi TelegramID olinadi.
+    PHARMACY_SHEET_ID ichidagi "Firmalar" varag'idan (register_handlers.py
+    orqali to'ldiriladi) firma nomi -> TelegramID lug'atini qaytaradi.
+    Faqat TelegramID to'ldirilgan (ro'yxatdan o'tgan) firmalar kiradi.
+
+    Jadval tuzilishi: Firma nomi | Telefon | TelegramID | FileID | FileName
     """
     try:
-        client = _get_client()
-        sh = client.open_by_key(SALARY_SHEET_ID)
-        ws = _find_worksheet_flexible(sh, "To'lovlar")
-        all_values = ws.get_all_values()
+        from register_handlers import _get_firmalar_ws
+        ws = _get_firmalar_ws()
+        records = ws.get_all_records()
 
         firma_map = {}
-        for row in all_values[1:]:   # sarlavhani o'tkazib yuboramiz
-            if len(row) < 5:
-                continue
-            firma = str(row[0]).strip()   # Col A — firma nomi
-            tid   = str(row[4]).strip()   # Col E — TelegramID
-            try:
-                tid_int = str(int(float(tid))) if tid and tid not in ("", "0") else ""
-            except ValueError:
-                tid_int = ""
-            if firma and tid_int and firma.upper() not in firma_map:
-                firma_map[firma.upper()] = tid_int   # birinchi to'ldirilgan qator qoladi
+        for row in records:
+            firma = str(row.get("Firma nomi", "")).strip()
+            tid = str(row.get("TelegramID", "")).strip()
+            if firma and tid and tid not in ("", "0"):
+                firma_map[firma.upper()] = tid
 
-        logger.info(f"[FIRMS] To'lovlar dan {len(firma_map)} ta firma topildi")
+        logger.info(f"[FIRMS] {len(firma_map)} ta ro'yxatdan o'tgan firma topildi")
         return firma_map
     except Exception as e:
         logger.error(f"[FIRMS] get_firma_map xato: {e}")
         return {}
 
 
-def save_firma_file(firma_nomi: str, file_id: str, file_name: str,
-                    month: str | None = None) -> bool:
+def save_firma_file(firma_nomi: str, file_id: str, file_name: str) -> bool:
     """
-    Firmalar varag'i col-4 ga JSON formatida fayl ma'lumotlarini saqlaydi.
-    Oxirgi 3 oy saqlanadi. Format:
-      {"2026-10": {"file_id": "...", "file_name": "..."}, ...}
-    month ko'rsatilmasa — _prev_month_key() ishlatiladi.
+    Berilgan firma qatoriga fayl ID va nomini saqlaydi — bu keyinchalik
+    firma o'zi "Hisobotimni olish" tugmasini bosganda shu faylni qayta
+    yuborish uchun ishlatiladi (Telegram file_id doimiy amal qiladi,
+    faylni qayta serverga yuklash shart emas).
     """
     try:
-        import json as _j
         from register_handlers import _get_firmalar_ws
         ws = _get_firmalar_ws()
         all_values = ws.get_all_values()
-        if not month:
-            month = _prev_month_key()
 
         for i, row in enumerate(all_values[1:], start=2):
             if row and _norm_firma_nomi(row[0]) == _norm_firma_nomi(firma_nomi):
-                raw = row[3] if len(row) > 3 else ""
-                files_dict = _parse_firma_files_json(raw)
-                files_dict[month] = {"file_id": file_id, "file_name": file_name}
-                # Oxirgi 3 oyni saqla
-                sorted_months = sorted(files_dict.keys(), reverse=True)[:3]
-                files_dict = {m: files_dict[m] for m in sorted_months}
-                ws.update_cell(i, 4, _j.dumps(files_dict, ensure_ascii=False))
+                ws.update_cell(i, 4, file_id)
+                ws.update_cell(i, 5, file_name)
                 return True
         return False
     except Exception as e:
@@ -1092,16 +745,10 @@ def get_firma_file_by_telegram_id(telegram_id) -> dict | None:
 
         for row in records:
             if str(row.get("TelegramID", "")).strip() == tid:
-                raw = str(row.get("FileID", "")).strip()
-                months = _parse_firma_files_json(raw)
-                # Backward compat: eski format — bitta file_id
-                if not months and raw and not raw.startswith('{'):
-                    fn = str(row.get("FileName", "")).strip()
-                    fm = str(row.get("FileMonth", "")).strip() or _prev_month_key()
-                    months = {fm: {"file_id": raw, "file_name": fn}}
                 return {
                     "firma_nomi": str(row.get("Firma nomi", "")).strip(),
-                    "months":     months,
+                    "file_id": str(row.get("FileID", "")).strip(),
+                    "file_name": str(row.get("FileName", "")).strip(),
                 }
         return None
     except Exception as e:
@@ -1153,15 +800,10 @@ def get_firma_file_by_phone(phone: str) -> dict | None:
         for row in records:
             row_phone = _norm_phone_for_firma(str(row.get("Telefon", "")))
             if row_phone and row_phone == target:
-                raw = str(row.get("FileID", "")).strip()
-                months = _parse_firma_files_json(raw)
-                if not months and raw and not raw.startswith('{'):
-                    fn = str(row.get("FileName", "")).strip()
-                    fm = str(row.get("FileMonth", "")).strip() or _prev_month_key()
-                    months = {fm: {"file_id": raw, "file_name": fn}}
                 return {
                     "firma_nomi": str(row.get("Firma nomi", "")).strip(),
-                    "months":     months,
+                    "file_id":    str(row.get("FileID", "")).strip(),
+                    "file_name":  str(row.get("FileName", "")).strip(),
                 }
         return None
     except Exception as e:
@@ -1201,15 +843,10 @@ def get_firma_file_by_name(firma_nomi: str) -> dict | None:
 
         for row in records:
             if _norm_firma_nomi(row.get("Firma nomi", "")) == target:
-                raw = str(row.get("FileID", "")).strip()
-                months = _parse_firma_files_json(raw)
-                if not months and raw and not raw.startswith('{'):
-                    fn = str(row.get("FileName", "")).strip()
-                    fm = str(row.get("FileMonth", "")).strip() or _prev_month_key()
-                    months = {fm: {"file_id": raw, "file_name": fn}}
                 return {
                     "firma_nomi":  str(row.get("Firma nomi", "")).strip(),
-                    "months":      months,
+                    "file_id":     str(row.get("FileID", "")).strip(),
+                    "file_name":   str(row.get("FileName", "")).strip(),
                     "telegram_id": str(row.get("TelegramID", "")).strip(),
                     "username":    str(row.get("Username", "")).strip(),
                 }
@@ -1239,15 +876,10 @@ def get_firma_file_by_username(username: str) -> dict | None:
         for row in records:
             row_uname = _norm_username(str(row.get("Username", "")))
             if row_uname and row_uname == target:
-                raw = str(row.get("FileID", "")).strip()
-                months = _parse_firma_files_json(raw)
-                if not months and raw and not raw.startswith('{'):
-                    fn = str(row.get("FileName", "")).strip()
-                    fm = str(row.get("FileMonth", "")).strip() or _prev_month_key()
-                    months = {fm: {"file_id": raw, "file_name": fn}}
                 return {
                     "firma_nomi": str(row.get("Firma nomi", "")).strip(),
-                    "months":     months,
+                    "file_id":    str(row.get("FileID", "")).strip(),
+                    "file_name":  str(row.get("FileName", "")).strip(),
                 }
         return None
     except Exception as e:
@@ -1313,36 +945,6 @@ def save_new_firma(firma_nomi: str, username: str = "",
         # Yangi firma — qator qo'shish
         ws.append_row([firma_nomi, ph, tid, "", "", uname])
         logger.info(f"[FIRMS] Yangi firma qo'shildi: '{firma_nomi}'")
-
-        # SHEETS_ID → "Firmalar" ga ham yozish (dorixonalar_yangi)
-        try:
-            if SHEETS_ID:
-                gc2 = _get_client()
-                sh2 = gc2.open_by_key(SHEETS_ID)
-                ws2 = sh2.worksheet("Firmalar")
-                all2 = ws2.get_all_values()
-                target2 = _norm_firma_nomi(firma_nomi)
-                found2 = False
-                for i2, row2 in enumerate(all2[1:], start=2):
-                    if row2 and _norm_firma_nomi(row2[0]) == target2:
-                        batch2 = []
-                        if ph:
-                            batch2.append({"range": f"B{i2}", "values": [[ph]]})
-                        if tid:
-                            batch2.append({"range": f"C{i2}", "values": [[tid]]})
-                        if uname:
-                            batch2.append({"range": f"F{i2}", "values": [[uname]]})
-                        if batch2:
-                            ws2.batch_update(batch2)
-                        found2 = True
-                        logger.info(f"[FIRMS2] SHEETS_ID Firmalar yangilandi: '{firma_nomi}'")
-                        break
-                if not found2:
-                    ws2.append_row([firma_nomi, ph, tid, "", "", uname])
-                    logger.info(f"[FIRMS2] SHEETS_ID Firmalar ga qo'shildi: '{firma_nomi}'")
-        except Exception as e2:
-            logger.error(f"[FIRMS2] SHEETS_ID yozishda xato: {e2}")
-
         return True
     except Exception as e:
         logger.error(f"[FIRMS] save_new_firma xato: {e}")
@@ -1994,69 +1596,17 @@ async def sal_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 # ─── Firmalarga fayl yuborish (ZIP) ────────────────────────────────────────────
 
 async def cmd_send_firm_files(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """Admin: avval qaysi oy uchun ekanini tanlaydi, keyin ZIP/xlsx so'rаydi."""
+    """Admin: firmalarga yuboriladigan hisobot fayllari ZIP arxivini so'raydi."""
     if update.effective_user.id not in ADMIN_IDS:
         await update.message.reply_text("❌ Ruxsat yo'q.")
         return
-
-    months = _recent_months(4)
-    btns = [[m + " — " + _month_display(m, "uz")] for m in months]
-    btns.append(["❌ Bekor qilish"])
-    from telegram import ReplyKeyboardMarkup as _RKM
     await update.message.reply_text(
-        "📅 *Qaysi oy hisoboti yuklanmoqda?*\n\nOyni tanlang:",
-        parse_mode="Markdown",
-        reply_markup=_RKM(btns, resize_keyboard=True, one_time_keyboard=True),
-    )
-    return FIRM_UPLOAD_MONTH_PICK
-
-
-async def firm_upload_month_pick_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """Admin oy tanlagandan so'ng — faylni kutadi."""
-    from bot import main_keyboard, get_lang, MENU
-    text = update.message.text.strip()
-
-    if "Bekor" in text or "❌" in text:
-        await update.message.reply_text(
-            "❌ Bekor qilindi.",
-            reply_markup=main_keyboard(get_lang(ctx)),
-        )
-        return MENU
-
-    # "2026-10 — Oktyabr 2026" → "2026-10"
-    month_key = text.split(" — ")[0].strip()
-    import re as _re
-    if not _re.match(r"^\d{4}-\d{2}$", month_key):
-        await update.message.reply_text("❌ Oy noto'g'ri tanlandi. Qayta urinib ko'ring.")
-        return FIRM_UPLOAD_MONTH_PICK
-
-    ctx.user_data["upload_month"] = month_key
-    month_label = _month_display(month_key, "uz")
-
-    # Agar individual upload flow bo'lsa — firm_report_enter ga yo'naltirish
-    if ctx.user_data.pop("upload_flow", None) == "individual":
-        from telegram import ReplyKeyboardMarkup as _RKM
-        back_txt = "⬅️ Orqaga"
-        await update.message.reply_text(
-            f"✅ *{month_label}* oyi tanlandi.\n\n"
-            "📥 *Firma otchyotini yuklash*\n\n"
-            "Aylanma hisoboti (.xlsx) faylini yuboring.\n"
-            "Fayl *izohiga* (caption) firma *nomini* yoki *INN raqamini* yozing.\n\n"
-            "Misol izoh: `АВЕНСИС ГРУПП` yoki `123456789`",
-            parse_mode="Markdown",
-            reply_markup=_RKM([[back_txt]], resize_keyboard=True),
-        )
-        return FIRM_REPORT_WAIT
-
-    from telegram import ReplyKeyboardMarkup as _RKM
-    await update.message.reply_text(
-        f"✅ *{month_label}* oyi tanlandi.\n\n"
-        "📦 Endi *ZIP arxiv* yoki bitta *.xlsx fayl* yuboring.\n\n"
+        "📦 *Firmalarga yuboriladigan hisobot fayllari ZIP arxivini yuboring*\n\n"
         "Fayl nomlari firma nomiga mos bo'lishi kerak:\n"
         "`ООО Фарм Импекс.xlsx`, `Дори-Дармон.xlsx` va h.k.\n\n"
-        "Faqat ro'yxatdan o'tgan firmalarga yuboriladi.",
+        "Faqat *ro'yxatdan o'tgan* (botga TelegramID orqali ulangan) "
+        "firmalarga yuboriladi.",
         parse_mode="Markdown",
-        reply_markup=_RKM([["❌ Bekor qilish"]], resize_keyboard=True),
     )
     return FIRM_WAIT_ZIP
 
@@ -2140,10 +1690,9 @@ async def firm_receive_zip(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                             (k for k, v in firma_map.items() if v == tid), None
                         )
                         if matched_firma and sent_msg.document:
-                            _upload_month = ctx.user_data.get("upload_month") or _prev_month_key()
                             await run_write(
                                 save_firma_file, matched_firma,
-                                sent_msg.document.file_id, base_name, _upload_month,
+                                sent_msg.document.file_id, base_name,
                             )
                     except Exception as e:
                         logger.error(f"[FIRMS] file_id saqlash xato: {e}")
@@ -2218,9 +1767,7 @@ async def _firm_receive_single_xlsx(update: Update, ctx: ContextTypes.DEFAULT_TY
 
         matched_firma = next((k for k, v in firma_map.items() if v == tid), None)
         if matched_firma and sent_msg.document:
-            _upload_month = ctx.user_data.get("upload_month") or _prev_month_key()
-            await run_write(save_firma_file, matched_firma, sent_msg.document.file_id,
-                            base_name, _upload_month)
+            await run_write(save_firma_file, matched_firma, sent_msg.document.file_id, base_name)
 
         await msg.edit_text(f"✅ *{matched_firma or base_name}* ga yuborildi va saqlandi!", parse_mode="Markdown")
 
@@ -2240,76 +1787,6 @@ async def firm_zip_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         reply_markup=main_keyboard(get_lang(ctx))
     )
     return MENU
-
-
-async def firm_get_month_pick_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """
-    Firma/admin qaysi oy hisobotini olmoqchi ekanini tanlaydi.
-    ctx.user_data["firm_get_months"] da mavjud oylar saqlanadi.
-    """
-    from bot import main_keyboard, get_lang, MENU, FIRM_REPORTS_MENU
-    language = ctx.user_data.get("lang", "uz")
-    text     = update.message.text.strip()
-    back_txt = "⬅️ Orqaga" if language == "uz" else "⬅️ Назад"
-
-    if back_txt in text or "⬅️" in text:
-        from bot import firm_reports_keyboard
-        is_admin = update.effective_user.id in ADMIN_IDS
-        await update.message.reply_text(
-            "📊 Bo'limni tanlang:" if language == "uz" else "📊 Выберите раздел:",
-            reply_markup=firm_reports_keyboard(language, is_admin),
-        )
-        return FIRM_REPORTS_MENU
-
-    _months   = ctx.user_data.get("firm_get_months", {})
-    firm_info = ctx.user_data.get("firm_get_firm_info", {})
-
-    # "Oktyabr 2026 (2026-10)" → "2026-10"
-    import re as _re
-    _m = _re.search(r"\((\d{4}-\d{2})\)", text)
-    if not _m:
-        # Faqat "YYYY-MM" shakli bo'lishi mumkin
-        _m2 = _re.search(r"(\d{4}-\d{2})", text)
-        month_key = _m2.group(1) if _m2 else None
-    else:
-        month_key = _m.group(1)
-
-    if not month_key or month_key not in _months:
-        await update.message.reply_text(
-            "❌ Oy topilmadi. Qayta tanlang."
-            if language == "uz" else
-            "❌ Месяц не найден. Выберите снова."
-        )
-        return FIRM_GET_MONTH_PICK
-
-    fdata      = _months[month_key]
-    month_lbl  = _month_display(month_key, language)
-    firma_nomi = firm_info.get("firma_nomi", "")
-
-    try:
-        await ctx.bot.send_document(
-            chat_id=update.effective_chat.id,
-            document=fdata["file_id"],
-            filename=fdata.get("file_name") or "hisobot.xlsx",
-            caption=(
-                f"📊 *{firma_nomi}* — {month_lbl} hisoboti"
-                if language == "uz" else
-                f"📊 *{firma_nomi}* — Отчёт за {month_lbl}"
-            ),
-            parse_mode="Markdown",
-        )
-    except Exception as e:
-        logger.error(f"[FIRMS] Oy fayl yuborish xato: {e}")
-        await update.message.reply_text("❌ Faylni yuborishda xatolik yuz berdi.")
-
-    # Asosiy menyuga qaytish
-    from bot import firm_reports_keyboard
-    is_admin = update.effective_user.id in ADMIN_IDS
-    await update.message.reply_text(
-        "📊 Bo'limni tanlang:" if language == "uz" else "📊 Выберите раздел:",
-        reply_markup=firm_reports_keyboard(language, is_admin),
-    )
-    return FIRM_REPORTS_MENU
 
 
 # ─── Firma o'zi hisobotini olishi (self-service) ───────────────────────────────
@@ -2332,8 +1809,26 @@ async def _send_firm_direct_report(
     firma_nomi  = firm_info.get("firma_nomi", "")
     back_txt    = "⬅️ Назад" if language == "ru" else "⬅️ Orqaga"
 
-    # ── 1. To'lovlar / shartnoma ma'lumotlari (ERTA — file yuborishdan oldin) ──
+    # ── 1. Hisobot faylini yuborish ──────────────────────────────────────────
+    if firm_info.get("file_id"):
+        try:
+            await ctx.bot.send_document(
+                chat_id=update.effective_chat.id,
+                document=firm_info["file_id"],
+                filename=firm_info.get("file_name") or "hisobot.xlsx",
+            )
+        except Exception as e:
+            logger.error(f"[FIRMS] Fayl yuborish xato: {e}")
+            await update.message.reply_text("❌ Faylni yuborishda xatolik yuz berdi.")
+    else:
+        await update.message.reply_text(
+            "📭 Hisobot fayli hali yuklanmagan." if language == "uz"
+            else "📭 Файл отчёта ещё не загружен."
+        )
+
+    # ── 2. To'lovlar varag'idan asosiy ma'lumotlar ───────────────────────────
     if summa_info_override is not None:
+        # Postawchik shartnoma tanlashdan keyin — to'g'ridan ma'lumot uzatilgan
         summa_info = summa_info_override
         inn_val    = summa_info.get("inn", "")
     else:
@@ -2365,75 +1860,8 @@ async def _send_firm_direct_report(
             summa_info = None
             inn_val    = ""
 
-    # ── 2. Oylik varaqlar ro'yxati (file yuborishdan OLDIN) ──────────────────
+    # ── 3. Oylik varaqlar ro'yxati ───────────────────────────────────────────
     available_months = await run_read(_list_monthly_sheets_for_firm, firma_nomi, inn_val)
-
-    # ── 3. Hisobot faylini yuborish (faqat oy tanlash kerak bo'lmasa) ─────────
-    # Agar available_months > 1 bo'lsa — faylni YUBORMAY qo'yamiz:
-    # firm_month_select_handler o'zi tanlangan oy faylini yuboradi.
-    from datetime import date as _date
-    _today_day = _date.today().day
-    _months    = firm_info.get("months", {})  # {"2026-10": {"file_id":..., "file_name":...}, ...}
-
-    if len(available_months) <= 1:
-        # Oy tanlash yo'q — faylni hoziroq yuborish
-        if not _months:
-            _no_file_msg = (
-                "📭 Hisobot fayli hali yuklanmagan.\n\n"
-                "🗓 Hisobot har oyning *5-sanasidan 10-sanasigacha* yuklanadi.\n"
-                "Shu oraliqda qayta harakat qilib ko'ring."
-                if language == "uz" else
-                "📭 Файл отчёта ещё не загружен.\n\n"
-                "🗓 Отчёт загружается с *5 по 10 число* каждого месяца.\n"
-                "Попробуйте снова в этот период."
-            )
-            await update.message.reply_text(_no_file_msg, parse_mode="Markdown")
-        elif len(_months) == 1:
-            _only_month    = sorted(_months.keys(), reverse=True)[0]
-            _fdata         = _months[_only_month]
-            _month_lbl     = _month_display(_only_month, language)
-            _expected_month = _prev_month_key()
-            if _only_month != _expected_month:
-                _exp_lbl = _month_display(_expected_month, language)
-                _warn = (
-                    f"📭 *{_exp_lbl}* hisoboti hali yuklanmagan.\n\n"
-                    f"🗓 Hisobot har oyning *5-sanasidan 10-sanasigacha* yuklanadi.\n"
-                    f"Shu oraliqda qayta harakat qilib ko'ring.\n\n"
-                    f"📁 Quyida bazadagi oxirgi hisobot — *{_month_lbl}*:"
-                    if language == "uz" else
-                    f"📭 Отчёт за *{_exp_lbl}* ещё не загружен.\n\n"
-                    f"🗓 Отчёт загружается с *5 по 10 число* каждого месяца.\n"
-                    f"Попробуйте снова в этот период.\n\n"
-                    f"📁 Ниже последний доступный отчёт — *{_month_lbl}*:"
-                )
-                await update.message.reply_text(_warn, parse_mode="Markdown")
-            await ctx.bot.send_document(
-                chat_id=update.effective_chat.id,
-                document=_fdata["file_id"],
-                filename=_fdata.get("file_name") or "hisobot.xlsx",
-                caption=f"📊 {_month_lbl} hisoboti" if language == "uz" else f"📊 Отчёт за {_month_lbl}",
-            )
-        else:
-            # Bir nechta oy bor — tanlash so'rash (FIRM_GET_MONTH_PICK)
-            _sorted_months = sorted(_months.keys(), reverse=True)
-            _btns = [
-                [_month_display(m, language) + f" ({m})"]
-                for m in _sorted_months
-            ]
-            _btns.append(["⬅️ Orqaga" if language == "uz" else "⬅️ Назад"])
-            from telegram import ReplyKeyboardMarkup as _RKM
-            ctx.user_data["firm_get_months"]    = _months
-            ctx.user_data["firm_get_firm_info"] = firm_info
-            ctx.user_data["firm_get_from_menu"] = from_menu
-            await update.message.reply_text(
-                "📅 *Qaysi oy hisobotini olmoqchisiz?*"
-                if language == "uz" else
-                "📅 *За какой месяц хотите получить отчёт?*",
-                parse_mode="Markdown",
-                reply_markup=_RKM(_btns, resize_keyboard=True, one_time_keyboard=True),
-            )
-            return FIRM_GET_MONTH_PICK
-    # else: available_months > 1 → fayl firm_month_select_handler da yuboriladi
 
     # ── 4. Shartnoma / INN / To'lov bloki ────────────────────────────────────
     lines = [f"🏢 *{firma_nomi}*", ""]
@@ -3276,37 +2704,6 @@ def _prev_month_key() -> str:
     return prev_last.strftime("%Y-%m")
 
 
-def _recent_months(n: int = 4) -> list[str]:
-    """Oxirgi n oyni 'YYYY-MM' formatida (yangi → eski tartibda) qaytaradi."""
-    import datetime as _dt
-    result = []
-    today = _dt.date.today()
-    for i in range(n):
-        first = today.replace(day=1)
-        for _ in range(i):
-            first = (first - _dt.timedelta(days=1)).replace(day=1)
-        result.append(first.strftime("%Y-%m"))
-    return result
-
-
-def _parse_firma_files_json(raw: str) -> dict:
-    """
-    Firmalar varag'idagi JSON qatorini parse qiladi.
-    Format: {"2026-10": {"file_id": "...", "file_name": "..."}, ...}
-    Eski fayl_id string bo'lsa yoki bo'sh bo'lsa — {} qaytaradi.
-    """
-    if not raw or not str(raw).strip():
-        return {}
-    raw = str(raw).strip()
-    if not raw.startswith('{'):
-        return {}  # eski format (raw file_id) — bo'sh dict
-    try:
-        import json as _j
-        return _j.loads(raw)
-    except Exception:
-        return {}
-
-
 def _month_display(month_key: str, language: str = "uz") -> str:
     """'2026-08' → 'Avgust 2026' yoki 'Август 2026'."""
     try:
@@ -3867,13 +3264,13 @@ async def firm_report_receive_file(update: Update, ctx: ContextTypes.DEFAULT_TYP
 
         # 4a-2) Firmalar varag'iga FileID va FileName saqlash
         #        (firma vakili keyinchalik "Hisobot olish" bosganda shu fayl yuboriladi)
-        cur_month = ctx.user_data.get("upload_month") or _prev_month_key()
         try:
-            await run_write(save_firma_file, firma_nomi, new_file_id, new_file_name, cur_month)
+            await run_write(save_firma_file, firma_nomi, new_file_id, new_file_name)
         except Exception as _fe:
             logger.warning(f"[FIRM_REPORT] FileID saqlashda xato: {_fe}")
 
         # 4b) Oylik varaqqa yozish (oldingi oy — hisobot har doim o'tgan oy uchun)
+        cur_month  = _prev_month_key()
         month_err  = await run_write(_save_to_monthly_sheet, firma_nomi, inn_val, cur_month, sotuv, priod, ostatok,
                                      new_file_id, new_file_name)
         if month_err != "ok":
@@ -4087,14 +3484,14 @@ async def firm_contract_select_handler(update: Update, ctx: ContextTypes.DEFAULT
         err = await run_write(_update_firm_totals_by_row_index, row_i, sotuv, priod, ostatok)
 
         # Firmalar varag'iga FileID saqlash (firma vakili hisobot olishi uchun)
-        cur_month = ctx.user_data.get("upload_month") or _prev_month_key()
         try:
             doc_ctx = ctx.user_data.get("firm_upload_doc")
             if doc_ctx:
-                await run_write(save_firma_file, firma_nomi, doc_ctx["file_id"],
-                                doc_ctx["file_name"], cur_month)
+                await run_write(save_firma_file, firma_nomi, doc_ctx["file_id"], doc_ctx["file_name"])
         except Exception as _fe:
             logger.warning(f"[FIRM_CONTRACT] FileID saqlashda xato: {_fe}")
+
+        cur_month = _prev_month_key()
         _doc_ctx  = ctx.user_data.get("firm_upload_doc", {})
         month_err = await run_write(_save_to_monthly_sheet, firma_nomi, inn_val, cur_month, sotuv, priod, ostatok,
                                     _doc_ctx.get("file_id", ""), _doc_ctx.get("file_name", ""))
@@ -4736,43 +4133,8 @@ def _resolve_target_ids(name_map: dict, selected_names) -> list:
     return list(ids)
 
 
-def _resolve_target_pairs(name_map: dict, selected_names) -> list:
-    """
-    name_map: {NOM(upper): telegram_id}. selected_names: None (hammaga)
-    yoki tanlangan nomlar ro'yxati. Qisman moslikni ham qidiradi.
-    (firma_nomi, telegram_id) juftliklari ro'yxatini qaytaradi — Excel
-    hisoboti uchun firma nomini saqlab qolish maqsadida ishlatiladi.
-    """
-    if selected_names is None:
-        seen = set()
-        pairs = []
-        for name, tid in name_map.items():
-            if tid not in seen:
-                pairs.append((name, tid))
-                seen.add(tid)
-        return pairs
-
-    pairs = []
-    seen_ids = set()
-    for wanted in selected_names:
-        wanted_u = wanted.strip().upper()
-        if wanted_u in name_map:
-            tid = name_map[wanted_u]
-            if tid not in seen_ids:
-                pairs.append((wanted_u, tid))
-                seen_ids.add(tid)
-            continue
-        for key, tid in name_map.items():
-            if wanted_u in key or key in wanted_u:
-                if tid not in seen_ids:
-                    pairs.append((key, tid))
-                    seen_ids.add(tid)
-                break
-    return pairs
-
-
 async def appeal_firm_msg_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """Firmalarga yuboriladigan xabar matni qabul qilinadi, yuboriladi va Excel hisobot hosil qilinadi."""
+    """Firmalarga yuboriladigan xabar matni qabul qilinadi va yuboriladi."""
     language = ctx.user_data.get("lang", "uz")
     back_txt = "⬅️ Назад" if language == "ru" else "⬅️ Orqaga"
     from bot import main_keyboard, get_lang, MENU
@@ -4794,106 +4156,13 @@ async def appeal_firm_msg_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE
     msg = await update.message.reply_text("⏳ Yuborilmoqda...")
     firma_map = await run_read(get_firma_map)
     selected_names = ctx.user_data.get("appeal_names")
-    firma_pairs = _resolve_target_pairs(firma_map, selected_names) if firma_map else []
+    ids = _resolve_target_ids(firma_map, selected_names) if firma_map else []
 
-    if not firma_pairs:
+    if not ids:
         await msg.edit_text("❌ Mos firma topilmadi.")
     else:
-        # ── Xabar yuborish + per-firma natija kuzatish ──────────────────────
-        from telegram import InlineKeyboardMarkup, InlineKeyboardButton
-        user = update.effective_user
-        sender_name = " ".join(filter(None, [user.first_name, user.last_name])).strip()
-        if not sender_name:
-            sender_name = f"@{user.username}" if user.username else "Administrator"
-        admin_chat_id = update.effective_chat.id
-
-        kb = InlineKeyboardMarkup([[
-            InlineKeyboardButton("✅ Bajarildi", callback_data=f"appealresp:done:{admin_chat_id}"),
-            InlineKeyboardButton("❌ Bekor qilish", callback_data=f"appealresp:cancel:{admin_chat_id}"),
-        ]])
-
-        log_rows = ctx.bot_data.setdefault("appeal_log_rows", {})
-        results = []   # [(firma_nomi, holat_emoji)]
-        sent, failed = 0, 0
-
-        for firma_nomi, tid in firma_pairs:
-            try:
-                await ctx.bot.send_message(
-                    chat_id=int(tid),
-                    text=f"📩 Murojaat\n👤 Kimdan: {sender_name}\n\n{text}",
-                    reply_markup=kb,
-                )
-                sent += 1
-                results.append((firma_nomi, "✅ Yuborildi"))
-                row_idx = await run_write(log_murojaat, tid, text)
-                if row_idx and row_idx > 0:
-                    log_rows[int(tid)] = row_idx
-            except Exception as exc:
-                failed += 1
-                exc_short = str(exc)[:80]
-                results.append((firma_nomi, f"❌ Yuborilmadi: {exc_short}"))
-                logger.warning(f"[APPEAL] Yuborilmadi ({firma_nomi}/{tid}): {exc}")
-
+        sent, failed = await _broadcast_send(update, ctx, ids, text)
         await msg.edit_text(f"✅ Yuborildi: {sent} ta\n❌ Yuborilmadi: {failed} ta")
-
-        # ── Excel hisobot ────────────────────────────────────────────────────
-        try:
-            import openpyxl
-            from openpyxl.styles import Font, PatternFill, Alignment
-            import io as _io
-            from datetime import datetime as _dt
-
-            wb = openpyxl.Workbook()
-            ws_xl = wb.active
-            ws_xl.title = "Xabar hisoboti"
-
-            # Sarlavha
-            headers = ["Firma nomi", "Holat", "Xabar matni"]
-            ws_xl.append(headers)
-            for col_idx in range(1, 4):
-                cell = ws_xl.cell(row=1, column=col_idx)
-                cell.font = Font(bold=True, color="FFFFFF")
-                cell.fill = PatternFill("solid", fgColor="1F4E79")
-                cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-
-            # Ma'lumotlar
-            for firma_nomi, holat in results:
-                ws_xl.append([firma_nomi, holat, text])
-
-            # Qator balandligi va ustun kengligi
-            ws_xl.row_dimensions[1].height = 22
-            ws_xl.column_dimensions["A"].width = 42
-            ws_xl.column_dimensions["B"].width = 50
-            ws_xl.column_dimensions["C"].width = 60
-
-            # Ma'lumot qatorlarini formatlash
-            green_fill = PatternFill("solid", fgColor="E2EFDA")
-            red_fill   = PatternFill("solid", fgColor="FCE4D6")
-            for row_cells in ws_xl.iter_rows(min_row=2, max_col=3):
-                holat_val = row_cells[1].value or ""
-                bg = green_fill if holat_val.startswith("✅") else red_fill
-                for cell in row_cells:
-                    cell.fill = bg
-                    cell.alignment = Alignment(vertical="center", wrap_text=True)
-
-            buf = _io.BytesIO()
-            wb.save(buf)
-            buf.seek(0)
-
-            fname = f"murojaat_hisobot_{_dt.now().strftime('%Y%m%d_%H%M')}.xlsx"
-            from telegram import InputFile as _IF
-            await ctx.bot.send_document(
-                chat_id=update.effective_chat.id,
-                document=_IF(buf, filename=fname),
-                caption=(
-                    f"📊 *Xabar yuborish hisoboti*\n\n"
-                    f"✅ Yuborildi: *{sent}* ta\n"
-                    f"❌ Yuborilmadi: *{failed}* ta"
-                ),
-                parse_mode="Markdown",
-            )
-        except Exception as exc_xl:
-            logger.error(f"[APPEAL] Excel hisobot xatosi: {exc_xl}")
 
     ctx.user_data.pop("appeal_names", None)
     ctx.user_data.pop("appeal_kind", None)
@@ -5472,14 +4741,8 @@ async def firm_month_select_handler(update: Update, ctx: ContextTypes.DEFAULT_TY
             )
         else:
             await update.message.reply_text(
-                f"📭 *{mdisp}* uchun hisobot fayli hali yuklanmagan.\n\n"
-                "🗓 Hisobot har oyning *5-sanasidan 10-sanasigacha* yuklanadi.\n"
-                "Shu oraliqda qayta harakat qilib ko'ring."
-                if language == "uz" else
-                f"📭 Файл отчёта за *{mdisp}* ещё не загружен.\n\n"
-                "🗓 Отчёт загружается с *5 по 10 число* каждого месяца.\n"
-                "Попробуйте снова в этот период.",
-                parse_mode="Markdown",
+                "📂 Bu oy uchun fayl yuklanmagan." if language == "uz"
+                else "📂 Файл за этот месяц не загружен."
             )
 
         # Admin xabardorligi — firma hisobot olganda
@@ -5958,13 +5221,11 @@ async def oplata_karz_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         # (Фирма кейин рўйхатдан ўтганда ўша файлни олади)
         if _sent_filtered_msg and _sent_filtered_msg.document:
             try:
-                _op_month = ctx.user_data.get("upload_month") or _prev_month_key()
                 await run_write(
                     save_firma_file,
                     firma_nomi,
                     _sent_filtered_msg.document.file_id,
                     file_name or "hisobot.xlsx",
-                    _op_month,
                 )
             except Exception as _sf_e:
                 logger.warning(f"[OPLATA] save_firma_file xato: {_sf_e}")
@@ -6346,15 +5607,9 @@ def get_sal_states():
             MessageHandler(filters.CONTACT, salary_phone_handler),
             MessageHandler(filters.TEXT & ~filters.COMMAND, salary_phone_handler),
         ],
-        FIRM_UPLOAD_MONTH_PICK: [
-            MessageHandler(filters.TEXT & ~filters.COMMAND, firm_upload_month_pick_handler),
-        ],
         FIRM_WAIT_ZIP: [
             MessageHandler(filters.Document.ALL, firm_receive_zip),
             MessageHandler(filters.TEXT & ~filters.COMMAND, firm_zip_cancel),
-        ],
-        FIRM_GET_MONTH_PICK: [
-            MessageHandler(filters.TEXT & ~filters.COMMAND, firm_get_month_pick_handler),
         ],
         ADMIN_FIRM_LOOKUP: [
             MessageHandler(filters.TEXT & ~filters.COMMAND, admin_firm_lookup_handler),
