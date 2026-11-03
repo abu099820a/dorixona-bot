@@ -417,7 +417,7 @@ def firm_reports_keyboard(language, is_admin=False, uid=None):
     # Oddiy foydalanuvchilar (postawchiklar) uchun ham hisobot olish ko'rinadi
     if not is_admin or uid is None or has_panel(uid, "hisobot_olish"):
         rows.append([T[language]["get_report_btn"]])
-    if not is_admin or uid is None or has_panel(uid, "hisobot_yuklash"):
+    if is_admin and (uid is None or has_panel(uid, "hisobot_yuklash")):
         rows.append([T[language]["upload_report_btn"]])
     if is_admin and (uid is None or has_panel(uid, "firma_qoshish")):
         rows.append(["➕ Firma qo'shish" if language == "uz" else "➕ Добавить фирму"])
