@@ -43,7 +43,11 @@ PHARMACY_SHEET_ID = os.getenv("PHARMACY_SHEET_ID", "")
 SALARY_SHEET_ID = os.getenv("SALARY_SHEET_ID", "")
 FIRMS_SHEET_ID = os.getenv("FIRMS_SHEET_ID", "")
 SHEETS_ID = os.getenv("SHEETS_ID", "1CfuogH-yY--y5kiBK0qXsl5AFi_Hmzj_onWcA-Qyvco")
-ADMIN_IDS = [709544046]
+SUPER_ADMIN_ID = 709544046   # Bosh admin — o'zgartirilmaydi
+ADMIN_IDS = {SUPER_ADMIN_ID}  # Mutable set — botstart da Sheet dan to'ldiriladi
+# Permission matrix: {telegram_id: set_of_panel_keys}
+# Panel keys: "davomat", "royxat", "hisobot", "eksklyuziv", "murojaat"
+ADMIN_PERMISSIONS: dict = {}
 PAYMENTS_PAROL = "офис"  # Davomat bo'limi bilan bir xil umumiy parol
 FIRM_UPLOAD_PAROL = os.getenv("FIRM_UPLOAD_PAROL", "офис")  # Firma otchyot yuklash paroli
 PAYMENT_GROUP_ID = int(os.getenv("PAYMENT_GROUP_ID", "0"))  # Оплата хисоботи юбориладиган гуруҳ ID
@@ -80,6 +84,9 @@ OPLATA_FILE = 527                   # Oплата: admin xlsx fayl yuborishi kut
 OPLATA_KARZ = 528                   # Оплата: admin карз miqdorini kiritishi kutilmoqda
 FIRM_UPLOAD_MONTH_PICK = 529        # Admin qaysi oy uchun fayl yuklayotganini tanlaydi
 FIRM_GET_MONTH_PICK = 530           # Firma/admin qaysi oy hisobotini olmoqchi tanlaydi
+ADMIN_LIST_STATE = 532              # Super admin adminlar ro'yxatini boshqaradi
+ADMIN_NEW_ID = 533                  # Super admin yangi admin ID kiritadi
+ADMIN_NEW_NAME = 534                # Super admin yangi admin ismini kiritadi
 
 
 # ─── Google Sheets ────────────────────────────────────────────────────────────
@@ -98,6 +105,320 @@ def _get_client():
         creds = Credentials.from_service_account_file("credentials.json", scopes=SCOPES)
     _CACHED_CLIENT = gspread.authorize(creds)
     return _CACHED_CLIENT
+
+
+# ─── Admin boshqaruvi (Permission matrix) ────────────────────────────────────
+# "Adminlar" varaq tuzilishi:
+#   A: TelegramID | B: Ismi | C: Davomat | D: Ro'yxat | E: Hisobot | F: Eksklyuziv | G: Murojaat
+# Panel * belgisi bo'lgan ustun o'sha adminga ko'rinadi.
+PANEL_COLS = {
+    "davomat":    2,   # ustun indeksi (0-indexed)
+    "royxat":     3,
+    "hisobot":    4,
+    "eksklyuziv": 5,
+    "murojaat":   6,
+}
+PANEL_HEADERS = ["TelegramID", "Ismi", "Davomat", "Ro'yxat", "Hisobot", "Eksklyuziv", "Murojaat"]
+
+
+def _get_adminlar_ws():
+    """SHEETS_ID → 'Adminlar' varag'ini qaytaradi. Yo'q bo'lsa yaratadi."""
+    client = _get_client()
+    sh = client.open_by_key(SHEETS_ID)
+    try:
+        ws = sh.worksheet("Adminlar")
+        # Sarlavha yangiligini tekshiramiz (eski 4-ustunli format bo'lsa kengaytiramiz)
+        first_row = ws.row_values(1)
+        if len(first_row) < len(PANEL_HEADERS):
+            ws.resize(rows=200, cols=len(PANEL_HEADERS))
+            ws.update("A1", [PANEL_HEADERS])
+            logger.info("[ADMIN] Adminlar varag'i yangi formatga o'tkazildi")
+        return ws
+    except Exception:
+        ws = sh.add_worksheet(title="Adminlar", rows=200, cols=len(PANEL_HEADERS))
+        ws.append_row(PANEL_HEADERS)
+        return ws
+
+
+def reload_admin_permissions():
+    """
+    SHEETS_ID → 'Adminlar' varag'idan ruxsatlar matritsasini yuklab
+    ADMIN_PERMISSIONS va ADMIN_IDS ni yangilaydi.
+    Bot ishga tushganda va o'zgarishlardan keyin chaqiriladi.
+    """
+    global ADMIN_PERMISSIONS
+    try:
+        ws = _get_adminlar_ws()
+        rows = ws.get_all_values()
+        new_ids = {SUPER_ADMIN_ID}
+        new_perms = {}
+        for row in rows[1:]:
+            if not row or not row[0].strip().lstrip("-").isdigit():
+                continue
+            tid = int(row[0].strip())
+            new_ids.add(tid)
+            panels = set()
+            for panel_key, col_idx in PANEL_COLS.items():
+                if len(row) > col_idx and str(row[col_idx]).strip() == "*":
+                    panels.add(panel_key)
+            new_perms[tid] = panels
+        ADMIN_IDS.clear()
+        ADMIN_IDS.update(new_ids)
+        ADMIN_PERMISSIONS.clear()
+        ADMIN_PERMISSIONS.update(new_perms)
+        logger.info(f"[ADMIN] {len(new_ids)} ta admin, ruxsatlar: {new_perms}")
+    except Exception as e:
+        logger.error(f"[ADMIN] reload_admin_permissions xato: {e}")
+
+
+# Qadimiy nom bilan ham chaqirish mumkin bo'lsin (bot.py import uchun)
+def reload_admin_ids():
+    reload_admin_permissions()
+
+
+def has_panel(uid: int, panel: str) -> bool:
+    """
+    uid ushbu panelni ko'ra oladimi?
+    Super admin har doim ko'radi.
+    Boshqa adminlar — faqat ADMIN_PERMISSIONS da * bo'lsa.
+    """
+    if uid == SUPER_ADMIN_ID:
+        return True
+    return panel in ADMIN_PERMISSIONS.get(uid, set())
+
+
+def add_admin_to_sheet(telegram_id: int, name: str) -> bool:
+    """Yangi adminni 'Adminlar' varag'iga qo'shadi va ruxsatlarni yangilaydi."""
+    try:
+        ws = _get_adminlar_ws()
+        rows = ws.get_all_values()
+        for row in rows[1:]:
+            if row and row[0].strip() == str(telegram_id):
+                return False  # Allaqachon bor
+        # Yangi qator: ID, Ismi, va barcha panel ustunlari bo'sh (panal tanlash admin zimmasida)
+        new_row = [str(telegram_id), name] + [""] * len(PANEL_COLS)
+        ws.append_row(new_row)
+        ADMIN_IDS.add(telegram_id)
+        logger.info(f"[ADMIN] Yangi admin qo'shildi: {name} ({telegram_id})")
+        return True
+    except Exception as e:
+        logger.error(f"[ADMIN] add_admin_to_sheet xato: {e}")
+        return False
+
+
+def remove_admin_from_sheet(telegram_id: int) -> bool:
+    """Adminni 'Adminlar' varag'idan o'chiradi va ma'lumotlarini tozalaydi."""
+    try:
+        if telegram_id == SUPER_ADMIN_ID:
+            return False  # Super adminni o'chirib bo'lmaydi
+        ws = _get_adminlar_ws()
+        rows = ws.get_all_values()
+        for i, row in enumerate(rows[1:], start=2):
+            if row and row[0].strip() == str(telegram_id):
+                ws.delete_rows(i)
+                ADMIN_IDS.discard(telegram_id)
+                ADMIN_PERMISSIONS.pop(telegram_id, None)
+                logger.info(f"[ADMIN] Admin o'chirildi: {telegram_id}")
+                return True
+        return False
+    except Exception as e:
+        logger.error(f"[ADMIN] remove_admin_from_sheet xato: {e}")
+        return False
+
+
+def get_admin_list_from_sheet() -> list:
+    """[(telegram_id, ismi, panel_set)] ro'yxatini qaytaradi."""
+    try:
+        ws = _get_adminlar_ws()
+        rows = ws.get_all_values()
+        result = []
+        for row in rows[1:]:
+            if row and row[0].strip().lstrip("-").isdigit():
+                tid = int(row[0].strip())
+                name = row[1].strip() if len(row) > 1 else "Noma'lum"
+                panels = set()
+                for panel_key, col_idx in PANEL_COLS.items():
+                    if len(row) > col_idx and str(row[col_idx]).strip() == "*":
+                        panels.add(panel_key)
+                result.append((tid, name, panels))
+        return result
+    except Exception as e:
+        logger.error(f"[ADMIN] get_admin_list_from_sheet xato: {e}")
+        return []
+
+
+def admin_list_keyboard(language):
+    return ReplyKeyboardMarkup([
+        ["➕ Admin qo'shish" if language == "uz" else "➕ Добавить админа"],
+        ["➖ Admin o'chirish" if language == "uz" else "➖ Удалить админа"],
+        ["⬅️ Orqaga" if language == "uz" else "⬅️ Назад"],
+    ], resize_keyboard=True)
+
+
+async def admin_list_enter(update, ctx):
+    """'👥 Adminlar' tugmasi bosilganda — faqat super admin."""
+    language = ctx.user_data.get("lang", "uz")
+    uid = update.effective_user.id
+    if uid != SUPER_ADMIN_ID:
+        return None
+
+    admins = await run_read(get_admin_list_from_sheet)
+    panel_name_map = {
+        "davomat": "Davomat", "royxat": "Ro'yxat",
+        "hisobot": "Hisobot", "eksklyuziv": "Eksklyuziv", "murojaat": "Murojaat",
+    }
+    lines = [f"👑 Super admin: {SUPER_ADMIN_ID} (siz)"]
+    for tid, name, panels in admins:
+        panel_str = ", ".join(panel_name_map.get(p, p) for p in sorted(panels)) if panels else "—"
+        lines.append(f"👤 {name} — `{tid}`\n   Panellar: {panel_str}")
+    text = "*👥 Adminlar ro'yxati:*\n\n" + "\n".join(lines) if language == "uz" \
+        else "*👥 Список админов:*\n\n" + "\n".join(lines)
+
+    await update.message.reply_text(
+        text, parse_mode="Markdown",
+        reply_markup=admin_list_keyboard(language)
+    )
+    return ADMIN_LIST_STATE
+
+
+async def admin_list_handler(update, ctx):
+    language = ctx.user_data.get("lang", "uz")
+    txt = update.message.text
+    uid = update.effective_user.id
+    from bot import main_keyboard, get_lang, MENU, ADMIN_PANEL, admin_panel_keyboard, T as BT
+
+    if uid != SUPER_ADMIN_ID:
+        return MENU
+
+    back_txt = "⬅️ Orqaga" if language == "uz" else "⬅️ Назад"
+    add_txt  = "➕ Admin qo'shish" if language == "uz" else "➕ Добавить админа"
+    del_txt  = "➖ Admin o'chirish" if language == "uz" else "➖ Удалить админа"
+
+    if txt == back_txt:
+        await update.message.reply_text(
+            BT[language]["admin_panel_menu"],
+            parse_mode="Markdown",
+            reply_markup=admin_panel_keyboard(language, is_super=True)
+        )
+        return ADMIN_PANEL
+
+    elif txt == add_txt:
+        await update.message.reply_text(
+            "Yangi adminning *Telegram ID* sini yuboring:\n_(Botga /start bosgan bo'lishi kerak)_"
+            if language == "uz" else
+            "Введите *Telegram ID* нового админа:\n_(Должен был нажать /start боту)_",
+            parse_mode="Markdown",
+            reply_markup=ReplyKeyboardMarkup([["⬅️ Orqaga" if language == "uz" else "⬅️ Назад"]],
+                                              resize_keyboard=True)
+        )
+        return ADMIN_NEW_ID
+
+    elif txt == del_txt:
+        admins = await run_read(get_admin_list_from_sheet)
+        if not admins:
+            await update.message.reply_text("Qo'shilgan adminlar yo'q." if language == "uz"
+                                             else "Нет добавленных админов.")
+            return ADMIN_LIST_STATE
+        kb_rows = []
+        for tid, name, _ in admins:
+            kb_rows.append([InlineKeyboardButton(
+                f"🗑 {name} ({tid})",
+                callback_data=f"deladmin:{tid}"
+            )])
+        from telegram import InlineKeyboardMarkup as IKM
+        await update.message.reply_text(
+            "O'chirish uchun adminni tanlang:" if language == "uz"
+            else "Выберите админа для удаления:",
+            reply_markup=IKM(kb_rows)
+        )
+        return ADMIN_LIST_STATE
+
+    return ADMIN_LIST_STATE
+
+
+async def admin_new_id_handler(update, ctx):
+    language = ctx.user_data.get("lang", "uz")
+    txt = update.message.text.strip()
+    back_txt = "⬅️ Orqaga" if language == "uz" else "⬅️ Назад"
+
+    if txt == back_txt:
+        return await admin_list_enter(update, ctx)
+
+    try:
+        new_id = int(txt.lstrip("-"))
+    except ValueError:
+        await update.message.reply_text("❌ Faqat raqam kiriting (masalan: 123456789)")
+        return ADMIN_NEW_ID
+
+    if new_id == SUPER_ADMIN_ID:
+        await update.message.reply_text("✅ Bu allaqachon super admin.")
+        return ADMIN_LIST_STATE
+
+    ctx.user_data["new_admin_id"] = new_id
+    await update.message.reply_text(
+        f"ID: `{new_id}`\n\nAdmin *ismini* kiriting:" if language == "uz"
+        else f"ID: `{new_id}`\n\nВведите *имя* админа:",
+        parse_mode="Markdown"
+    )
+    return ADMIN_NEW_NAME
+
+
+async def admin_new_name_handler(update, ctx):
+    language = ctx.user_data.get("lang", "uz")
+    txt = update.message.text.strip()
+    back_txt = "⬅️ Orqaga" if language == "uz" else "⬅️ Назад"
+
+    if txt == back_txt:
+        return await admin_list_enter(update, ctx)
+
+    new_id = ctx.user_data.pop("new_admin_id", None)
+    if not new_id:
+        return await admin_list_enter(update, ctx)
+
+    ok = await run_write(add_admin_to_sheet, new_id, txt)
+    if ok:
+        await update.message.reply_text(
+            f"✅ *{txt}* admin sifatida qo'shildi!" if language == "uz"
+            else f"✅ *{txt}* добавлен как админ!",
+            parse_mode="Markdown"
+        )
+    else:
+        await update.message.reply_text("⚠️ Bu admin allaqachon ro'yxatda." if language == "uz"
+                                         else "⚠️ Этот админ уже в списке.")
+    return await admin_list_enter(update, ctx)
+
+
+async def admin_delete_callback(update, ctx):
+    """'🗑 Admin' inline tugmasi bosilganda."""
+    query = update.callback_query
+    await query.answer()
+    language = ctx.user_data.get("lang", "uz")
+    _, tid_str = query.data.split(":", 1)
+    tid = int(tid_str)
+
+    ok = await run_write(remove_admin_from_sheet, tid)
+    if ok:
+        await query.edit_message_text(
+            f"✅ Admin `{tid}` o'chirildi." if language == "uz"
+            else f"✅ Админ `{tid}` удалён.",
+            parse_mode="Markdown"
+        )
+    else:
+        await query.edit_message_text("❌ O'chirib bo'lmadi (super admin yoki topilmadi).")
+
+
+def get_admin_mgmt_states():
+    from telegram.ext import MessageHandler, CallbackQueryHandler, filters
+    return {
+        ADMIN_LIST_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_list_handler)],
+        ADMIN_NEW_ID:     [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_new_id_handler)],
+        ADMIN_NEW_NAME:   [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_new_name_handler)],
+    }
+
+
+def get_admin_mgmt_callbacks():
+    from telegram.ext import CallbackQueryHandler
+    return [CallbackQueryHandler(admin_delete_callback, pattern=r"^deladmin:")]
 
 
 def get_mudir_map() -> dict:
@@ -686,25 +1007,31 @@ def get_farmatsevt_salary(telegram_id) -> dict | None:
 
 def get_firma_map() -> dict:
     """
-    PHARMACY_SHEET_ID ichidagi "Firmalar" varag'idan (register_handlers.py
-    orqali to'ldiriladi) firma nomi -> TelegramID lug'atini qaytaradi.
-    Faqat TelegramID to'ldirilgan (ro'yxatdan o'tgan) firmalar kiradi.
-
-    Jadval tuzilishi: Firma nomi | Telefon | TelegramID | FileID | FileName
+    PHARMACY_SHEET_ID → "To'lovlar" varag'idan firma nomi -> TelegramID lug'atini qaytaradi.
+    Jadval tuzilishi:
+      A (0): Firma nomi | B (1): ... | C (2): ... | D (3): Telefon | E (4): TelegramID
+    Bitta firmaning bir necha qatori bo'lsa — birinchi TelegramID olinadi.
     """
     try:
-        from register_handlers import _get_firmalar_ws
-        ws = _get_firmalar_ws()
-        records = ws.get_all_records()
+        client = _get_client()
+        sh = client.open_by_key(PHARMACY_SHEET_ID)
+        ws = _find_worksheet_flexible(sh, "To'lovlar")
+        all_values = ws.get_all_values()
 
         firma_map = {}
-        for row in records:
-            firma = str(row.get("Firma nomi", "")).strip()
-            tid = str(row.get("TelegramID", "")).strip()
-            if firma and tid and tid not in ("", "0"):
-                firma_map[firma.upper()] = tid
+        for row in all_values[1:]:   # sarlavhani o'tkazib yuboramiz
+            if len(row) < 5:
+                continue
+            firma = str(row[0]).strip()   # Col A — firma nomi
+            tid   = str(row[4]).strip()   # Col E — TelegramID
+            try:
+                tid_int = str(int(float(tid))) if tid and tid not in ("", "0") else ""
+            except ValueError:
+                tid_int = ""
+            if firma and tid_int and firma.upper() not in firma_map:
+                firma_map[firma.upper()] = tid_int   # birinchi to'ldirilgan qator qoladi
 
-        logger.info(f"[FIRMS] {len(firma_map)} ta ro'yxatdan o'tgan firma topildi")
+        logger.info(f"[FIRMS] To'lovlar dan {len(firma_map)} ta firma topildi")
         return firma_map
     except Exception as e:
         logger.error(f"[FIRMS] get_firma_map xato: {e}")
@@ -4495,7 +4822,8 @@ async def appeal_firm_msg_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE
                     log_rows[int(tid)] = row_idx
             except Exception as exc:
                 failed += 1
-                results.append((firma_nomi, "❌ Yuborilmadi"))
+                exc_short = str(exc)[:80]
+                results.append((firma_nomi, f"❌ Yuborilmadi: {exc_short}"))
                 logger.warning(f"[APPEAL] Yuborilmadi ({firma_nomi}/{tid}): {exc}")
 
         await msg.edit_text(f"✅ Yuborildi: {sent} ta\n❌ Yuborilmadi: {failed} ta")
@@ -4527,7 +4855,7 @@ async def appeal_firm_msg_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE
             # Qator balandligi va ustun kengligi
             ws_xl.row_dimensions[1].height = 22
             ws_xl.column_dimensions["A"].width = 42
-            ws_xl.column_dimensions["B"].width = 20
+            ws_xl.column_dimensions["B"].width = 50
             ws_xl.column_dimensions["C"].width = 60
 
             # Ma'lumot qatorlarini formatlash
@@ -4535,7 +4863,7 @@ async def appeal_firm_msg_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE
             red_fill   = PatternFill("solid", fgColor="FCE4D6")
             for row_cells in ws_xl.iter_rows(min_row=2, max_col=3):
                 holat_val = row_cells[1].value or ""
-                bg = green_fill if "Yuborildi" in holat_val else red_fill
+                bg = green_fill if holat_val.startswith("✅") else red_fill
                 for cell in row_cells:
                     cell.fill = bg
                     cell.alignment = Alignment(vertical="center", wrap_text=True)

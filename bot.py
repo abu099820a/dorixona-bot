@@ -7,10 +7,13 @@ from salary_handlers import (
     reports_menu_enter, reports_menu_handler, REPORTS_MENU,
     cmd_sync_oylik, appeal_menu_enter,
     appeal_response_button, appeal_comment_catcher,
-    ADMIN_IDS, ADMIN_FIRM_REPORT_SEARCH,
+    ADMIN_IDS, SUPER_ADMIN_ID, ADMIN_FIRM_REPORT_SEARCH,
     FIRM_ADD_NAME, FIRM_ADD_USERNAME,
     FIRM_UPLOAD_MONTH_PICK, FIRM_GET_MONTH_PICK,
     get_oplata_callback_handlers,
+    reload_admin_ids, reload_admin_permissions, has_panel, ADMIN_PERMISSIONS,
+    admin_list_enter, ADMIN_LIST_STATE, ADMIN_NEW_ID, ADMIN_NEW_NAME,
+    get_admin_mgmt_states, get_admin_mgmt_callbacks,
 )
 from exclusive_handlers import cmd_eksklyuziv, get_eks_states, get_eks_callbacks
 from attendance_handlers import (
@@ -338,7 +341,7 @@ def haversine(lat1, lon1, lat2, lon2):
     a = math.sin(dlat/2)**2+math.cos(math.radians(lat1))*math.cos(math.radians(lat2))*math.sin(dlon/2)**2
     return R*2*math.asin(math.sqrt(a))
 
-def main_keyboard(language, is_admin=False):
+def main_keyboard(language, is_admin=False, uid=None):
     # MUHIM: is_admin default False — bu funksiya boshqa fayllarda
     # (salary_handlers.py, attendance_handlers.py, registration_handlers.py)
     # ko'p joyda faqat main_keyboard(til) deb chaqiriladi. Default qiymat
@@ -356,24 +359,52 @@ def main_keyboard(language, is_admin=False):
         [T[language]["channel_btn"]],
     ]
     if is_admin:
-        rows.append([T[language]["appeal_btn"]])   # Murojaat — faqat admin
+        # Murojaat — ruxsat matritsasiga qarab (uid berilsa tekshiriladi)
+        if uid is None or has_panel(uid, "murojaat"):
+            rows.append([T[language]["appeal_btn"]])
         rows.append([T[language]["chat_btn"]])     # Telegram chat — faqat admin
         rows.append([T[language]["admin_panel_btn"]])
     rows.append([T[language]["lang_btn"]])
     return ReplyKeyboardMarkup(rows, resize_keyboard=True)
 
-def admin_panel_keyboard(language):
+def admin_panel_keyboard(language, uid=None, is_super=False):
     """
-    Admin uchun bitta "⚙️ Admin panel" tugmasi bosilganda ochiladigan
-    kichik submenyu — avval asosiy menyuda alohida-alohida turgan 5 ta
-    bo'lim (Davomat, Ro'yxatdan o'tish, Hisobotlar va to'lovlar,
-    Murojaat, Eksklyuziv dori) endi shu yerda jamlangan.
+    Admin uchun "⚙️ Admin panel" submenyusi.
+    uid berilsa — faqat ruxsat etilgan panellar ko'rsatiladi (permission matrix).
+    Super admin hamma panelni ko'radi + "👥 Adminlar" tugmasi.
     """
-    return ReplyKeyboardMarkup([
-        [T[language]["attendance_btn"], T[language]["register_btn"]],
-        [T[language]["reports_btn"], T[language]["eksklyuziv_btn"]],
-        [T[language]["back"]],
-    ], resize_keyboard=True)
+    # Ruxsat tekshiruvi
+    def _can(panel_key):
+        if uid is not None:
+            return has_panel(uid, panel_key)
+        return is_super or True  # eski is_super parametri bilan chaqirilganda
+
+    rows = []
+    row1 = []
+    if _can("davomat"):
+        row1.append(T[language]["attendance_btn"])
+    if _can("royxat"):
+        row1.append(T[language]["register_btn"])
+    if row1:
+        rows.append(row1)
+
+    row2 = []
+    if _can("hisobot"):
+        row2.append(T[language]["reports_btn"])
+    if _can("eksklyuziv"):
+        row2.append(T[language]["eksklyuziv_btn"])
+    if row2:
+        rows.append(row2)
+
+    # Murojaat — asosiy menyuda, lekin ruxsat bo'lmasa admin paneldan ham chiqarmaymiz
+    # (asosiy menyuda has_panel("murojaat") bilan ko'rsatiladi)
+
+    # Super admin uchun Adminlar boshqaruvi
+    if uid == SUPER_ADMIN_ID or is_super:
+        rows.append(["👥 Adminlar" if language == "uz" else "👥 Администраторы"])
+
+    rows.append([T[language]["back"]])
+    return ReplyKeyboardMarkup(rows, resize_keyboard=True)
 
 def firm_reports_keyboard(language, is_admin=False):
     """
@@ -486,8 +517,9 @@ async def set_lang(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await q.answer()
     language = q.data.split("_")[1]
     ctx.user_data["lang"] = language
-    is_admin = update.effective_user.id in ADMIN_IDS
-    await q.message.reply_text(T[language]["menu"], reply_markup=main_keyboard(language, is_admin), parse_mode="Markdown")
+    uid = update.effective_user.id
+    is_admin = uid in ADMIN_IDS
+    await q.message.reply_text(T[language]["menu"], reply_markup=main_keyboard(language, is_admin, uid=uid), parse_mode="Markdown")
     return MENU
 
 async def menu_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -518,8 +550,9 @@ async def menu_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return await appeal_menu_enter(update, ctx)
 
     elif is_admin and txt == T[language]["admin_panel_btn"]:
+        uid = update.effective_user.id
         await update.message.reply_text(T[language]["admin_panel_menu"],
-                                         reply_markup=admin_panel_keyboard(language), parse_mode="Markdown")
+                                         reply_markup=admin_panel_keyboard(language, uid=uid), parse_mode="Markdown")
         return ADMIN_PANEL
 
     elif txt == T[language]["reports_btn"]:
@@ -678,28 +711,32 @@ async def admin_panel_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     yo'naltiriladi — faqat qaysi tugma orqali chaqirilishi o'zgargan.
     """
     language = get_lang(ctx)
-    is_admin = update.effective_user.id in ADMIN_IDS
+    uid = update.effective_user.id
+    is_admin = uid in ADMIN_IDS
     txt = update.message.text
 
     if txt == T[language]["back"]:
-        await update.message.reply_text(T[language]["menu"], reply_markup=main_keyboard(language, is_admin), parse_mode="Markdown")
+        await update.message.reply_text(T[language]["menu"], reply_markup=main_keyboard(language, is_admin, uid=uid), parse_mode="Markdown")
         return MENU
 
     if not is_admin:
-        await update.message.reply_text(T[language]["menu"], reply_markup=main_keyboard(language, is_admin), parse_mode="Markdown")
+        await update.message.reply_text(T[language]["menu"], reply_markup=main_keyboard(language, is_admin, uid=uid), parse_mode="Markdown")
         return MENU
 
-    if txt == T[language]["attendance_btn"]:
+    if txt == T[language]["attendance_btn"] and has_panel(uid, "davomat"):
         return await att_enter(update, ctx)
 
-    elif txt == T[language]["register_btn"]:
+    elif txt == T[language]["register_btn"] and has_panel(uid, "royxat"):
         return await register_enter(update, ctx)
 
-    elif txt == T[language]["reports_btn"]:
+    elif txt == T[language]["reports_btn"] and has_panel(uid, "hisobot"):
         return await reports_menu_enter(update, ctx)
 
-    elif txt == T[language]["eksklyuziv_btn"]:
+    elif txt == T[language]["eksklyuziv_btn"] and has_panel(uid, "eksklyuziv"):
         return await cmd_eksklyuziv(update, ctx)
+
+    elif uid == SUPER_ADMIN_ID and txt in ("👥 Adminlar", "👥 Администраторы"):
+        return await admin_list_enter(update, ctx)
 
     return ADMIN_PANEL
 
@@ -1089,6 +1126,15 @@ async def _post_init(app: Application):
     app.bot_data["scheduler"] = scheduler
     print(f"✅ Avto-sinxronizatsiya ishga tushdi (har {AUTO_SYNC_MINUTES} daqiqada)")
 
+    # Admin ruxsatlar matritsasini Sheet dan yuklaymiz
+    try:
+        from salary_handlers import reload_admin_permissions as _reload_perms
+        _reload_perms()
+        print(f"✅ Adminlar yuklandi: {ADMIN_IDS}")
+        print(f"✅ Ruxsatlar: {ADMIN_PERMISSIONS}")
+    except Exception as _e:
+        print(f"⚠️ Admin yuklashda xato: {_e}")
+
 
 def main():
     app = (
@@ -1137,6 +1183,7 @@ def main():
             LANG: [CallbackQueryHandler(set_lang, pattern="^lang_")],
             MENU: [MessageHandler(filters.TEXT & ~filters.COMMAND, menu_handler)],
             ADMIN_PANEL: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_panel_handler)],
+            **get_admin_mgmt_states(),
             FIRM_REPORTS_MENU: [MessageHandler(filters.TEXT & ~filters.COMMAND, firm_reports_menu_handler)],
             REPORTS_MENU: [MessageHandler(filters.TEXT & ~filters.COMMAND, reports_menu_handler)],
             SEARCH_MENU: [MessageHandler(filters.TEXT & ~filters.COMMAND, search_menu_handler)],
@@ -1185,6 +1232,10 @@ def main():
     #    hech narsaga aralashmaydi, shuning uchun conv bilan bir xil
     #    guruhda (0), undan KEYIN qo'shiladi.
     app.add_handler(CallbackQueryHandler(appeal_response_button, pattern="^appealresp:"))
+
+    # ── Admin boshqaruvi callback'lari (admin o'chirish) ──
+    for _h in get_admin_mgmt_callbacks():
+        app.add_handler(_h)
 
     # ── Оплата ёзиш — поставчик танлаш callback'лари (ConversationHandler'дан ташқарида) ──
     for _h in get_oplata_callback_handlers():
