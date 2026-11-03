@@ -1022,7 +1022,7 @@ def get_firma_map() -> dict:
     """
     try:
         client = _get_client()
-        sh = client.open_by_key(PHARMACY_SHEET_ID)
+        sh = client.open_by_key(SALARY_SHEET_ID)
         ws = _find_worksheet_flexible(sh, "To'lovlar")
         all_values = ws.get_all_values()
 
