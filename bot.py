@@ -389,15 +389,13 @@ def admin_panel_keyboard(language, uid=None, is_super=False):
         rows.append(row1)
 
     row2 = []
-    if _can("hisobot"):
+    # Hisobotlar tugmasi — agar subpanellardan biri ruxsat etilgan bo'lsa
+    if _can("hisobot_olish") or _can("hisobot_yuklash") or _can("firma_qoshish"):
         row2.append(T[language]["reports_btn"])
     if _can("eksklyuziv"):
         row2.append(T[language]["eksklyuziv_btn"])
     if row2:
         rows.append(row2)
-
-    # Murojaat — asosiy menyuda, lekin ruxsat bo'lmasa admin paneldan ham chiqarmaymiz
-    # (asosiy menyuda has_panel("murojaat") bilan ko'rsatiladi)
 
     # Super admin uchun Adminlar boshqaruvi
     if uid == SUPER_ADMIN_ID or is_super:
@@ -406,18 +404,22 @@ def admin_panel_keyboard(language, uid=None, is_super=False):
     rows.append([T[language]["back"]])
     return ReplyKeyboardMarkup(rows, resize_keyboard=True)
 
-def firm_reports_keyboard(language, is_admin=False):
+def firm_reports_keyboard(language, is_admin=False, uid=None):
     """
-    "📊 Hisobotlar va to'lovlar" tugmasi bosilganda ochiladigan kichik
-    submenyu — firma vakillari va admin uchun.
-    - "📊 Hisobot olish"   → hamma ko'radi (postawchiklar + admin)
-    - "📥 Hisobot yuklash" → faqat admin ko'radi
-    - "➕ Firma qo'shish"  → faqat admin ko'radi
+    "📊 Hisobotlar va to'lovlar" tugmasi bosilganda ochiladigan submenyu.
+    uid berilsa — ruxsat matritsasiga qarab tugmalar ko'rsatiladi.
+    - "📊 Hisobot olish"   → hisobot_olish ruxsati (yoki non-admin hamma uchun)
+    - "📥 Hisobot yuklash" → hisobot_yuklash ruxsati
+    - "➕ Firma qo'shish"  → firma_qoshish ruxsati
     - "⬅️ Orqaga"         → asosiy menyuga qaytish
     """
-    rows = [[T[language]["get_report_btn"]]]
-    rows.append([T[language]["upload_report_btn"]])  # Hamma ko'radi, parol bilan kiradi
-    if is_admin:
+    rows = []
+    # Oddiy foydalanuvchilar (postawchiklar) uchun ham hisobot olish ko'rinadi
+    if not is_admin or uid is None or has_panel(uid, "hisobot_olish"):
+        rows.append([T[language]["get_report_btn"]])
+    if not is_admin or uid is None or has_panel(uid, "hisobot_yuklash"):
+        rows.append([T[language]["upload_report_btn"]])
+    if is_admin and (uid is None or has_panel(uid, "firma_qoshish")):
         rows.append(["➕ Firma qo'shish" if language == "uz" else "➕ Добавить фирму"])
     rows.append([T[language]["back"]])
     return ReplyKeyboardMarkup(rows, resize_keyboard=True)
@@ -557,11 +559,12 @@ async def menu_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     elif txt == T[language]["reports_btn"]:
         # Yangi firma hisobotlari submenyusini ochish
+        _uid_menu = update.effective_user.id if is_admin else None
         await update.message.reply_text(
             "📊 *Hisobotlar*\n\nBo'limni tanlang:" if language == "uz"
             else "📊 *Отчёты*\n\nВыберите раздел:",
             parse_mode="Markdown",
-            reply_markup=firm_reports_keyboard(language, is_admin),
+            reply_markup=firm_reports_keyboard(language, is_admin, uid=_uid_menu),
         )
         return FIRM_REPORTS_MENU
 
@@ -693,9 +696,10 @@ async def firm_reports_menu_handler(update: Update, ctx: ContextTypes.DEFAULT_TY
         return FIRM_ADD_NAME
 
     # Tanilmagan matn
+    _uid_frm = update.effective_user.id if is_admin else None
     await update.message.reply_text(
         "📊 Bo'limni tanlang:" if language == "uz" else "📊 Выберите раздел:",
-        reply_markup=firm_reports_keyboard(language, is_admin),
+        reply_markup=firm_reports_keyboard(language, is_admin, uid=_uid_frm),
     )
     return FIRM_REPORTS_MENU
 
@@ -729,7 +733,10 @@ async def admin_panel_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     elif txt == T[language]["register_btn"] and has_panel(uid, "royxat"):
         return await register_enter(update, ctx)
 
-    elif txt == T[language]["reports_btn"] and has_panel(uid, "hisobot"):
+    elif txt == T[language]["reports_btn"] and (
+            has_panel(uid, "hisobot_olish") or
+            has_panel(uid, "hisobot_yuklash") or
+            has_panel(uid, "firma_qoshish")):
         return await reports_menu_enter(update, ctx)
 
     elif txt == T[language]["eksklyuziv_btn"] and has_panel(uid, "eksklyuziv"):

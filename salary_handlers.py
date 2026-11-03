@@ -109,16 +109,24 @@ def _get_client():
 
 # ─── Admin boshqaruvi (Permission matrix) ────────────────────────────────────
 # "Adminlar" varaq tuzilishi:
-#   A: TelegramID | B: Ismi | C: Davomat | D: Ro'yxat | E: Hisobot | F: Eksklyuziv | G: Murojaat
+#   A: TelegramID | B: Ismi | C: Davomat | D: Ro'yxat |
+#   E: Hisobot olish | F: Hisobot yuklash | G: Firma qo'shish |
+#   H: Eksklyuziv | I: Murojaat
 # Panel * belgisi bo'lgan ustun o'sha adminga ko'rinadi.
 PANEL_COLS = {
-    "davomat":    2,   # ustun indeksi (0-indexed)
-    "royxat":     3,
-    "hisobot":    4,
-    "eksklyuziv": 5,
-    "murojaat":   6,
+    "davomat":         2,   # ustun indeksi (0-indexed)
+    "royxat":          3,
+    "hisobot_olish":   4,
+    "hisobot_yuklash": 5,
+    "firma_qoshish":   6,
+    "eksklyuziv":      7,
+    "murojaat":        8,
 }
-PANEL_HEADERS = ["TelegramID", "Ismi", "Davomat", "Ro'yxat", "Hisobot", "Eksklyuziv", "Murojaat"]
+PANEL_HEADERS = [
+    "TelegramID", "Ismi", "Davomat", "Ro'yxat",
+    "Hisobot olish", "Hisobot yuklash", "Firma qo'shish",
+    "Eksklyuziv", "Murojaat"
+]
 
 
 def _get_adminlar_ws():
