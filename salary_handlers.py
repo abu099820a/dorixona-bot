@@ -1114,57 +1114,52 @@ def get_firma_file_by_telegram_id(telegram_id) -> dict | None:
 
 def get_contracts_by_firma_nomi(firma_nomi: str) -> list:
     """
-    Firma nomi bo'yicha barcha shartnomalarni qaytaradi.
-    Avval SHEETS_ID → Firmalar (shartnoma raqamlari bor),
-    keyin PHARMACY_SHEET_ID → Firmalar (telefon/TelegramID bor) ni birlashtiradi.
+    Firma nomi bo'yicha SALARY_SHEET_ID → To'lovlar varag'idan barcha shartnomalarni qaytaradi.
+    (To'lovlar: A=Firma nomi, B=Shartnoma raqami, C=INN, D=Тел рақами, E=ID)
     Har bir element: {"shartnoma": str, "phone": str, "tid": str, "_row_idx": int, "_sheet": str}
     """
     results = []
     target = _norm_firma_nomi(firma_nomi)
 
-    # 1. SHEETS_ID → Firmalar (asosiy — shartnoma raqamlari shu yerda)
+    # Asosiy manba: SALARY_SHEET_ID → To'lovlar (shartnoma + telefon + ID bor)
     try:
-        if SHEETS_ID:
-            gc = _get_client()
-            ws2 = gc.open_by_key(SHEETS_ID).worksheet("Firmalar")
-            records2 = ws2.get_all_records()
-            for i, row in enumerate(records2, start=2):
+        client = _get_client()
+        sh = client.open_by_key(SALARY_SHEET_ID)
+        ws = _find_worksheet_flexible(sh, TOLOVLAR_WS_NAME)
+        all_values = ws.get_all_values()
+        for i, row in enumerate(all_values[1:], start=2):
+            if not row or _norm_firma_nomi(row[0]) != target:
+                continue
+            shartnoma = row[1].strip() if len(row) > 1 else ""
+            phone     = row[3].strip() if len(row) > 3 else ""
+            tid       = row[4].strip() if len(row) > 4 else ""
+            results.append({
+                "shartnoma": shartnoma,
+                "phone":     phone,
+                "tid":       tid,
+                "_row_idx":  i,
+                "_sheet":    "tolovlar",
+            })
+    except Exception as e:
+        logger.error(f"[FIRMS] get_contracts_by_firma_nomi To'lovlar xato: {e}")
+
+    # Zaxira: PHARMACY_SHEET_ID → Firmalar (agar To'lovlar da topilmasa)
+    if not results:
+        try:
+            from register_handlers import _get_firmalar_ws
+            ws1 = _get_firmalar_ws()
+            records1 = ws1.get_all_records()
+            for i, row in enumerate(records1, start=2):
                 if _norm_firma_nomi(str(row.get("Firma nomi", ""))) == target:
                     results.append({
                         "shartnoma": str(row.get("Shartnoma raqami", "")).strip(),
                         "phone":     str(row.get("Telefon",          "")).strip(),
                         "tid":       str(row.get("TelegramID",       "")).strip(),
                         "_row_idx":  i,
-                        "_sheet":    "sheets_id",
-                    })
-    except Exception as e:
-        logger.error(f"[FIRMS] get_contracts_by_firma_nomi SHEETS_ID xato: {e}")
-
-    # 2. PHARMACY_SHEET_ID → Firmalar (agar SHEETS_ID da topilmasa yoki qo'shimcha)
-    try:
-        from register_handlers import _get_firmalar_ws
-        ws1 = _get_firmalar_ws()
-        records1 = ws1.get_all_records()
-        for i, row in enumerate(records1, start=2):
-            if _norm_firma_nomi(str(row.get("Firma nomi", ""))) == target:
-                sh = str(row.get("Shartnoma raqami", "")).strip()
-                ph = str(row.get("Telefon",          "")).strip()
-                tid = str(row.get("TelegramID",      "")).strip()
-                # Agar SHEETS_ID da xuddi shu shartnoma allaqachon bor — qayta qo'shmaymiz
-                already = any(
-                    r["shartnoma"] == sh and r["_sheet"] == "sheets_id"
-                    for r in results
-                )
-                if not already:
-                    results.append({
-                        "shartnoma": sh,
-                        "phone":     ph,
-                        "tid":       tid,
-                        "_row_idx":  i,
                         "_sheet":    "pharmacy",
                     })
-    except Exception as e:
-        logger.error(f"[FIRMS] get_contracts_by_firma_nomi PHARMACY xato: {e}")
+        except Exception as e:
+            logger.error(f"[FIRMS] get_contracts_by_firma_nomi PHARMACY xato: {e}")
 
     return results
 
@@ -1298,31 +1293,47 @@ def get_all_firma_files_by_phone(phone: str) -> list:
 
 
 def save_firma_telegram_id_by_row(row_idx: int, telegram_id: int,
-                                   sheet: str = "pharmacy") -> bool:
+                                   sheet: str = "pharmacy",
+                                   phone: str = "") -> bool:
     """
-    Berilgan qator indeksiga TelegramID yozadi (aniq qator bo'yicha).
-    sheet='pharmacy' → PHARMACY_SHEET_ID Firmalar
-    sheet='sheets_id' → SHEETS_ID Firmalar
-    TelegramID ustuni header orqali dinamik topiladi (fallback: 3-ustun).
+    Berilgan qator indeksiga TelegramID (va ixtiyoriy telefon) yozadi.
+    sheet='tolovlar'  → SALARY_SHEET_ID To'lovlar (D=Тел, E=ID)
+    sheet='pharmacy'  → PHARMACY_SHEET_ID Firmalar (TelegramID ustuni)
+    sheet='sheets_id' → SHEETS_ID Firmalar (TelegramID ustuni)
     """
-    def _write(ws):
-        headers = ws.row_values(1)
-        try:
-            col = headers.index("TelegramID") + 1
-        except ValueError:
-            col = 3  # fallback
-        ws.update_cell(row_idx, col, str(telegram_id))
-        return True
-
     try:
-        if sheet == "sheets_id" and SHEETS_ID:
+        if sheet == "tolovlar":
+            client = _get_client()
+            sh = client.open_by_key(SALARY_SHEET_ID)
+            ws = _find_worksheet_flexible(sh, TOLOVLAR_WS_NAME)
+            batch = []
+            if phone:
+                batch.append({"range": f"D{row_idx}", "values": [[phone]]})
+            if telegram_id:
+                batch.append({"range": f"E{row_idx}", "values": [[str(telegram_id)]]})
+            if batch:
+                ws.batch_update(batch)
+            return True
+        elif sheet == "sheets_id" and SHEETS_ID:
             gc = _get_client()
             ws = gc.open_by_key(SHEETS_ID).worksheet("Firmalar")
-            return _write(ws)
+            headers = ws.row_values(1)
+            try:
+                col = headers.index("TelegramID") + 1
+            except ValueError:
+                col = 3
+            ws.update_cell(row_idx, col, str(telegram_id))
+            return True
         else:
             from register_handlers import _get_firmalar_ws
             ws = _get_firmalar_ws()
-            return _write(ws)
+            headers = ws.row_values(1)
+            try:
+                col = headers.index("TelegramID") + 1
+            except ValueError:
+                col = 3
+            ws.update_cell(row_idx, col, str(telegram_id))
+            return True
     except Exception as e:
         logger.error(f"[FIRMS] save_firma_telegram_id_by_row xato: {e}")
         return False
@@ -6812,13 +6823,13 @@ async def firm_add_username_handler(update: Update, ctx: ContextTypes.DEFAULT_TY
         full_name = (
             f"{contact.first_name or ''} {contact.last_name or ''}".strip() or phone
         )
-        # Mavjud qator tanlangan bo'lsa — faqat TelegramID + telefon yangilanadi
+        # Mavjud qator tanlangan bo'lsa — aynan shu qatorga yozamiz
         if existing_row_idx:
             ok = await run_write(save_firma_telegram_id_by_row,
-                                 existing_row_idx, tid or 0, existing_row_sh)
-            # PHARMACY_SHEET_ID ga ham telefon + TID yozish
+                                 existing_row_idx, tid or 0, existing_row_sh, phone)
+            # PHARMACY_SHEET_ID Firmalar ga ham yangilaymiz (auth uchun)
             if ok:
-                ok = await run_write(save_new_firma, firma_nomi, "", phone, tid, shartnoma)
+                await run_write(save_new_firma, firma_nomi, "", phone, tid, shartnoma)
         else:
             ok = await run_write(save_new_firma, firma_nomi, "", phone, tid, shartnoma)
         if ok:
