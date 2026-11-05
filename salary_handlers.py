@@ -84,6 +84,7 @@ OPLATA_FILE = 527                   # Oплата: admin xlsx fayl yuborishi kut
 OPLATA_KARZ = 528                   # Оплата: admin карз miqdorini kiritishi kutilmoqda
 FIRM_UPLOAD_MONTH_PICK = 529        # Admin qaysi oy uchun fayl yuklayotganini tanlaydi
 FIRM_GET_MONTH_PICK = 530           # Firma/admin qaysi oy hisobotini olmoqchi tanlaydi
+FIRMA_TID_SELECT = 531              # Postawchik bir nechta firma orasidan birini tanlaydi
 ADMIN_LIST_STATE = 532              # Super admin adminlar ro'yxatini boshqaradi
 ADMIN_NEW_ID = 533                  # Super admin yangi admin ID kiritadi
 ADMIN_NEW_NAME = 534                # Super admin yangi admin ismini kiritadi
@@ -1109,6 +1110,38 @@ def get_firma_file_by_telegram_id(telegram_id) -> dict | None:
         return None
 
 
+def get_all_firma_files_by_tid(telegram_id) -> list:
+    """
+    Berilgan TelegramID bo'yicha "Firmalar" varag'idan BARCHA mos
+    firma qatorlarini ro'yxat sifatida qaytaradi.
+    Har bir element: {firma_nomi, shartnoma, inn, months}
+    Bir ID → bir nechta firma bo'lsa, foydalanuvchiga tanlov ko'rsatiladi.
+    """
+    tid = str(telegram_id).strip()
+    results = []
+    try:
+        from register_handlers import _get_firmalar_ws
+        ws = _get_firmalar_ws()
+        records = ws.get_all_records()
+        for row in records:
+            if str(row.get("TelegramID", "")).strip() == tid:
+                raw = str(row.get("FileID", "")).strip()
+                months = _parse_firma_files_json(raw)
+                if not months and raw and not raw.startswith('{'):
+                    fn = str(row.get("FileName",  "")).strip()
+                    fm = str(row.get("FileMonth", "")).strip() or _prev_month_key()
+                    months = {fm: {"file_id": raw, "file_name": fn}}
+                results.append({
+                    "firma_nomi": str(row.get("Firma nomi",       "")).strip(),
+                    "shartnoma":  str(row.get("Shartnoma raqami", "")).strip(),
+                    "inn":        str(row.get("INN",              "")).strip(),
+                    "months":     months,
+                })
+    except Exception as e:
+        logger.error(f"[FIRMS] get_all_firma_files_by_tid xato: {e}")
+    return results
+
+
 def _norm_firma_nomi(s: str) -> str:
     """
     Firma nomini solishtirish uchun "normallashtiradi": bosh/oxiridagi
@@ -1717,9 +1750,27 @@ async def reports_menu_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     elif txt == payments_txt:
         user_id = update.effective_user.id
-        firm_info = await run_read(get_firma_file_by_telegram_id, user_id)
-        if firm_info:
-            return await _send_firm_direct_report(update, ctx, firm_info)
+        all_firms = await run_read(get_all_firma_files_by_tid, user_id)
+        if all_firms:
+            if len(all_firms) == 1:
+                return await _send_firm_direct_report(update, ctx, all_firms[0])
+            # Bir nechta firma — tanlash so'rash
+            ctx.user_data["tid_firma_choices"] = all_firms
+            btns = []
+            for f in all_firms:
+                label = f["firma_nomi"]
+                if f.get("shartnoma"):
+                    label += f" ({f['shartnoma']})"
+                btns.append([label])
+            btns.append(["⬅️ Orqaga" if language == "uz" else "⬅️ Назад"])
+            from telegram import ReplyKeyboardMarkup as _RKM
+            await update.message.reply_text(
+                "🏢 Bir nechta firma topildi. Qaysi firma hisobotini ko'rmoqchisiz?"
+                if language == "uz" else
+                "🏢 Найдено несколько фирм. По какой фирме хотите отчёт?",
+                reply_markup=_RKM(btns, resize_keyboard=True, one_time_keyboard=True),
+            )
+            return FIRMA_TID_SELECT
         if user_id in ADMIN_IDS:
             return await payments_menu_enter(update, ctx)
         await update.message.reply_text(
@@ -5299,6 +5350,55 @@ async def firm_phone_wait_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE
     return await _send_firm_direct_report(update, ctx, firm_info, from_menu=True)
 
 
+# ─── Bir nechta firma orasidan tanlash handler (bir TelegramID → ko'p firma) ──
+
+async def firma_tid_select_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """
+    FIRMA_TID_SELECT holatida — foydalanuvchi o'z firmalaridan birini tanlaydi.
+    Bir TelegramID bir nechta firma qatoriga bog'langan bo'lsa chaqiriladi.
+    """
+    language = ctx.user_data.get("lang", "uz")
+    back_txt = "⬅️ Назад" if language == "ru" else "⬅️ Orqaga"
+    txt = (update.message.text or "").strip()
+
+    if txt in (back_txt, "⬅️ Orqaga", "⬅️ Назад"):
+        ctx.user_data.pop("tid_firma_choices", None)
+        await update.message.reply_text(
+            "📊 Bo'limni tanlang:" if language == "uz" else "📊 Выберите раздел:",
+            reply_markup=reports_keyboard(language),
+        )
+        return REPORTS_MENU
+
+    all_firms = ctx.user_data.get("tid_firma_choices", [])
+    selected = None
+    for f in all_firms:
+        label = f["firma_nomi"]
+        label_full = label + (f" ({f['shartnoma']})" if f.get("shartnoma") else "")
+        if txt in (label_full, label):
+            selected = f
+            break
+
+    if not selected:
+        btns = []
+        for f in all_firms:
+            label = f["firma_nomi"]
+            if f.get("shartnoma"):
+                label += f" ({f['shartnoma']})"
+            btns.append([label])
+        btns.append(["⬅️ Orqaga" if language == "uz" else "⬅️ Назад"])
+        from telegram import ReplyKeyboardMarkup as _RKM
+        await update.message.reply_text(
+            "❌ Noma'lum tanlov. Ro'yxatdan birini tanlang:"
+            if language == "uz" else
+            "❌ Неверный выбор. Выберите из списка:",
+            reply_markup=_RKM(btns, resize_keyboard=True, one_time_keyboard=True),
+        )
+        return FIRMA_TID_SELECT
+
+    ctx.user_data.pop("tid_firma_choices", None)
+    return await _send_firm_direct_report(update, ctx, selected)
+
+
 # ─── Postawchik shartnoma tanlash handler ────────────────────────────────────
 
 async def firm_supplier_contract_select_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -6408,6 +6508,9 @@ def get_sal_states():
         ],
         FIRM_SUPPLIER_CONTRACT_SELECT: [
             MessageHandler(filters.TEXT & ~filters.COMMAND, firm_supplier_contract_select_handler),
+        ],
+        FIRMA_TID_SELECT: [
+            MessageHandler(filters.TEXT & ~filters.COMMAND, firma_tid_select_handler),
         ],
         FIRM_ADD_NAME: [
             MessageHandler(filters.CONTACT, firm_add_name_handler),
