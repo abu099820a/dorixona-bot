@@ -84,8 +84,9 @@ OPLATA_FILE = 527                   # Oплата: admin xlsx fayl yuborishi kut
 OPLATA_KARZ = 528                   # Оплата: admin карз miqdorini kiritishi kutilmoqda
 FIRM_UPLOAD_MONTH_PICK = 529        # Admin qaysi oy uchun fayl yuklayotganini tanlaydi
 FIRM_GET_MONTH_PICK = 530           # Firma/admin qaysi oy hisobotini olmoqchi tanlaydi
-FIRMA_TID_SELECT = 531              # Postawchik bir nechta firma orasidan birini tanlaydi
+FIRMA_TID_SELECT = 531              # Postawchik bir nechta firma orasidan birini tanlaydi (TelegramID bo'yicha)
 ADMIN_LIST_STATE = 532              # Super admin adminlar ro'yxatini boshqaradi
+FIRMA_PHONE_CONTRACT_SELECT = 535   # Postawchik telefon orqali kirganda bir nechta shartnomadan birini tanlaydi
 ADMIN_NEW_ID = 533                  # Super admin yangi admin ID kiritadi
 ADMIN_NEW_NAME = 534                # Super admin yangi admin ismini kiritadi
 
@@ -1202,10 +1203,62 @@ def get_firma_file_by_phone(phone: str) -> dict | None:
         return None
 
 
+def get_all_firma_files_by_phone(phone: str) -> list:
+    """
+    Telefon raqami bo'yicha 'Firmalar' varag'idan BARCHA mos
+    firma qatorlarini ro'yxat sifatida qaytaradi.
+    Har bir element: {firma_nomi, shartnoma, inn, months, _row_idx}
+    _row_idx — TelegramID ni aniq shu qatorga yozish uchun ishlatiladi.
+    """
+    results = []
+    target = _norm_phone_for_firma(phone)
+    if not target:
+        return results
+    try:
+        from register_handlers import _get_firmalar_ws
+        ws = _get_firmalar_ws()
+        records = ws.get_all_records()
+        for i, row in enumerate(records, start=2):
+            row_phone = _norm_phone_for_firma(str(row.get("Telefon", "")))
+            if row_phone and row_phone == target:
+                raw = str(row.get("FileID", "")).strip()
+                months = _parse_firma_files_json(raw)
+                if not months and raw and not raw.startswith('{'):
+                    fn = str(row.get("FileName",  "")).strip()
+                    fm = str(row.get("FileMonth", "")).strip() or _prev_month_key()
+                    months = {fm: {"file_id": raw, "file_name": fn}}
+                results.append({
+                    "firma_nomi": str(row.get("Firma nomi",       "")).strip(),
+                    "shartnoma":  str(row.get("Shartnoma raqami", "")).strip(),
+                    "inn":        str(row.get("INN",              "")).strip(),
+                    "months":     months,
+                    "_row_idx":   i,
+                })
+    except Exception as e:
+        logger.error(f"[FIRMS] get_all_firma_files_by_phone xato: {e}")
+    return results
+
+
+def save_firma_telegram_id_by_row(row_idx: int, telegram_id: int) -> bool:
+    """
+    Berilgan qator indeksiga TelegramID yozadi (aniq qator bo'yicha).
+    Bir nechta shartnomali firmalar uchun — faqat tanlangan qatorga yoziladi.
+    """
+    try:
+        from register_handlers import _get_firmalar_ws
+        ws = _get_firmalar_ws()
+        ws.update_cell(row_idx, 3, str(telegram_id))  # TelegramID — 3-ustun (C)
+        return True
+    except Exception as e:
+        logger.error(f"[FIRMS] save_firma_telegram_id_by_row xato: {e}")
+        return False
+
+
 def save_firma_telegram_id_by_phone(phone: str, telegram_id: int) -> bool:
     """
     Telefon raqami orqali topilgan firma qatoriga TelegramID ni yozadi
     (keyingi safar TelegramID orqali tezroq topish uchun).
+    Faqat bitta mos qator bo'lsa ishlatiladi.
     """
     try:
         from register_handlers import _get_firmalar_ws
@@ -5323,8 +5376,8 @@ async def firm_phone_wait_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE
         "⏳ Qidirilmoqda..." if language == "uz" else "⏳ Поиск..."
     )
 
-    firm_info = await run_read(get_firma_file_by_phone, phone)
-    if not firm_info:
+    all_firms = await run_read(get_all_firma_files_by_phone, phone)
+    if not all_firms:
         await msg.edit_text(
             f"❌ *{phone}* raqami bilan bog'liq firma topilmadi.\n\n"
             "📞 Administratsiyaga murojaat qiling."
@@ -5340,14 +5393,98 @@ async def firm_phone_wait_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE
         )
         return FIRM_REPORTS_MENU
 
-    # Topildi — TelegramID ni Sheets ga yozib qo'yamiz (keyingi safar tezroq)
     await msg.delete()
+
+    # Faqat bitta firma topilsa — to'g'ridan to'g'ri hisobot
+    if len(all_firms) == 1:
+        firm_info = all_firms[0]
+        try:
+            await run_write(save_firma_telegram_id_by_row, firm_info["_row_idx"], update.effective_user.id)
+        except Exception:
+            pass
+        return await _send_firm_direct_report(update, ctx, firm_info, from_menu=True)
+
+    # Bir nechta firma topildi — tanlash menyusini ko'rsatish
+    ctx.user_data["phone_firma_choices"] = all_firms
+    ctx.user_data["phone_firma_phone"] = phone
+
+    buttons = []
+    for f in all_firms:
+        label = f["firma_nomi"]
+        if f.get("shartnoma"):
+            label += f" ({f['shartnoma']})"
+        buttons.append([label])
+    buttons.append([back_txt])
+
+    from telegram import ReplyKeyboardMarkup as _RKM2
+    kb = _RKM2(buttons, resize_keyboard=True)
+    await update.message.reply_text(
+        "🏢 Bir nechta shartnoma topildi. Qaysi birini tanlaysiz?" if language == "uz"
+        else "🏢 Найдено несколько договоров. Какой выбрать?",
+        reply_markup=kb,
+    )
+    return FIRMA_PHONE_CONTRACT_SELECT
+
+
+# ─── Telefon orqali topilgan bir nechta shartnomadan tanlash handler ──────────
+
+async def firma_phone_contract_select_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """
+    FIRMA_PHONE_CONTRACT_SELECT holatida — foydalanuvchi telefon orqali kirishda
+    bir nechta shartnoma topilganda, qaysi firmani tanlashini kutadi.
+    Tanlagandan so'ng shu qatorga TelegramID yoziladi va hisobot yuboriladi.
+    """
+    language = ctx.user_data.get("lang", "uz")
+    back_txt = "⬅️ Orqaga" if language == "uz" else "⬅️ Назад"
+    is_admin = update.effective_user.id in ADMIN_IDS
+    txt = (update.message.text or "").strip()
+
+    if txt in (back_txt, "⬅️ Orqaga", "⬅️ Назад"):
+        ctx.user_data.pop("phone_firma_choices", None)
+        ctx.user_data.pop("phone_firma_phone", None)
+        from bot import firm_reports_keyboard, FIRM_REPORTS_MENU
+        await update.message.reply_text(
+            "📊 Bo'limni tanlang:" if language == "uz" else "📊 Выберите раздел:",
+            reply_markup=firm_reports_keyboard(language, is_admin),
+        )
+        return FIRM_REPORTS_MENU
+
+    all_firms = ctx.user_data.get("phone_firma_choices", [])
+    selected = None
+    for f in all_firms:
+        label = f["firma_nomi"]
+        label_full = label + (f" ({f['shartnoma']})" if f.get("shartnoma") else "")
+        if txt in (label_full, label):
+            selected = f
+            break
+
+    if not selected:
+        # Noto'g'ri tanlov — qaytadan ko'rsatish
+        buttons = []
+        for f in all_firms:
+            label = f["firma_nomi"]
+            if f.get("shartnoma"):
+                label += f" ({f['shartnoma']})"
+            buttons.append([label])
+        buttons.append([back_txt])
+        from telegram import ReplyKeyboardMarkup as _RKM3
+        kb = _RKM3(buttons, resize_keyboard=True)
+        await update.message.reply_text(
+            "❓ Iltimos, ro'yxatdan tanlang:" if language == "uz"
+            else "❓ Пожалуйста, выберите из списка:",
+            reply_markup=kb,
+        )
+        return FIRMA_PHONE_CONTRACT_SELECT
+
+    # Tanlandi — TelegramID ni aniq shu qatorga yozamiz
+    ctx.user_data.pop("phone_firma_choices", None)
+    ctx.user_data.pop("phone_firma_phone", None)
     try:
-        await run_write(save_firma_telegram_id_by_phone, phone, update.effective_user.id)
+        await run_write(save_firma_telegram_id_by_row, selected["_row_idx"], update.effective_user.id)
     except Exception:
         pass
 
-    return await _send_firm_direct_report(update, ctx, firm_info, from_menu=True)
+    return await _send_firm_direct_report(update, ctx, selected, from_menu=True)
 
 
 # ─── Bir nechta firma orasidan tanlash handler (bir TelegramID → ko'p firma) ──
@@ -6511,6 +6648,9 @@ def get_sal_states():
         ],
         FIRMA_TID_SELECT: [
             MessageHandler(filters.TEXT & ~filters.COMMAND, firma_tid_select_handler),
+        ],
+        FIRMA_PHONE_CONTRACT_SELECT: [
+            MessageHandler(filters.TEXT & ~filters.COMMAND, firma_phone_contract_select_handler),
         ],
         FIRM_ADD_NAME: [
             MessageHandler(filters.CONTACT, firm_add_name_handler),
