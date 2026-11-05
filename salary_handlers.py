@@ -2566,9 +2566,10 @@ async def firm_get_month_pick_handler(update: Update, ctx: ContextTypes.DEFAULT_
 
 # ─── Firma o'zi hisobotini olishi (self-service) ───────────────────────────────
 
-def _round_summa_to_million(summa_str: str) -> str:
+def _round_summa_to_million(summa_str: str) -> tuple:
     """Summani 1 mln ga yaxlitlaydi: ≥500 000 → yuqoriga, <500 000 → pastga.
-    Misol: 39 891 299 → 40 000 000
+    Qaytaradi: (yaxlitlangan_str, asl_str)
+    Misol: "39 891 299" → ("40 000 000", "39 891 299")
     Vergul/nuqtali kasr qismini (,45 yoki .45) oldin olib tashlanadi.
     """
     import re as _re
@@ -2578,14 +2579,16 @@ def _round_summa_to_million(summa_str: str) -> str:
     # Qolgan raqam bo'lmagan belgilarni (bo'shliq, apostrof...) olib tashlash
     digits = _re.sub(r"[^\d]", "", s)
     if not digits:
-        return summa_str
+        return summa_str, summa_str
     amount = int(digits)
+    # Asl son bo'shliq bilan formatlash
+    asl = f"{amount:,}".replace(",", " ")
     remainder = amount % 1_000_000
     if remainder >= 500_000:
         rounded = (amount // 1_000_000 + 1) * 1_000_000
     else:
         rounded = (amount // 1_000_000) * 1_000_000
-    return f"{rounded:,}".replace(",", " ")
+    return f"{rounded:,}".replace(",", " "), asl
 
 
 async def _send_firm_direct_report(
@@ -2710,28 +2713,34 @@ async def _send_firm_direct_report(
     # else: available_months > 1 → fayl firm_month_select_handler da yuboriladi
 
     # ── 4. Shartnoma / INN / To'lov bloki ────────────────────────────────────
-    _summa_raw   = (summa_info or {}).get("summa", "")
-    _summa_disp  = _round_summa_to_million(_summa_raw) if _summa_raw else ""
-    _inn_disp    = (summa_info or {}).get("inn", "")
+    _summa_raw    = (summa_info or {}).get("summa", "")
+    _summa_rounded, _summa_asl = _round_summa_to_million(_summa_raw) if _summa_raw else ("", "")
+    _inn_disp     = (summa_info or {}).get("inn", "")
     _dogovor_disp = ((summa_info or {}).get("dogovor") or (summa_info or {}).get("shartnoma", ""))
 
     if language == "uz":
-        lines = [f"Firma: {firma_nomi}"]
-        if _summa_disp:
-            lines.append(f"Summa: {_summa_disp}")
+        lines = [f"Firma: `{firma_nomi}`"]
+        if _summa_rounded:
+            _summa_line = f"Summa: `{_summa_rounded}`"
+            if _summa_asl and _summa_asl != _summa_rounded:
+                _summa_line += f" ({_summa_asl})"
+            lines.append(_summa_line)
         if _inn_disp:
-            lines.append(f"INN: {_inn_disp}")
+            lines.append(f"INN: `{_inn_disp}`")
         if _dogovor_disp:
-            lines.append(f"Shartnoma: {_dogovor_disp}")
+            lines.append(f"Shartnoma: `{_dogovor_disp}`")
         lines.append("реализация")
     else:
-        lines = [f"Фирма: {firma_nomi}"]
-        if _summa_disp:
-            lines.append(f"Сумма: {_summa_disp}")
+        lines = [f"Фирма: `{firma_nomi}`"]
+        if _summa_rounded:
+            _summa_line = f"Сумма: `{_summa_rounded}`"
+            if _summa_asl and _summa_asl != _summa_rounded:
+                _summa_line += f" ({_summa_asl})"
+            lines.append(_summa_line)
         if _inn_disp:
-            lines.append(f"ИНН: {_inn_disp}")
+            lines.append(f"ИНН: `{_inn_disp}`")
         if _dogovor_disp:
-            lines.append(f"Договор: {_dogovor_disp}")
+            lines.append(f"Договор: `{_dogovor_disp}`")
         lines.append("реализация")
 
     # ── 5. Hisobot bloki ─────────────────────────────────────────────────────
