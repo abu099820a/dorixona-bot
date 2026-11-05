@@ -2566,6 +2566,23 @@ async def firm_get_month_pick_handler(update: Update, ctx: ContextTypes.DEFAULT_
 
 # ─── Firma o'zi hisobotini olishi (self-service) ───────────────────────────────
 
+def _round_summa_to_million(summa_str: str) -> str:
+    """Summani 1 mln ga yaxlitlaydi: ≥500 000 → yuqoriga, <500 000 → pastga.
+    Misol: 39 891 299 → 40 000 000
+    """
+    import re as _re
+    digits = _re.sub(r"[^\d]", "", str(summa_str))
+    if not digits:
+        return summa_str
+    amount = int(digits)
+    remainder = amount % 1_000_000
+    if remainder >= 500_000:
+        rounded = (amount // 1_000_000 + 1) * 1_000_000
+    else:
+        rounded = (amount // 1_000_000) * 1_000_000
+    return f"{rounded:,}".replace(",", " ")
+
+
 async def _send_firm_direct_report(
     update: Update, ctx: ContextTypes.DEFAULT_TYPE, firm_info: dict,
     from_menu: bool = False, summa_info_override: dict | None = None
@@ -2688,24 +2705,29 @@ async def _send_firm_direct_report(
     # else: available_months > 1 → fayl firm_month_select_handler da yuboriladi
 
     # ── 4. Shartnoma / INN / To'lov bloki ────────────────────────────────────
-    lines = [f"🏢 *{firma_nomi}*", ""]
-    if summa_info:
-        if summa_info.get("dogovor"):
-            lines.append(f"📄 {'Shartnoma' if language == 'uz' else 'Договор'}: {summa_info['dogovor']}")
-        elif summa_info.get("shartnoma"):
-            lines.append(f"📄 {'Shartnoma' if language == 'uz' else 'Договор'}: {summa_info['shartnoma']}")
-        if summa_info.get("inn"):
-            lines.append(f"🆔 INN: {summa_info['inn']}")
-        holati = summa_info.get("holati", "").strip().lower()
-        belgi  = "✅" if holati in ("to'langan", "оплачено", "✅") else \
-                 "❌" if holati in ("to'lanmagan", "не оплачено", "❌") else "⏳"
-        if summa_info.get("summa") or summa_info.get("holati"):
-            lines.append("")
-            lines.append(
-                f"{belgi} To'lov: {summa_info.get('summa', '—')} ({summa_info.get('holati', '—')})"
-                if language == "uz" else
-                f"{belgi} Оплата: {summa_info.get('summa', '—')} ({summa_info.get('holati', '—')})"
-            )
+    _summa_raw   = (summa_info or {}).get("summa", "")
+    _summa_disp  = _round_summa_to_million(_summa_raw) if _summa_raw else ""
+    _inn_disp    = (summa_info or {}).get("inn", "")
+    _dogovor_disp = ((summa_info or {}).get("dogovor") or (summa_info or {}).get("shartnoma", ""))
+
+    if language == "uz":
+        lines = [f"Firma: {firma_nomi}"]
+        if _summa_disp:
+            lines.append(f"Summa: {_summa_disp}")
+        if _inn_disp:
+            lines.append(f"INN: {_inn_disp}")
+        if _dogovor_disp:
+            lines.append(f"Shartnoma: {_dogovor_disp}")
+        lines.append("Реализация")
+    else:
+        lines = [f"Фирма: {firma_nomi}"]
+        if _summa_disp:
+            lines.append(f"Сумма: {_summa_disp}")
+        if _inn_disp:
+            lines.append(f"ИНН: {_inn_disp}")
+        if _dogovor_disp:
+            lines.append(f"Договор: {_dogovor_disp}")
+        lines.append("Реализация")
 
     # ── 5. Hisobot bloki ─────────────────────────────────────────────────────
     if len(available_months) == 0:
