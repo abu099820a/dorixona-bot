@@ -6823,18 +6823,22 @@ async def firm_add_username_handler(update: Update, ctx: ContextTypes.DEFAULT_TY
         full_name = (
             f"{contact.first_name or ''} {contact.last_name or ''}".strip() or phone
         )
-        # Mavjud qator tanlangan bo'lsa — aynan shu qatorga yozamiz
+        # Mavjud qator tanlangan bo'lsa — FAQAT shu qatorga yozamiz
         if existing_row_idx:
             ok = await run_write(save_firma_telegram_id_by_row,
                                  existing_row_idx, tid or 0, existing_row_sh, phone)
-            # PHARMACY_SHEET_ID Firmalar ga ham yangilaymiz (auth uchun)
+            # PHARMACY_SHEET_ID Firmalar ga ham auth uchun yangilaymiz
             if ok:
                 await run_write(save_new_firma, firma_nomi, "", phone, tid, shartnoma)
+            # save_firma_contact_to_tolovlar CHAQIRILMAYDI —
+            # u barcha qatorlarni yangilaydi, biz esa faqat bitta qator yangiladik
         else:
+            # Yangi firma — To'lovlar dagi barcha mos qatorlarga yozish mumkin
             ok = await run_write(save_new_firma, firma_nomi, "", phone, tid, shartnoma)
+            if ok:
+                await run_write(save_firma_contact_to_tolovlar, firma_nomi, phone, tid)
+
         if ok:
-            # To'lovlar varag'iga ham yoz (D=Тел рақами, E=ID)
-            await run_write(save_firma_contact_to_tolovlar, firma_nomi, phone, tid)
             if tid:
                 tid_note = (
                     f"\n🆔 TelegramID: <b>{tid}</b>\n✅ Hisobot avtomatik yuboriladi!"
@@ -6847,15 +6851,18 @@ async def firm_add_username_handler(update: Update, ctx: ContextTypes.DEFAULT_TY
                     if language == "uz" else
                     "\n📞 TelegramID нет — будет определён по телефону при запросе отчёта."
                 )
+            sh_note = f"\n📄 Shartnoma: <b>{_html.escape(shartnoma)}</b>" if shartnoma else ""
             await msg.edit_text(
-                f"✅ <b>{_html.escape(firma_nomi)}</b> — qo'shildi!\n\n"
+                f"✅ <b>{_html.escape(firma_nomi)}</b> — saqlandi!\n\n"
                 f"👤 <b>{_html.escape(full_name)}</b>\n"
                 f"📱 {_html.escape(phone)}"
+                f"{sh_note}"
                 f"{tid_note}"
                 if language == "uz" else
-                f"✅ <b>{_html.escape(firma_nomi)}</b> — добавлена!\n\n"
+                f"✅ <b>{_html.escape(firma_nomi)}</b> — сохранена!\n\n"
                 f"👤 <b>{_html.escape(full_name)}</b>\n"
                 f"📱 {_html.escape(phone)}"
+                f"{sh_note}"
                 f"{tid_note}",
                 parse_mode="HTML",
             )
