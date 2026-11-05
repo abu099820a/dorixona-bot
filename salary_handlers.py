@@ -79,6 +79,7 @@ ADMIN_FIRM_REPORT_CONTRACT = 522  # Admin bir necha shartnomadan birini tanlaydi
 FIRM_SUPPLIER_CONTRACT_SELECT = 523  # Postawchik bir necha shartnomadan birini tanlaydi (hisobot uchun)
 FIRM_PHONE_WAIT = 524               # Postawchik telefon raqamini yuborishi kutilmoqda
 FIRM_ADD_NAME = 525                 # Admin yangi firma nomini kiritmoqda
+FIRM_ADD_CONTRACT = 536             # Admin yangi firma shartnoma raqamini kiritmoqda
 FIRM_ADD_USERNAME = 526             # Admin firma vakili @username ni kiritmoqda
 OPLATA_FILE = 527                   # Oплата: admin xlsx fayl yuborishi kutilmoqda
 OPLATA_KARZ = 528                   # Оплата: admin карз miqdorini kiritishi kutilmoqda
@@ -1111,6 +1112,31 @@ def get_firma_file_by_telegram_id(telegram_id) -> dict | None:
         return None
 
 
+def get_contracts_by_firma_nomi(firma_nomi: str) -> list:
+    """
+    Firma nomi bo'yicha Firmalar varag'idan barcha shartnomalarni qaytaradi.
+    Har bir element: {"shartnoma": str, "phone": str, "tid": str, "_row_idx": int}
+    Admin yangi firma qo'shayotganda mavjud shartnomalarni ko'rsatish uchun.
+    """
+    results = []
+    target = _norm_firma_nomi(firma_nomi)
+    try:
+        from register_handlers import _get_firmalar_ws
+        ws = _get_firmalar_ws()
+        records = ws.get_all_records()
+        for i, row in enumerate(records, start=2):
+            if _norm_firma_nomi(str(row.get("Firma nomi", ""))) == target:
+                results.append({
+                    "shartnoma": str(row.get("Shartnoma raqami", "")).strip(),
+                    "phone":     str(row.get("Telefon",          "")).strip(),
+                    "tid":       str(row.get("TelegramID",       "")).strip(),
+                    "_row_idx":  i,
+                })
+    except Exception as e:
+        logger.error(f"[FIRMS] get_contracts_by_firma_nomi xato: {e}")
+    return results
+
+
 def get_all_firma_files_by_tid(telegram_id) -> list:
     """
     Berilgan TelegramID bo'yicha "Firmalar" varag'idan BARCHA mos
@@ -1363,69 +1389,123 @@ def save_firma_telegram_id_by_username(username: str, telegram_id: int) -> bool:
 
 
 def save_new_firma(firma_nomi: str, username: str = "",
-                   phone: str = "", telegram_id=None) -> bool:
+                   phone: str = "", telegram_id=None,
+                   shartnoma: str = "") -> bool:
     """
     Firmalar varag'iga firma qo'shadi yoki yangilaydi (upsert).
-    Jadval tuzilishi: Firma nomi | Telefon | TelegramID | FileID | FileName | Username
-    - Firma avval mavjud bo'lsa → Telefon, TelegramID, Username ni yangilaydi
-      (faqat yangi qiymat berilgan bo'lsa; bo'sh qiymat mavjudni o'chirmaydi)
-    - Yangi firma bo'lsa → yangi qator qo'shadi.
+    Yagona kalit: Firma nomi + Shartnoma raqami
+    - Topilsa → Telefon, TelegramID, Username ni yangilaydi
+    - Topilmasa → yangi qator qo'shadi.
+    Ustun tartibi: Firma nomi | Shartnoma raqami | Telefon | TelegramID | FileID | FileName | Username
+    (eski tartib: Firma nomi | Telefon | TelegramID | FileID | FileName | Username — mos keltiriladi)
     """
+    def _find_col(headers, name):
+        """Sarlavha qatoridan ustun indeksini topadi (1-bazali)."""
+        for idx, h in enumerate(headers, start=1):
+            if h.strip().lower() == name.lower():
+                return idx
+        return None
+
     try:
         from register_handlers import _get_firmalar_ws
         ws = _get_firmalar_ws()
         uname = _norm_username(username) if username else ""
         tid   = str(telegram_id) if telegram_id else ""
         ph    = _norm_phone_for_firma(phone) if phone else ""
+        sh    = shartnoma.strip()
 
-        # Mavjud qatorni qidirish
         all_values = ws.get_all_values()
-        target = _norm_firma_nomi(firma_nomi)
+        if not all_values:
+            return False
+
+        headers = all_values[0]
+        # Ustun indekslarini dinamik topish
+        col_shartnoma = _find_col(headers, "Shartnoma raqami")
+        col_phone     = _find_col(headers, "Telefon")
+        col_tid       = _find_col(headers, "TelegramID")
+        col_username  = _find_col(headers, "Username")
+
+        # Ustun topilmasa eski joylashuvni qo'llash (fallback)
+        if col_phone   is None: col_phone   = 2
+        if col_tid     is None: col_tid     = 3
+        if col_username is None: col_username = 6
+
+        target_name = _norm_firma_nomi(firma_nomi)
+        target_sh   = sh.lower().strip()
+
         for i, row in enumerate(all_values[1:], start=2):
-            if row and _norm_firma_nomi(row[0]) == target:
-                # Firma topildi — faqat yangi qiymatlarni yangilaymiz
-                batch = []
-                if ph:
-                    batch.append({"range": f"B{i}", "values": [[ph]]})
-                if tid:
-                    batch.append({"range": f"C{i}", "values": [[tid]]})
-                if uname:
-                    batch.append({"range": f"F{i}", "values": [[uname]]})
-                if batch:
-                    ws.batch_update(batch)
-                logger.info(f"[FIRMS] Firma yangilandi (upsert): '{firma_nomi}' — {i}-qator")
-                return True
+            if not row or _norm_firma_nomi(row[0]) != target_name:
+                continue
+            # Shartnoma bo'yicha ham tekshirish
+            row_sh = ""
+            if col_shartnoma and len(row) >= col_shartnoma:
+                row_sh = str(row[col_shartnoma - 1]).strip().lower()
+            if sh and row_sh and row_sh != target_sh:
+                continue   # Boshqa shartnoma — o'tkazib yuborish
 
-        # Yangi firma — qator qo'shish
-        ws.append_row([firma_nomi, ph, tid, "", "", uname])
-        logger.info(f"[FIRMS] Yangi firma qo'shildi: '{firma_nomi}'")
+            # Mos qator topildi — yangilaymiz
+            batch = []
+            if ph and col_phone:
+                batch.append({"range": f"{_col_letter(col_phone)}{i}", "values": [[ph]]})
+            if tid and col_tid:
+                batch.append({"range": f"{_col_letter(col_tid)}{i}", "values": [[tid]]})
+            if uname and col_username:
+                batch.append({"range": f"{_col_letter(col_username)}{i}", "values": [[uname]]})
+            if sh and col_shartnoma:
+                batch.append({"range": f"{_col_letter(col_shartnoma)}{i}", "values": [[sh]]})
+            if batch:
+                ws.batch_update(batch)
+            logger.info(f"[FIRMS] Firma yangilandi: '{firma_nomi}' shartnoma='{sh}' — {i}-qator")
+            return True
 
-        # SHEETS_ID → "Firmalar" ga ham yozish (dorixonalar_yangi)
+        # Yangi qator qo'shish
+        # Sarlavhalarga mos yangi qator tuzamiz
+        new_row = [""] * max(len(headers), 7)
+        new_row[0] = firma_nomi
+        if col_shartnoma: new_row[col_shartnoma - 1] = sh
+        if col_phone:     new_row[col_phone - 1]     = ph
+        if col_tid:       new_row[col_tid - 1]        = tid
+        if col_username:  new_row[col_username - 1]   = uname
+        ws.append_row(new_row)
+        logger.info(f"[FIRMS] Yangi firma qo'shildi: '{firma_nomi}' shartnoma='{sh}'")
+
+        # SHEETS_ID → "Firmalar" ga ham yozish
         try:
             if SHEETS_ID:
                 gc2 = _get_client()
                 sh2 = gc2.open_by_key(SHEETS_ID)
                 ws2 = sh2.worksheet("Firmalar")
                 all2 = ws2.get_all_values()
-                target2 = _norm_firma_nomi(firma_nomi)
-                found2 = False
+                headers2 = all2[0] if all2 else []
+                col_sh2  = _find_col(headers2, "Shartnoma raqami")
+                col_ph2  = _find_col(headers2, "Telefon")  or 2
+                col_t2   = _find_col(headers2, "TelegramID") or 3
+                col_u2   = _find_col(headers2, "Username")   or 6
+                target2  = _norm_firma_nomi(firma_nomi)
+                found2   = False
                 for i2, row2 in enumerate(all2[1:], start=2):
-                    if row2 and _norm_firma_nomi(row2[0]) == target2:
-                        batch2 = []
-                        if ph:
-                            batch2.append({"range": f"B{i2}", "values": [[ph]]})
-                        if tid:
-                            batch2.append({"range": f"C{i2}", "values": [[tid]]})
-                        if uname:
-                            batch2.append({"range": f"F{i2}", "values": [[uname]]})
-                        if batch2:
-                            ws2.batch_update(batch2)
-                        found2 = True
-                        logger.info(f"[FIRMS2] SHEETS_ID Firmalar yangilandi: '{firma_nomi}'")
-                        break
+                    if not row2 or _norm_firma_nomi(row2[0]) != target2:
+                        continue
+                    row_sh2 = str(row2[col_sh2 - 1]).strip().lower() if col_sh2 and len(row2) >= col_sh2 else ""
+                    if sh and row_sh2 and row_sh2 != target_sh:
+                        continue
+                    batch2 = []
+                    if ph:  batch2.append({"range": f"{_col_letter(col_ph2)}{i2}", "values": [[ph]]})
+                    if tid: batch2.append({"range": f"{_col_letter(col_t2)}{i2}",  "values": [[tid]]})
+                    if uname: batch2.append({"range": f"{_col_letter(col_u2)}{i2}", "values": [[uname]]})
+                    if sh and col_sh2: batch2.append({"range": f"{_col_letter(col_sh2)}{i2}", "values": [[sh]]})
+                    if batch2:
+                        ws2.batch_update(batch2)
+                    found2 = True
+                    break
                 if not found2:
-                    ws2.append_row([firma_nomi, ph, tid, "", "", uname])
-                    logger.info(f"[FIRMS2] SHEETS_ID Firmalar ga qo'shildi: '{firma_nomi}'")
+                    nr2 = [""] * max(len(headers2), 7)
+                    nr2[0] = firma_nomi
+                    if col_sh2: nr2[col_sh2 - 1] = sh
+                    nr2[col_ph2 - 1] = ph
+                    nr2[col_t2  - 1] = tid
+                    nr2[col_u2  - 1] = uname
+                    ws2.append_row(nr2)
         except Exception as e2:
             logger.error(f"[FIRMS2] SHEETS_ID yozishda xato: {e2}")
 
@@ -1433,6 +1513,15 @@ def save_new_firma(firma_nomi: str, username: str = "",
     except Exception as e:
         logger.error(f"[FIRMS] save_new_firma xato: {e}")
         return False
+
+
+def _col_letter(n: int) -> str:
+    """1-bazali ustun raqamini Excel harfiga aylantiradi (1→A, 26→Z, 27→AA)."""
+    s = ""
+    while n > 0:
+        n, r = divmod(n - 1, 26)
+        s = chr(65 + r) + s
+    return s
 
 
 def save_firma_contact_to_tolovlar(firma_nomi: str, phone: str = "",
@@ -6439,16 +6528,186 @@ async def firm_add_name_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     ctx.user_data["new_firma_nomi"] = txt
     import html as _html
+
+    # Sheetdan mavjud shartnomalarni qidirish
+    msg_wait = await update.message.reply_text(
+        "⏳ Qidirilmoqda..." if language == "uz" else "⏳ Поиск..."
+    )
+    existing = await run_read(get_contracts_by_firma_nomi, txt)
+    await msg_wait.delete()
+
+    new_btn  = "➕ Yangi shartnoma" if language == "uz" else "➕ Новый договор"
+
+    if existing:
+        # Mavjud shartnomalar bor — ro'yxatini ko'rsat
+        ctx.user_data["existing_contracts"] = existing
+        buttons = []
+        for c in existing:
+            sh = c["shartnoma"] or ("(shartnoma yo'q)" if language == "uz" else "(без договора)")
+            tid_mark = " ✅" if c["tid"] else " ⚠️"
+            buttons.append([f"📄 {sh}{tid_mark}"])
+        buttons.append([new_btn])
+        buttons.append([back_txt])
+
+        lines = []
+        for c in existing:
+            sh  = c["shartnoma"] or "—"
+            tid = c["tid"]  or "—"
+            ph  = c["phone"] or "—"
+            lines.append(f"• <b>{sh}</b> | ID: {tid} | Tel: {ph}")
+        contracts_txt = "\n".join(lines)
+
+        await update.message.reply_text(
+            f"🏢 <b>{_html.escape(txt)}</b> bo'yicha mavjud shartnomalar:\n\n"
+            f"{contracts_txt}\n\n"
+            "✅ — TelegramID ulangan\n"
+            "⚠️ — TelegramID yo'q\n\n"
+            "Qaysi shartnomaga vakil ulaysiz?"
+            if language == "uz" else
+            f"🏢 Существующие договора по <b>{_html.escape(txt)}</b>:\n\n"
+            f"{contracts_txt}\n\n"
+            "✅ — TelegramID подключён\n"
+            "⚠️ — TelegramID не указан\n\n"
+            "К какому договору привязать представителя?",
+            parse_mode="HTML",
+            reply_markup=_RKM(buttons, resize_keyboard=True),
+        )
+    else:
+        # Yangi firma — shartnoma raqamini so'rash
+        ctx.user_data.pop("existing_contracts", None)
+        await update.message.reply_text(
+            f"✅ Firma nomi: <b>{_html.escape(txt)}</b>\n\n"
+            "📄 Shartnoma raqamini kiriting:\n"
+            "<i>(Masalan: №69Ж yoki 3530)\n"
+            "Shartnoma yo'q bo'lsa — «Yo'q» deb yozing</i>"
+            if language == "uz" else
+            f"✅ Название фирмы: <b>{_html.escape(txt)}</b>\n\n"
+            "📄 Введите номер договора:\n"
+            "<i>(Например: №69Ж или 3530)\n"
+            "Если договора нет — напишите «Нет»</i>",
+            parse_mode="HTML",
+            reply_markup=_RKM([[back_txt]], resize_keyboard=True),
+        )
+    return FIRM_ADD_CONTRACT
+
+
+async def firm_add_contract_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """
+    FIRM_ADD_CONTRACT holatida — admin shartnoma raqamini kiritadi.
+    So'ngra vakil kontaktini so'rash uchun FIRM_ADD_USERNAME ga o'tadi.
+    """
+    from telegram import ReplyKeyboardMarkup as _RKM
+    import html as _html
+    language = ctx.user_data.get("lang", "uz")
+    is_admin = update.effective_user.id in ADMIN_IDS
+    back_txt = "⬅️ Orqaga" if language == "uz" else "⬅️ Назад"
+    txt = (update.message.text or "").strip()
+
+    new_btn  = "➕ Yangi shartnoma" if language == "uz" else "➕ Новый договор"
+    existing = ctx.user_data.get("existing_contracts", [])
+
+    if txt in (back_txt, "⬅️ Orqaga", "⬅️ Назад"):
+        ctx.user_data.pop("new_firma_nomi", None)
+        ctx.user_data.pop("existing_contracts", None)
+        ctx.user_data.pop("awaiting_new_contract", None)
+        from bot import firm_reports_keyboard, FIRM_REPORTS_MENU
+        await update.message.reply_text(
+            "📊 Bo'limni tanlang:" if language == "uz" else "📊 Выберите раздел:",
+            reply_markup=firm_reports_keyboard(language, is_admin),
+        )
+        return FIRM_REPORTS_MENU
+
+    if update.message.contact:
+        await update.message.reply_text(
+            "⚠️ Bu yerda *shartnoma raqamini* matn sifatida kiriting."
+            if language == "uz" else
+            "⚠️ Здесь введите *номер договора* текстом.",
+            parse_mode="Markdown",
+        )
+        return FIRM_ADD_CONTRACT
+
+    if not txt:
+        return FIRM_ADD_CONTRACT
+
+    firma_nomi = ctx.user_data.get("new_firma_nomi", "")
+
+    # ── "Yangi shartnoma" tugmasi bosildi ────────────────────────────────────
+    if txt in (new_btn, "➕ Yangi shartnoma", "➕ Новый договор"):
+        ctx.user_data["awaiting_new_contract"] = True
+        await update.message.reply_text(
+            "📄 Yangi shartnoma raqamini kiriting:\n"
+            "<i>(Masalan: №69Ж yoki 3530)\n"
+            "Shartnoma yo'q bo'lsa — «Yo'q» deb yozing</i>"
+            if language == "uz" else
+            "📄 Введите номер нового договора:\n"
+            "<i>(Например: №69Ж или 3530)\n"
+            "Если договора нет — напишите «Нет»</i>",
+            parse_mode="HTML",
+            reply_markup=_RKM([[back_txt]], resize_keyboard=True),
+        )
+        return FIRM_ADD_CONTRACT
+
+    # ── Foydalanuvchi shartnoma raqamini yozdi yoki mavjud birini tanladi ────
+    awaiting_new = ctx.user_data.pop("awaiting_new_contract", False)
+
+    if awaiting_new:
+        # Yangi shartnoma raqami kiritildi
+        no_words = {"yo'q", "yoq", "нет", "net", "-", "—"}
+        shartnoma = "" if txt.lower() in no_words else txt
+        ctx.user_data.pop("existing_contracts", None)
+    else:
+        # Mavjud shartnomadan tanlandi — "📄 №69Ж ✅" kabi matndan raqamni ajratamiz
+        clean = txt.lstrip("📄 ").rstrip(" ✅⚠️").strip()
+        matched = None
+        for c in existing:
+            sh = c["shartnoma"] or ""
+            sh_display = sh or ("(shartnoma yo'q)" if language == "uz" else "(без договора)")
+            if clean in (sh, sh_display, f"📄 {sh_display} ✅", f"📄 {sh_display} ⚠️"):
+                matched = c
+                break
+            if clean == sh_display or clean == sh:
+                matched = c
+                break
+        if not matched:
+            # Aniq mos kelmasa — matnni shartnoma sifatida qabul qilish
+            shartnoma = clean
+        else:
+            shartnoma = matched["shartnoma"]
+            # Mavjud qator indeksini saqlash (shu qatorga yangilanadi)
+            ctx.user_data["existing_row_idx"] = matched["_row_idx"]
+        ctx.user_data.pop("existing_contracts", None)
+
+    ctx.user_data["new_shartnoma"] = shartnoma
+
+    shartnoma_txt = (
+        f"📄 Shartnoma: <b>{_html.escape(shartnoma)}</b>\n\n"
+        if shartnoma else
+        "📄 Shartnoma: <i>ko'rsatilmagan</i>\n\n"
+    ) if language == "uz" else (
+        f"📄 Договор: <b>{_html.escape(shartnoma)}</b>\n\n"
+        if shartnoma else
+        "📄 Договор: <i>не указан</i>\n\n"
+    )
+
+    from telegram import KeyboardButton
+    kb = _RKM(
+        [[KeyboardButton(
+            "📱 Kontaktni yuborish" if language == "uz" else "📱 Отправить контакт",
+            request_contact=True
+        )],
+         [back_txt]],
+        resize_keyboard=True,
+    )
     await update.message.reply_text(
-        f"✅ Firma nomi: <b>{_html.escape(txt)}</b>\n\n"
-        "📱 Endi firma vakili Telegram <b>@username</b> ni kiriting:\n"
-        "<i>(Masalan: @sardormed yoki sardormed)</i>"
+        f"✅ Firma: <b>{_html.escape(firma_nomi)}</b>\n"
+        f"{shartnoma_txt}"
+        "👤 Endi vakil kontaktini yuboring yoki <b>@username</b> kiriting:"
         if language == "uz" else
-        f"✅ Название фирмы: <b>{_html.escape(txt)}</b>\n\n"
-        "📱 Теперь введите Telegram <b>@username</b> представителя:\n"
-        "<i>(Например: @sardormed или sardormed)</i>",
+        f"✅ Фирма: <b>{_html.escape(firma_nomi)}</b>\n"
+        f"{shartnoma_txt}"
+        "👤 Теперь отправьте контакт представителя или введите <b>@username</b>:",
         parse_mode="HTML",
-        reply_markup=_RKM([[back_txt]], resize_keyboard=True),
+        reply_markup=kb,
     )
     return FIRM_ADD_USERNAME
 
@@ -6478,6 +6737,7 @@ async def firm_add_username_handler(update: Update, ctx: ContextTypes.DEFAULT_TY
         return FIRM_REPORTS_MENU
 
     firma_nomi = ctx.user_data.pop("new_firma_nomi", "").strip()
+    shartnoma  = ctx.user_data.pop("new_shartnoma", "").strip()
 
     # Agar firma nomi yo'q bo'lsa (bot redeploydan keyin user_data yo'qolgan)
     if not firma_nomi:
@@ -6501,7 +6761,7 @@ async def firm_add_username_handler(update: Update, ctx: ContextTypes.DEFAULT_TY
         full_name = (
             f"{contact.first_name or ''} {contact.last_name or ''}".strip() or phone
         )
-        ok = await run_write(save_new_firma, firma_nomi, "", phone, tid)
+        ok = await run_write(save_new_firma, firma_nomi, "", phone, tid, shartnoma)
         if ok:
             # To'lovlar varag'iga ham yoz (D=Тел рақами, E=ID)
             await run_write(save_firma_contact_to_tolovlar, firma_nomi, phone, tid)
@@ -6555,7 +6815,7 @@ async def firm_add_username_handler(update: Update, ctx: ContextTypes.DEFAULT_TY
         ctx.user_data["new_firma_nomi"] = firma_nomi
         return FIRM_ADD_USERNAME
 
-    ok = await run_write(save_new_firma, firma_nomi, username)
+    ok = await run_write(save_new_firma, firma_nomi, username, shartnoma=shartnoma)
     if ok:
         await msg.edit_text(
             f"✅ <b>{_html.escape(firma_nomi)}</b> — qo'shildi!\n\n"
@@ -6655,6 +6915,10 @@ def get_sal_states():
         FIRM_ADD_NAME: [
             MessageHandler(filters.CONTACT, firm_add_name_handler),
             MessageHandler(filters.TEXT & ~filters.COMMAND, firm_add_name_handler),
+        ],
+        FIRM_ADD_CONTRACT: [
+            MessageHandler(filters.CONTACT, firm_add_contract_handler),
+            MessageHandler(filters.TEXT & ~filters.COMMAND, firm_add_contract_handler),
         ],
         FIRM_ADD_USERNAME: [
             MessageHandler(filters.CONTACT, firm_add_username_handler),
