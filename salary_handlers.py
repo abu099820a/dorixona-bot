@@ -1114,26 +1114,58 @@ def get_firma_file_by_telegram_id(telegram_id) -> dict | None:
 
 def get_contracts_by_firma_nomi(firma_nomi: str) -> list:
     """
-    Firma nomi bo'yicha Firmalar varag'idan barcha shartnomalarni qaytaradi.
-    Har bir element: {"shartnoma": str, "phone": str, "tid": str, "_row_idx": int}
-    Admin yangi firma qo'shayotganda mavjud shartnomalarni ko'rsatish uchun.
+    Firma nomi bo'yicha barcha shartnomalarni qaytaradi.
+    Avval SHEETS_ID → Firmalar (shartnoma raqamlari bor),
+    keyin PHARMACY_SHEET_ID → Firmalar (telefon/TelegramID bor) ni birlashtiradi.
+    Har bir element: {"shartnoma": str, "phone": str, "tid": str, "_row_idx": int, "_sheet": str}
     """
     results = []
     target = _norm_firma_nomi(firma_nomi)
+
+    # 1. SHEETS_ID → Firmalar (asosiy — shartnoma raqamlari shu yerda)
+    try:
+        if SHEETS_ID:
+            gc = _get_client()
+            ws2 = gc.open_by_key(SHEETS_ID).worksheet("Firmalar")
+            records2 = ws2.get_all_records()
+            for i, row in enumerate(records2, start=2):
+                if _norm_firma_nomi(str(row.get("Firma nomi", ""))) == target:
+                    results.append({
+                        "shartnoma": str(row.get("Shartnoma raqami", "")).strip(),
+                        "phone":     str(row.get("Telefon",          "")).strip(),
+                        "tid":       str(row.get("TelegramID",       "")).strip(),
+                        "_row_idx":  i,
+                        "_sheet":    "sheets_id",
+                    })
+    except Exception as e:
+        logger.error(f"[FIRMS] get_contracts_by_firma_nomi SHEETS_ID xato: {e}")
+
+    # 2. PHARMACY_SHEET_ID → Firmalar (agar SHEETS_ID da topilmasa yoki qo'shimcha)
     try:
         from register_handlers import _get_firmalar_ws
-        ws = _get_firmalar_ws()
-        records = ws.get_all_records()
-        for i, row in enumerate(records, start=2):
+        ws1 = _get_firmalar_ws()
+        records1 = ws1.get_all_records()
+        for i, row in enumerate(records1, start=2):
             if _norm_firma_nomi(str(row.get("Firma nomi", ""))) == target:
-                results.append({
-                    "shartnoma": str(row.get("Shartnoma raqami", "")).strip(),
-                    "phone":     str(row.get("Telefon",          "")).strip(),
-                    "tid":       str(row.get("TelegramID",       "")).strip(),
-                    "_row_idx":  i,
-                })
+                sh = str(row.get("Shartnoma raqami", "")).strip()
+                ph = str(row.get("Telefon",          "")).strip()
+                tid = str(row.get("TelegramID",      "")).strip()
+                # Agar SHEETS_ID da xuddi shu shartnoma allaqachon bor — qayta qo'shmaymiz
+                already = any(
+                    r["shartnoma"] == sh and r["_sheet"] == "sheets_id"
+                    for r in results
+                )
+                if not already:
+                    results.append({
+                        "shartnoma": sh,
+                        "phone":     ph,
+                        "tid":       tid,
+                        "_row_idx":  i,
+                        "_sheet":    "pharmacy",
+                    })
     except Exception as e:
-        logger.error(f"[FIRMS] get_contracts_by_firma_nomi xato: {e}")
+        logger.error(f"[FIRMS] get_contracts_by_firma_nomi PHARMACY xato: {e}")
+
     return results
 
 
@@ -1265,16 +1297,32 @@ def get_all_firma_files_by_phone(phone: str) -> list:
     return results
 
 
-def save_firma_telegram_id_by_row(row_idx: int, telegram_id: int) -> bool:
+def save_firma_telegram_id_by_row(row_idx: int, telegram_id: int,
+                                   sheet: str = "pharmacy") -> bool:
     """
     Berilgan qator indeksiga TelegramID yozadi (aniq qator bo'yicha).
-    Bir nechta shartnomali firmalar uchun — faqat tanlangan qatorga yoziladi.
+    sheet='pharmacy' → PHARMACY_SHEET_ID Firmalar
+    sheet='sheets_id' → SHEETS_ID Firmalar
+    TelegramID ustuni header orqali dinamik topiladi (fallback: 3-ustun).
     """
-    try:
-        from register_handlers import _get_firmalar_ws
-        ws = _get_firmalar_ws()
-        ws.update_cell(row_idx, 3, str(telegram_id))  # TelegramID — 3-ustun (C)
+    def _write(ws):
+        headers = ws.row_values(1)
+        try:
+            col = headers.index("TelegramID") + 1
+        except ValueError:
+            col = 3  # fallback
+        ws.update_cell(row_idx, col, str(telegram_id))
         return True
+
+    try:
+        if sheet == "sheets_id" and SHEETS_ID:
+            gc = _get_client()
+            ws = gc.open_by_key(SHEETS_ID).worksheet("Firmalar")
+            return _write(ws)
+        else:
+            from register_handlers import _get_firmalar_ws
+            ws = _get_firmalar_ws()
+            return _write(ws)
     except Exception as e:
         logger.error(f"[FIRMS] save_firma_telegram_id_by_row xato: {e}")
         return False
@@ -6673,8 +6721,9 @@ async def firm_add_contract_handler(update: Update, ctx: ContextTypes.DEFAULT_TY
             shartnoma = clean
         else:
             shartnoma = matched["shartnoma"]
-            # Mavjud qator indeksini saqlash (shu qatorga yangilanadi)
-            ctx.user_data["existing_row_idx"] = matched["_row_idx"]
+            # Mavjud qator indeksini va qaysi sheetdan ekanini saqlash
+            ctx.user_data["existing_row_idx"]  = matched["_row_idx"]
+            ctx.user_data["existing_row_sheet"] = matched.get("_sheet", "pharmacy")
         ctx.user_data.pop("existing_contracts", None)
 
     ctx.user_data["new_shartnoma"] = shartnoma
@@ -6736,8 +6785,10 @@ async def firm_add_username_handler(update: Update, ctx: ContextTypes.DEFAULT_TY
         )
         return FIRM_REPORTS_MENU
 
-    firma_nomi = ctx.user_data.pop("new_firma_nomi", "").strip()
-    shartnoma  = ctx.user_data.pop("new_shartnoma", "").strip()
+    firma_nomi       = ctx.user_data.pop("new_firma_nomi",      "").strip()
+    shartnoma        = ctx.user_data.pop("new_shartnoma",       "").strip()
+    existing_row_idx = ctx.user_data.pop("existing_row_idx",   None)
+    existing_row_sh  = ctx.user_data.pop("existing_row_sheet", "pharmacy")
 
     # Agar firma nomi yo'q bo'lsa (bot redeploydan keyin user_data yo'qolgan)
     if not firma_nomi:
@@ -6761,7 +6812,15 @@ async def firm_add_username_handler(update: Update, ctx: ContextTypes.DEFAULT_TY
         full_name = (
             f"{contact.first_name or ''} {contact.last_name or ''}".strip() or phone
         )
-        ok = await run_write(save_new_firma, firma_nomi, "", phone, tid, shartnoma)
+        # Mavjud qator tanlangan bo'lsa — faqat TelegramID + telefon yangilanadi
+        if existing_row_idx:
+            ok = await run_write(save_firma_telegram_id_by_row,
+                                 existing_row_idx, tid or 0, existing_row_sh)
+            # PHARMACY_SHEET_ID ga ham telefon + TID yozish
+            if ok:
+                ok = await run_write(save_new_firma, firma_nomi, "", phone, tid, shartnoma)
+        else:
+            ok = await run_write(save_new_firma, firma_nomi, "", phone, tid, shartnoma)
         if ok:
             # To'lovlar varag'iga ham yoz (D=Тел рақами, E=ID)
             await run_write(save_firma_contact_to_tolovlar, firma_nomi, phone, tid)
