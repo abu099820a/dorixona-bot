@@ -2569,9 +2569,14 @@ async def firm_get_month_pick_handler(update: Update, ctx: ContextTypes.DEFAULT_
 def _round_summa_to_million(summa_str: str) -> str:
     """Summani 1 mln ga yaxlitlaydi: ≥500 000 → yuqoriga, <500 000 → pastga.
     Misol: 39 891 299 → 40 000 000
+    Vergul/nuqtali kasr qismini (,45 yoki .45) oldin olib tashlanadi.
     """
     import re as _re
-    digits = _re.sub(r"[^\d]", "", str(summa_str))
+    s = str(summa_str).strip()
+    # Kasr qismini olib tashlash: oxiridagi ,45 yoki .45 ni olib tashla
+    s = _re.sub(r"[,\.]\d{1,2}$", "", s)
+    # Qolgan raqam bo'lmagan belgilarni (bo'shliq, apostrof...) olib tashlash
+    digits = _re.sub(r"[^\d]", "", s)
     if not digits:
         return summa_str
     amount = int(digits)
@@ -2718,7 +2723,7 @@ async def _send_firm_direct_report(
             lines.append(f"INN: {_inn_disp}")
         if _dogovor_disp:
             lines.append(f"Shartnoma: {_dogovor_disp}")
-        lines.append("Реализация")
+        lines.append("реализация")
     else:
         lines = [f"Фирма: {firma_nomi}"]
         if _summa_disp:
@@ -2727,7 +2732,7 @@ async def _send_firm_direct_report(
             lines.append(f"ИНН: {_inn_disp}")
         if _dogovor_disp:
             lines.append(f"Договор: {_dogovor_disp}")
-        lines.append("Реализация")
+        lines.append("реализация")
 
     # ── 5. Hisobot bloki ─────────────────────────────────────────────────────
     if len(available_months) == 0:
