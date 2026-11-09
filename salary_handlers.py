@@ -2719,28 +2719,28 @@ async def _send_firm_direct_report(
     _dogovor_disp = ((summa_info or {}).get("dogovor") or (summa_info or {}).get("shartnoma", ""))
 
     if language == "uz":
-        lines = [f"Firma: `{firma_nomi}`"]
+        lines = [f"*Firma:* `{firma_nomi}`"]
         if _summa_rounded:
-            _summa_line = f"Summa: `{_summa_rounded}`"
+            _summa_line = f"*Summa:* `{_summa_rounded}`"
             if _summa_asl and _summa_asl != _summa_rounded:
                 _summa_line += f" ({_summa_asl})"
             lines.append(_summa_line)
         if _inn_disp:
-            lines.append(f"INN: `{_inn_disp}`")
+            lines.append(f"*INN:* `{_inn_disp}`")
         if _dogovor_disp:
-            lines.append(f"Shartnoma: `{_dogovor_disp}`")
+            lines.append(f"*Shartnoma:* `{_dogovor_disp}`")
         lines.append("реализация")
     else:
-        lines = [f"Фирма: `{firma_nomi}`"]
+        lines = [f"*Фирма:* `{firma_nomi}`"]
         if _summa_rounded:
-            _summa_line = f"Сумма: `{_summa_rounded}`"
+            _summa_line = f"*Сумма:* `{_summa_rounded}`"
             if _summa_asl and _summa_asl != _summa_rounded:
                 _summa_line += f" ({_summa_asl})"
             lines.append(_summa_line)
         if _inn_disp:
-            lines.append(f"ИНН: `{_inn_disp}`")
+            lines.append(f"*ИНН:* `{_inn_disp}`")
         if _dogovor_disp:
-            lines.append(f"Договор: `{_dogovor_disp}`")
+            lines.append(f"*Договор:* `{_dogovor_disp}`")
         lines.append("реализация")
 
     # ── 5. Hisobot bloki ─────────────────────────────────────────────────────
@@ -2826,18 +2826,18 @@ async def _send_firm_direct_report(
         # Admin xabardorligi — firma hisobot olganda
         _sotuv_str  = (mdata or {}).get("sotuv", "—")
         _ostatok_str = (mdata or {}).get("ostatok", "—")
-        for _aid in ADMIN_IDS:
+        _notif_text = (
+            f"📩 *Firma hisobot oldi*\n🏢 {firma_nomi}\n📅 {mdisp}\n"
+            f"💰 Sotuv: *{_sotuv_str}*\n📦 Qoldiq: *{_ostatok_str}*"
+            if language == "uz" else
+            f"📩 *Фирма запросила отчёт*\n🏢 {firma_nomi}\n📅 {mdisp}\n"
+            f"💰 Продажи: *{_sotuv_str}*\n📦 Остаток: *{_ostatok_str}*"
+        )
+        if PAYMENT_GROUP_ID:
             try:
-                _notif = (
-                    f"📩 *Firma hisobot oldi*\n🏢 {firma_nomi}\n📅 {mdisp}\n"
-                    f"💰 Sotuv: *{_sotuv_str}*\n📦 Qoldiq: *{_ostatok_str}*"
-                    if language == "uz" else
-                    f"📩 *Фирма запросила отчёт*\n🏢 {firma_nomi}\n📅 {mdisp}\n"
-                    f"💰 Продажи: *{_sotuv_str}*\n📦 Остаток: *{_ostatok_str}*"
-                )
-                await ctx.bot.send_message(chat_id=_aid, text=_notif, parse_mode="Markdown")
+                await ctx.bot.send_message(chat_id=PAYMENT_GROUP_ID, text=_notif_text, parse_mode="Markdown")
             except Exception as _ne:
-                logger.warning(f"[FIRMS] Admin xabardorlik xato: {_ne}")
+                logger.warning(f"[FIRMS] Guruh xabardorlik xato: {_ne}")
 
         if from_menu:
             from bot import main_keyboard, T, MENU
@@ -5939,18 +5939,18 @@ async def firm_month_select_handler(update: Update, ctx: ContextTypes.DEFAULT_TY
         # Admin xabardorligi — firma hisobot olganda
         _sotuv_str   = (mdata or {}).get("sotuv", "—")
         _ostatok_str = (mdata or {}).get("ostatok", "—")
-        for _aid in ADMIN_IDS:
+        _notif_text2 = (
+            f"📩 *Firma hisobot oldi*\n🏢 {firma_nomi}\n📅 {mdisp}\n"
+            f"💰 Sotuv: *{_sotuv_str}*\n📦 Qoldiq: *{_ostatok_str}*"
+            if language == "uz" else
+            f"📩 *Фирма запросила отчёт*\n🏢 {firma_nomi}\n📅 {mdisp}\n"
+            f"💰 Продажи: *{_sotuv_str}*\n📦 Остаток: *{_ostatok_str}*"
+        )
+        if PAYMENT_GROUP_ID:
             try:
-                _notif = (
-                    f"📩 *Firma hisobot oldi*\n🏢 {firma_nomi}\n📅 {mdisp}\n"
-                    f"💰 Sotuv: *{_sotuv_str}*\n📦 Qoldiq: *{_ostatok_str}*"
-                    if language == "uz" else
-                    f"📩 *Фирма запросила отчёт*\n🏢 {firma_nomi}\n📅 {mdisp}\n"
-                    f"💰 Продажи: *{_sotuv_str}*\n📦 Остаток: *{_ostatok_str}*"
-                )
-                await ctx.bot.send_message(chat_id=_aid, text=_notif, parse_mode="Markdown")
+                await ctx.bot.send_message(chat_id=PAYMENT_GROUP_ID, text=_notif_text2, parse_mode="Markdown")
             except Exception as _ne:
-                logger.warning(f"[MONTHLY] Admin xabardorlik xato: {_ne}")
+                logger.warning(f"[MONTHLY] Guruh xabardorlik xato: {_ne}")
 
     except Exception as e:
         logger.error(f"[MONTHLY] firm_month_select_handler xato: {e}")
