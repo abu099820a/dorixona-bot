@@ -7168,15 +7168,16 @@ DORIXONA_ADD_FIELDS = [
     ("hudud",            "Hudud",              "Hududni kiriting (masalan: Yunusobod):"),
     ("manzil",           "Manzil",             "Manzilni kiriting (o'zbek tilida):"),
     ("orientir",         "Orientir",           "Mo'ljalni kiriting:"),
-    ("ish_vaqti",        "Ish vaqti",          "Ish vaqtini kiriting (masalan: 08:00–22:00):"),
+    ("ish_vaqti",        "Ish vaqti",          "Ish vaqtini kiriting yoki standartni tasdiqlang:"),
     ("telefon",          "Telefon",            "Telefon raqamini kiriting:"),
     ("lokatsiya",        "Lokatsiya",          "📍 Dorixonaning joylashuvini yuboring (pastdagi tugmani bosing):"),
-    ("koordinator_ismi", "Koordinator ismi",      "Koordinator ismini kiriting:"),
     ("koordinator_tel",  "Koordinator tel",       "Koordinator telefon raqamini kiriting:"),
     ("koordinator_tid",  "Koordinator Telegram ID","Koordinator Telegram ID raqamini kiriting (masalan: 123456789):"),
     ("mudir_tel",        "Dorixona mudiri tel",   "Dorixona mudirining telefon raqamini kiriting:"),
     ("mudir_tid",        "Zav.apteka Telegram ID", "Zav.apteka (dorixona mudiri) Telegram ID raqamini kiriting:"),
 ]
+
+_DEFAULT_ISH_VAQTI = "08:00–00:00"
 
 # Google Sheets ustun sarlavhalari (asl format: UZ va RU alohida)
 DORIXONA_WS_NAME = "Sheet1"
@@ -7187,7 +7188,7 @@ DORIXONA_WS_HEADERS = [
     "Orientir (UZ)", "Orientir (RU)",
     "Ish vaqti (UZ)", "Ish vaqti (RU)",
     "Telefon", "Latitude", "Longitude",
-    "Koordinator ismi", "Koordinator tel", "Koordinator Telegram ID",
+    "Koordinator tel", "Koordinator Telegram ID",
     "Dorixona mudiri tel", "Zav.apteka Telegram ID",
 ]
 
@@ -7213,7 +7214,6 @@ def _save_dorixona_to_sheet(data: dict) -> bool:
             data.get("telefon", ""),
             data.get("latitude", ""),
             data.get("longitude", ""),
-            data.get("koordinator_ismi", ""),
             data.get("koordinator_tel", ""),
             data.get("koordinator_tid", ""),
             data.get("mudir_tel", ""),
@@ -7317,7 +7317,11 @@ async def dorixona_add_step_handler(update: Update, ctx: ContextTypes.DEFAULT_TY
         data["latitude"] = str(loc.latitude)
         data["longitude"] = str(loc.longitude)
     elif not _skip:
-        data[field_key] = txt
+        # Ish vaqti: standart tugma bosilsa — standart qiymatni olish
+        if field_key == "ish_vaqti" and txt == f"✅ {_DEFAULT_ISH_VAQTI}":
+            data[field_key] = _DEFAULT_ISH_VAQTI
+        else:
+            data[field_key] = txt
         # Kontakt yuborilganda Telegram ID ni avtomatik saqlash va keyingi TID maydonini o'tkazish
         if _contact_tid and field_key == "koordinator_tel":
             data["koordinator_tid"] = _contact_tid
@@ -7370,10 +7374,16 @@ async def dorixona_add_step_handler(update: Update, ctx: ContextTypes.DEFAULT_TY
     ctx.user_data["dorixona_add_step"] = next_step
     next_field = DORIXONA_ADD_FIELDS[next_step]
 
-    # Lokatsiya maydoni uchun maxsus klaviatura
+    # Klaviatura: maydon turiga qarab
     if next_field[0] == "lokatsiya":
         reply_kb = ReplyKeyboardMarkup(
             [[KeyboardButton("📍 Lokatsiyani yuborish", request_location=True)],
+             ["⏭ Keyingisi", "❌ Bekor qilish"]],
+            resize_keyboard=True,
+        )
+    elif next_field[0] == "ish_vaqti":
+        reply_kb = ReplyKeyboardMarkup(
+            [[f"✅ {_DEFAULT_ISH_VAQTI}"],
              ["⏭ Keyingisi", "❌ Bekor qilish"]],
             resize_keyboard=True,
         )
