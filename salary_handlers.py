@@ -1,6 +1,6 @@
 """
 salary_handlers.py — Oylik fayllarni mudirlariga yuborish moduli
-# v2.1 — kontakt yuborish fixi
+# v2.5 — koordinator ismi Koordinatorlar listdan avtomatik
 
 Jarayon:
 1. Admin /send_salaries yozadi
