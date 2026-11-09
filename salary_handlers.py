@@ -7593,15 +7593,27 @@ async def dorixona_edit_select_handler(update: Update, ctx: ContextTypes.DEFAULT
 
     rows = ctx.user_data.get("dorixona_edit_rows", [])
     selected = None
+    txt_low = txt.lower()
     for row in rows:
         filial_no = str(row.get("Filial №", "?")).strip()
         nomi = str(row.get("Nomi (UZ)", "?")).strip()
+        # Tugma matni bilan aniq moslik
         if txt == f"🏥 {filial_no}: {nomi}":
+            selected = row
+            break
+        # Filial raqami bilan qidirish
+        if txt == filial_no:
+            selected = row
+            break
+        # Nomi bo'yicha qidirish (kichik harfda, qisman)
+        if txt_low and txt_low in nomi.lower():
             selected = row
             break
 
     if not selected:
-        await update.message.reply_text("❌ Topilmadi, qayta tanlang.")
+        await update.message.reply_text(
+            "❌ Topilmadi. Filial raqami (masalan: 61) yoki nomi (masalan: БЕЛТЕПА) kiriting, yoki pastdagi ro'yxatdan tanlang."
+        )
         return DORIXONA_EDIT_SELECT
 
     ctx.user_data["dorixona_edit_filial"] = str(selected.get("Filial №", "")).strip()
