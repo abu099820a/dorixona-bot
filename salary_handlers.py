@@ -7123,7 +7123,7 @@ DORIXONA_ADD_FIELDS = [
 ]
 
 # Google Sheets ustun sarlavhalari (asl format: UZ va RU alohida)
-DORIXONA_WS_NAME = "Filiallar"
+DORIXONA_WS_NAME = "Sheet1"
 DORIXONA_WS_HEADERS = [
     "Filial №", "Nomi (UZ)", "Nomi (RU)",
     "Hudud (UZ)", "Hudud (RU)",
@@ -7142,16 +7142,7 @@ def _save_dorixona_to_sheet(data: dict) -> bool:
     try:
         client = _get_client()
         sh = client.open_by_key(PHARMACY_SHEET_ID)
-        try:
-            ws = sh.worksheet(DORIXONA_WS_NAME)
-        except Exception:
-            ws = sh.add_worksheet(title=DORIXONA_WS_NAME, rows=500, cols=len(DORIXONA_WS_HEADERS))
-            ws.append_row(DORIXONA_WS_HEADERS)
-
-        # Sarlavha yo'q bo'lsa qo'shish
-        first_row = ws.row_values(1)
-        if not first_row or first_row[0] != DORIXONA_WS_HEADERS[0]:
-            ws.insert_row(DORIXONA_WS_HEADERS, 1)
+        ws = sh.worksheet(DORIXONA_WS_NAME)
 
         # UZ = RU (bir xil qiymat)
         row = [
@@ -7216,11 +7207,15 @@ async def dorixona_add_step_handler(update: Update, ctx: ContextTypes.DEFAULT_TY
     from telegram import ReplyKeyboardMarkup, ReplyKeyboardRemove, KeyboardButton
 
     # Kontakt yuborilsa — telefon raqamini matn sifatida olamiz
+    _contact_tid = None   # kontaktdan olingan Telegram ID (agar mavjud bo'lsa)
     if update.message.contact:
         _phone = update.message.contact.phone_number or ""
         if _phone and not _phone.startswith("+"):
             _phone = "+" + _phone
         txt = _phone
+        # Telegram kontaktida user_id bo'lsa — saqlash uchun olib qo'yamiz
+        if update.message.contact.user_id:
+            _contact_tid = str(update.message.contact.user_id)
     else:
         txt = (update.message.text or "").strip()
 
@@ -7265,11 +7260,21 @@ async def dorixona_add_step_handler(update: Update, ctx: ContextTypes.DEFAULT_TY
         data["longitude"] = str(loc.longitude)
     elif not _skip:
         data[field_key] = txt
+        # Kontakt yuborilganda Telegram ID ni avtomatik saqlash va keyingi TID maydonini o'tkazish
+        if _contact_tid and field_key == "koordinator_tel":
+            data["koordinator_tid"] = _contact_tid
+        elif _contact_tid and field_key == "mudir_tel":
+            data["mudir_tid"] = _contact_tid
     # _skip bo'lsa — maydon bo'sh qoladi (data ga yozilmaydi)
 
     ctx.user_data["dorixona_add_data"] = data
 
-    next_step = step + 1
+    # Kontakt orqali TID avtomatik saqlangan bo'lsa — TID so'rovini o'tkazib yuboramiz
+    _auto_skip_tid = False
+    if _contact_tid and field_key in ("koordinator_tel", "mudir_tel") and not _skip:
+        _auto_skip_tid = True
+
+    next_step = step + (2 if _auto_skip_tid else 1)
 
     if next_step >= total:
         # Barcha maydonlar to'ldirildi — saqlash
