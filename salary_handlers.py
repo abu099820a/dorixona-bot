@@ -7188,14 +7188,39 @@ DORIXONA_WS_HEADERS = [
     "Orientir (UZ)", "Orientir (RU)",
     "Ish vaqti (UZ)", "Ish vaqti (RU)",
     "Telefon", "Latitude", "Longitude",
-    "Koordinator tel", "Koordinator Telegram ID",
+    "Koordinator ismi", "Koordinator tel", "Koordinator Telegram ID",
     "Dorixona mudiri tel", "Zav.apteka Telegram ID",
 ]
 
 
+_KOORDINATORLAR_WS = "Координаторлар"
+
+
+def _lookup_koordinator_name(phone: str) -> str:
+    """'Координаторлар' listidan telefon raqami bo'yicha ism topadi.
+    Ustunlar: A=Ismi, B=Raqami. Topilmasa bo'sh satr qaytaradi."""
+    if not phone:
+        return ""
+    try:
+        client = _get_client()
+        sh = client.open_by_key(PHARMACY_SHEET_ID)
+        ws = sh.worksheet(_KOORDINATORLAR_WS)
+        records = ws.get_all_values()
+        # Qidirish: B ustunidagi raqamni solishtirish (raqamlardagi bo'shliq/+ farqi)
+        norm = lambda p: "".join(c for c in p if c.isdigit())
+        target = norm(phone)
+        for row in records[1:]:  # 1-qator sarlavha
+            if len(row) >= 2:
+                if norm(row[1]) == target:
+                    return row[0].strip()
+        return ""
+    except Exception as e:
+        logger.warning(f"[KOORDINATOR LOOKUP] Xato: {e}")
+        return ""
+
+
 def _save_dorixona_to_sheet(data: dict) -> bool:
-    """Yangi dorixona ma'lumotlarini PHARMACY_SHEET_ID → 'Filiallar' varag'iga yozadi.
-    UZ va RU ustunlarga bir xil qiymat yoziladi."""
+    """Yangi dorixona ma'lumotlarini PHARMACY_SHEET_ID → Sheet1 ga yozadi."""
     try:
         client = _get_client()
         sh = client.open_by_key(PHARMACY_SHEET_ID)
@@ -7203,6 +7228,10 @@ def _save_dorixona_to_sheet(data: dict) -> bool:
 
         # Hudud: avtomatik RU tarjimasi
         hudud_uz, hudud_ru = _hudud_translate(data.get("hudud", ""))
+
+        # Koordinator ismi: Координаторлар listidan avtomatik topish
+        koord_tel = data.get("koordinator_tel", "")
+        koord_ismi = _lookup_koordinator_name(koord_tel)
 
         row = [
             data.get("filial_no", ""),
@@ -7214,7 +7243,8 @@ def _save_dorixona_to_sheet(data: dict) -> bool:
             data.get("telefon", ""),
             data.get("latitude", ""),
             data.get("longitude", ""),
-            data.get("koordinator_tel", ""),
+            koord_ismi,
+            koord_tel,
             data.get("koordinator_tid", ""),
             data.get("mudir_tel", ""),
             data.get("mudir_tid", ""),
