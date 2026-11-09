@@ -7170,10 +7170,8 @@ DORIXONA_ADD_FIELDS = [
     ("orientir",         "Orientir",           "Mo'ljalni kiriting:"),
     ("telefon",          "Telefon",            "Telefon raqamini kiriting:"),
     ("lokatsiya",        "Lokatsiya",          "📍 Dorixonaning joylashuvini yuboring (pastdagi tugmani bosing):"),
-    ("koordinator_tel",  "Koordinator tel",       "Koordinator telefon raqamini kiriting:"),
-    ("koordinator_tid",  "Koordinator Telegram ID","Koordinator Telegram ID raqamini kiriting (masalan: 123456789):"),
-    ("mudir_tel",        "Dorixona mudiri tel",   "Dorixona mudirining telefon raqamini kiriting:"),
-    ("mudir_tid",        "Zav.apteka Telegram ID", "Zav.apteka (dorixona mudiri) Telegram ID raqamini kiriting:"),
+    ("koordinator_tid",  "Koordinator",    "👤 Koordinator kontaktini yuboring (telefon + TG ID avtomatik olinadi).\nYoki faqat TG ID kiriting:"),
+    ("mudir_tid",        "Zav.apteka",     "👤 Zav.apteka kontaktini yuboring (telefon + TG ID avtomatik olinadi).\nYoki faqat TG ID kiriting:"),
 ]
 
 _DEFAULT_ISH_VAQTI = "08:00–00:00"
@@ -7311,16 +7309,26 @@ async def dorixona_add_step_handler(update: Update, ctx: ContextTypes.DEFAULT_TY
     'lokatsiya' maydoni uchun Telegram Location xabari qabul qilinadi."""
     from telegram import ReplyKeyboardMarkup, ReplyKeyboardRemove, KeyboardButton
 
-    # Kontakt yuborilsa — telefon raqamini matn sifatida olamiz
-    _contact_tid = None   # kontaktdan olingan Telegram ID (agar mavjud bo'lsa)
+    # Kontakt yuborilsa — telefon va TID ajratib olinadi
+    _contact_phone = None
+    _contact_tid = None
     if update.message.contact:
-        _phone = update.message.contact.phone_number or ""
-        if _phone and not _phone.startswith("+"):
-            _phone = "+" + _phone
-        txt = _phone
-        # Telegram kontaktida user_id bo'lsa — saqlash uchun olib qo'yamiz
+        _p = update.message.contact.phone_number or ""
+        if _p and not _p.startswith("+"):
+            _p = "+" + _p
+        _contact_phone = _p
         if update.message.contact.user_id:
             _contact_tid = str(update.message.contact.user_id)
+        # TID maydonlarida kontakt yuborilsa — TID ni txt qilamiz
+        step = ctx.user_data.get("dorixona_add_step", 0)
+        if step < len(DORIXONA_ADD_FIELDS):
+            _fk = DORIXONA_ADD_FIELDS[step][0]
+            if _fk in ("koordinator_tid", "mudir_tid") and _contact_tid:
+                txt = _contact_tid
+            else:
+                txt = _contact_phone
+        else:
+            txt = _contact_phone
     else:
         txt = (update.message.text or "").strip()
 
@@ -7365,21 +7373,15 @@ async def dorixona_add_step_handler(update: Update, ctx: ContextTypes.DEFAULT_TY
         data["longitude"] = str(loc.longitude)
     elif not _skip:
         data[field_key] = txt
-        # Kontakt yuborilganda Telegram ID ni avtomatik saqlash va keyingi TID maydonini o'tkazish
-        if _contact_tid and field_key == "koordinator_tel":
-            data["koordinator_tid"] = _contact_tid
-        elif _contact_tid and field_key == "mudir_tel":
-            data["mudir_tid"] = _contact_tid
+        # Kontakt yuborilganda telefon raqamini ham saqlash
+        if _contact_phone and field_key == "koordinator_tid":
+            data["koordinator_tel"] = _contact_phone
+        elif _contact_phone and field_key == "mudir_tid":
+            data["mudir_tel"] = _contact_phone
     # _skip bo'lsa — maydon bo'sh qoladi (data ga yozilmaydi)
 
     ctx.user_data["dorixona_add_data"] = data
-
-    # Kontakt orqali TID avtomatik saqlangan bo'lsa — TID so'rovini o'tkazib yuboramiz
-    _auto_skip_tid = False
-    if _contact_tid and field_key in ("koordinator_tel", "mudir_tel") and not _skip:
-        _auto_skip_tid = True
-
-    next_step = step + (2 if _auto_skip_tid else 1)
+    next_step = step + 1
 
     if next_step >= total:
         # Barcha maydonlar to'ldirildi — saqlash
