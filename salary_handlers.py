@@ -7104,13 +7104,69 @@ def get_sal_states():
 # DORIXONA QO'SHISH — Admin yangi filial qo'shish oqimi
 # ═══════════════════════════════════════════════════════════════════════════════
 
+# Hudud: o'zbek nomi → (UZ to'liq, RU to'liq)
+_HUDUD_MAP = {
+    # Toshkent shahri tumanlari
+    "yunusobod":       ("Yunusobod tumani",          "Юнусабадский район"),
+    "chilonzor":       ("Chilonzor tumani",           "Чиланзарский район"),
+    "mirobod":         ("Mirobod tumani",             "Мирабадский район"),
+    "mirzo ulugbek":   ("Mirzo Ulug'bek tumani",      "Мирзо-Улугбекский район"),
+    "mirzo ulug'bek":  ("Mirzo Ulug'bek tumani",      "Мирзо-Улугбекский район"),
+    "shayxontohur":    ("Shayxontohur tumani",        "Шайхантахурский район"),
+    "olmazor":         ("Olmazor tumani",             "Алмазарский район"),
+    "uchtepa":         ("Uchtepa tumani",             "Учтепинский район"),
+    "yakkasaroy":      ("Yakkasaroy tumani",          "Яккасарайский район"),
+    "bektemir":        ("Bektemir tumani",            "Бектемирский район"),
+    "sergeli":         ("Sergeli tumani",             "Сергелийский район"),
+    # Viloyatlar va shaharlar
+    "toshkent":        ("Toshkent shahri",            "г. Ташкент"),
+    "toshkent viloyati":("Toshkent viloyati",         "Ташкентская область"),
+    "samarqand":       ("Samarqand",                  "Самарканд"),
+    "buxoro":          ("Buxoro",                     "Бухара"),
+    "namangan":        ("Namangan",                   "Наманган"),
+    "andijon":         ("Andijon",                    "Андижан"),
+    "fargona":         ("Farg'ona",                   "Фергана"),
+    "farg'ona":        ("Farg'ona",                   "Фергана"),
+    "qashqadaryo":     ("Qashqadaryo",                "Кашкадарья"),
+    "surxondaryo":     ("Surxondaryo",                "Сурхандарья"),
+    "navoiy":          ("Navoiy",                     "Навои"),
+    "xorazm":          ("Xorazm",                     "Хорезм"),
+    "sirdaryo":        ("Sirdaryo",                   "Сырдарья"),
+    "jizzax":          ("Jizzax",                     "Джизак"),
+    "qoraqalpog'iston":("Qoraqalpog'iston",           "Каракалпакстан"),
+    "nukus":           ("Nukus",                      "Нукус"),
+}
+
+def _translate_uz_to_ru(text: str) -> str:
+    """O'zbek matnini rus tiliga tarjima qiladi (deep-translator orqali).
+    Xato bo'lsa asl matni qaytaradi."""
+    if not text or not text.strip():
+        return text
+    try:
+        from deep_translator import GoogleTranslator
+        return GoogleTranslator(source="uz", target="ru").translate(text.strip())
+    except Exception:
+        return text
+
+
+def _hudud_translate(raw: str):
+    """Hudud matnini normallashtiradi va RU ekvivalentini qaytaradi.
+    Qaytaradi: (hudud_uz, hudud_ru)"""
+    key = raw.strip().lower().replace("tumani", "").replace("shahri", "").replace("viloyati", "").strip()
+    # Avval kalit so'z bilan qidirish
+    for k, (uz, ru) in _HUDUD_MAP.items():
+        if k in key or key in k:
+            return uz, ru
+    # Topilmasa — xom qiymatni ikki tomonga ham qaytarish
+    return raw.strip(), raw.strip()
+
+
 # Maydonlar: (kalit, sarlavha, savol)
-# UZ va RU uchun bitta savol — bir xil qiymat ikki ustunga yoziladi
 DORIXONA_ADD_FIELDS = [
     ("filial_no",        "Filial №",           "Filial raqamini kiriting (masalan: 42):"),
     ("nomi",             "Nomi",               "Dorixona nomini kiriting:"),
-    ("hudud",            "Hudud",              "Hududni kiriting (masalan: Yunusobod tumani):"),
-    ("manzil",           "Manzil",             "Manzilni kiriting:"),
+    ("hudud",            "Hudud",              "Hududni kiriting (masalan: Yunusobod):"),
+    ("manzil",           "Manzil",             "Manzilni kiriting (o'zbek tilida):"),
     ("orientir",         "Orientir",           "Mo'ljalni kiriting:"),
     ("ish_vaqti",        "Ish vaqti",          "Ish vaqtini kiriting (masalan: 08:00–22:00):"),
     ("telefon",          "Telefon",            "Telefon raqamini kiriting:"),
@@ -7144,13 +7200,15 @@ def _save_dorixona_to_sheet(data: dict) -> bool:
         sh = client.open_by_key(PHARMACY_SHEET_ID)
         ws = sh.worksheet(DORIXONA_WS_NAME)
 
-        # UZ = RU (bir xil qiymat)
+        # Hudud: avtomatik RU tarjimasi
+        hudud_uz, hudud_ru = _hudud_translate(data.get("hudud", ""))
+
         row = [
             data.get("filial_no", ""),
             data.get("nomi", ""),       data.get("nomi", ""),
-            data.get("hudud", ""),      data.get("hudud", ""),
+            hudud_uz,                   hudud_ru,
             data.get("manzil", ""),     data.get("manzil", ""),
-            data.get("orientir", ""),   data.get("orientir", ""),
+            data.get("orientir", ""),   _translate_uz_to_ru(data.get("orientir", "")),
             data.get("ish_vaqti", ""),  data.get("ish_vaqti", ""),
             data.get("telefon", ""),
             data.get("latitude", ""),
