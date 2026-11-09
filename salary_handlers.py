@@ -7083,6 +7083,7 @@ def get_sal_states():
         DORIXONA_ADD_STEP: [
             MessageHandler(filters.TEXT & ~filters.COMMAND, dorixona_add_step_handler),
             MessageHandler(filters.LOCATION, dorixona_add_step_handler),
+            MessageHandler(filters.CONTACT, dorixona_add_step_handler),
         ],
         DORIXONA_EDIT_SELECT: [
             MessageHandler(filters.TEXT & ~filters.COMMAND, dorixona_edit_select_handler),
@@ -7093,6 +7094,7 @@ def get_sal_states():
         DORIXONA_EDIT_VALUE: [
             MessageHandler(filters.TEXT & ~filters.COMMAND, dorixona_edit_value_handler),
             MessageHandler(filters.LOCATION, dorixona_edit_value_handler),
+            MessageHandler(filters.CONTACT, dorixona_edit_value_handler),
         ],
     }
 
@@ -7212,7 +7214,14 @@ async def dorixona_add_step_handler(update: Update, ctx: ContextTypes.DEFAULT_TY
     'lokatsiya' maydoni uchun Telegram Location xabari qabul qilinadi."""
     from telegram import ReplyKeyboardMarkup, ReplyKeyboardRemove, KeyboardButton
 
-    txt = (update.message.text or "").strip()
+    # Kontakt yuborilsa — telefon raqamini matn sifatida olamiz
+    if update.message.contact:
+        _phone = update.message.contact.phone_number or ""
+        if _phone and not _phone.startswith("+"):
+            _phone = "+" + _phone
+        txt = _phone
+    else:
+        txt = (update.message.text or "").strip()
 
     if txt == "❌ Bekor qilish":
         ctx.user_data.pop("dorixona_add_step", None)
@@ -7562,7 +7571,14 @@ async def dorixona_edit_field_handler(update: Update, ctx: ContextTypes.DEFAULT_
 async def dorixona_edit_value_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Yangi qiymatni qabul qilib, Google Sheets da yangilaydi."""
     from telegram import ReplyKeyboardMarkup, KeyboardButton
-    txt = (update.message.text or "").strip()
+    # Kontakt yuborilsa — telefon raqamini matn sifatida olamiz
+    if update.message.contact:
+        _phone = update.message.contact.phone_number or ""
+        if _phone and not _phone.startswith("+"):
+            _phone = "+" + _phone
+        txt = _phone
+    else:
+        txt = (update.message.text or "").strip()
 
     if txt == "❌ Bekor qilish":
         ctx.user_data.pop("dorixona_edit_filial", None)
