@@ -1,6 +1,6 @@
 """
 salary_handlers.py — Oylik fayllarni mudirlariga yuborish moduli
-# v2.5 — koordinator ismi Koordinatorlar listdan avtomatik
+# v2.6 — ish vaqti avtomatik, manzil RU tarjima, koordinator ismi fix
 
 Jarayon:
 1. Admin /send_salaries yozadi
@@ -7168,7 +7168,6 @@ DORIXONA_ADD_FIELDS = [
     ("hudud",            "Hudud",              "Hududni kiriting (masalan: Yunusobod):"),
     ("manzil",           "Manzil",             "Manzilni kiriting (o'zbek tilida):"),
     ("orientir",         "Orientir",           "Mo'ljalni kiriting:"),
-    ("ish_vaqti",        "Ish vaqti",          "Ish vaqtini kiriting yoki standartni tasdiqlang:"),
     ("telefon",          "Telefon",            "Telefon raqamini kiriting:"),
     ("lokatsiya",        "Lokatsiya",          "📍 Dorixonaning joylashuvini yuboring (pastdagi tugmani bosing):"),
     ("koordinator_tel",  "Koordinator tel",       "Koordinator telefon raqamini kiriting:"),
@@ -7231,15 +7230,26 @@ def _save_dorixona_to_sheet(data: dict) -> bool:
 
         # Koordinator ismi: Координаторлар listidan avtomatik topish
         koord_tel = data.get("koordinator_tel", "")
-        koord_ismi = _lookup_koordinator_name(koord_tel)
+        koord_ismi = ""
+        try:
+            kws = sh.worksheet(_KOORDINATORLAR_WS)
+            krecords = kws.get_all_values()
+            norm = lambda p: "".join(c for c in p if c.isdigit())
+            target = norm(koord_tel)
+            for row_ in krecords[1:]:
+                if len(row_) >= 2 and norm(row_[1]) == target:
+                    koord_ismi = row_[0].strip()
+                    break
+        except Exception as e:
+            logger.warning(f"[KOORDINATOR LOOKUP] Xato: {e}")
 
         row = [
             data.get("filial_no", ""),
             data.get("nomi", ""),       data.get("nomi", ""),
             hudud_uz,                   hudud_ru,
-            data.get("manzil", ""),     data.get("manzil", ""),
+            data.get("manzil", ""),     _translate_uz_to_ru(data.get("manzil", "")),
             data.get("orientir", ""),   _translate_uz_to_ru(data.get("orientir", "")),
-            data.get("ish_vaqti", ""),  data.get("ish_vaqti", ""),
+            _DEFAULT_ISH_VAQTI,         _DEFAULT_ISH_VAQTI,
             data.get("telefon", ""),
             data.get("latitude", ""),
             data.get("longitude", ""),
@@ -7347,11 +7357,7 @@ async def dorixona_add_step_handler(update: Update, ctx: ContextTypes.DEFAULT_TY
         data["latitude"] = str(loc.latitude)
         data["longitude"] = str(loc.longitude)
     elif not _skip:
-        # Ish vaqti: standart tugma bosilsa — standart qiymatni olish
-        if field_key == "ish_vaqti" and txt == f"✅ {_DEFAULT_ISH_VAQTI}":
-            data[field_key] = _DEFAULT_ISH_VAQTI
-        else:
-            data[field_key] = txt
+        data[field_key] = txt
         # Kontakt yuborilganda Telegram ID ni avtomatik saqlash va keyingi TID maydonini o'tkazish
         if _contact_tid and field_key == "koordinator_tel":
             data["koordinator_tid"] = _contact_tid
@@ -7408,12 +7414,6 @@ async def dorixona_add_step_handler(update: Update, ctx: ContextTypes.DEFAULT_TY
     if next_field[0] == "lokatsiya":
         reply_kb = ReplyKeyboardMarkup(
             [[KeyboardButton("📍 Lokatsiyani yuborish", request_location=True)],
-             ["⏭ Keyingisi", "❌ Bekor qilish"]],
-            resize_keyboard=True,
-        )
-    elif next_field[0] == "ish_vaqti":
-        reply_kb = ReplyKeyboardMarkup(
-            [[f"✅ {_DEFAULT_ISH_VAQTI}"],
              ["⏭ Keyingisi", "❌ Bekor qilish"]],
             resize_keyboard=True,
         )
