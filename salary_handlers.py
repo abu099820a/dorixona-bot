@@ -1,5 +1,6 @@
 """
 salary_handlers.py — Oylik fayllarni mudirlariga yuborish moduli
+# v2.1 — kontakt yuborish fixi
 
 Jarayon:
 1. Admin /send_salaries yozadi
