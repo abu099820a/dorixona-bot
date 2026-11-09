@@ -90,6 +90,10 @@ ADMIN_LIST_STATE = 532              # Super admin adminlar ro'yxatini boshqaradi
 FIRMA_PHONE_CONTRACT_SELECT = 535   # Postawchik telefon orqali kirganda bir nechta shartnomadan birini tanlaydi
 ADMIN_NEW_ID = 533                  # Super admin yangi admin ID kiritadi
 ADMIN_NEW_NAME = 534                # Super admin yangi admin ismini kiritadi
+DORIXONA_ADD_STEP = 537             # Admin yangi dorixona (filial) qo'shmoqda — qadam-qadam
+DORIXONA_EDIT_SELECT = 538          # Admin tahrirlash uchun filial tanlaydi
+DORIXONA_EDIT_FIELD = 539           # Admin qaysi maydonni o'zgartirish kerakligini tanlaydi
+DORIXONA_EDIT_VALUE = 540           # Admin yangi qiymat kiritadi (matn yoki lokatsiya)
 
 
 # ─── Google Sheets ────────────────────────────────────────────────────────────
@@ -7076,4 +7080,545 @@ def get_sal_states():
         APPEAL_DORIXONA_MSG: [
             MessageHandler(filters.TEXT & ~filters.COMMAND, appeal_dorixona_msg_handler),
         ],
+        DORIXONA_ADD_STEP: [
+            MessageHandler(filters.TEXT & ~filters.COMMAND, dorixona_add_step_handler),
+            MessageHandler(filters.LOCATION, dorixona_add_step_handler),
+        ],
+        DORIXONA_EDIT_SELECT: [
+            MessageHandler(filters.TEXT & ~filters.COMMAND, dorixona_edit_select_handler),
+        ],
+        DORIXONA_EDIT_FIELD: [
+            MessageHandler(filters.TEXT & ~filters.COMMAND, dorixona_edit_field_handler),
+        ],
+        DORIXONA_EDIT_VALUE: [
+            MessageHandler(filters.TEXT & ~filters.COMMAND, dorixona_edit_value_handler),
+            MessageHandler(filters.LOCATION, dorixona_edit_value_handler),
+        ],
     }
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# DORIXONA QO'SHISH — Admin yangi filial qo'shish oqimi
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# Maydonlar: (kalit, sarlavha, savol)
+# UZ va RU uchun bitta savol — bir xil qiymat ikki ustunga yoziladi
+DORIXONA_ADD_FIELDS = [
+    ("filial_no",        "Filial №",           "Filial raqamini kiriting (masalan: 42):"),
+    ("nomi",             "Nomi",               "Dorixona nomini kiriting:"),
+    ("hudud",            "Hudud",              "Hududni kiriting (masalan: Yunusobod tumani):"),
+    ("manzil",           "Manzil",             "Manzilni kiriting:"),
+    ("orientir",         "Orientir",           "Mo'ljalni kiriting:"),
+    ("ish_vaqti",        "Ish vaqti",          "Ish vaqtini kiriting (masalan: 08:00–22:00):"),
+    ("telefon",          "Telefon",            "Telefon raqamini kiriting:"),
+    ("lokatsiya",        "Lokatsiya",          "📍 Dorixonaning joylashuvini yuboring (pastdagi tugmani bosing):"),
+    ("koordinator_ismi", "Koordinator ismi",      "Koordinator ismini kiriting:"),
+    ("koordinator_tel",  "Koordinator tel",       "Koordinator telefon raqamini kiriting:"),
+    ("koordinator_tid",  "Koordinator Telegram ID","Koordinator Telegram ID raqamini kiriting (masalan: 123456789):"),
+    ("mudir_tel",        "Dorixona mudiri tel",   "Dorixona mudirining telefon raqamini kiriting:"),
+    ("mudir_tid",        "Zav.apteka Telegram ID", "Zav.apteka (dorixona mudiri) Telegram ID raqamini kiriting:"),
+]
+
+# Google Sheets ustun sarlavhalari (asl format: UZ va RU alohida)
+DORIXONA_WS_NAME = "Filiallar"
+DORIXONA_WS_HEADERS = [
+    "Filial №", "Nomi (UZ)", "Nomi (RU)",
+    "Hudud (UZ)", "Hudud (RU)",
+    "Manzil (UZ)", "Manzil (RU)",
+    "Orientir (UZ)", "Orientir (RU)",
+    "Ish vaqti (UZ)", "Ish vaqti (RU)",
+    "Telefon", "Latitude", "Longitude",
+    "Koordinator ismi", "Koordinator tel", "Koordinator Telegram ID",
+    "Dorixona mudiri tel", "Zav.apteka Telegram ID",
+]
+
+
+def _save_dorixona_to_sheet(data: dict) -> bool:
+    """Yangi dorixona ma'lumotlarini PHARMACY_SHEET_ID → 'Filiallar' varag'iga yozadi.
+    UZ va RU ustunlarga bir xil qiymat yoziladi."""
+    try:
+        client = _get_client()
+        sh = client.open_by_key(PHARMACY_SHEET_ID)
+        try:
+            ws = sh.worksheet(DORIXONA_WS_NAME)
+        except Exception:
+            ws = sh.add_worksheet(title=DORIXONA_WS_NAME, rows=500, cols=len(DORIXONA_WS_HEADERS))
+            ws.append_row(DORIXONA_WS_HEADERS)
+
+        # Sarlavha yo'q bo'lsa qo'shish
+        first_row = ws.row_values(1)
+        if not first_row or first_row[0] != DORIXONA_WS_HEADERS[0]:
+            ws.insert_row(DORIXONA_WS_HEADERS, 1)
+
+        # UZ = RU (bir xil qiymat)
+        row = [
+            data.get("filial_no", ""),
+            data.get("nomi", ""),       data.get("nomi", ""),
+            data.get("hudud", ""),      data.get("hudud", ""),
+            data.get("manzil", ""),     data.get("manzil", ""),
+            data.get("orientir", ""),   data.get("orientir", ""),
+            data.get("ish_vaqti", ""),  data.get("ish_vaqti", ""),
+            data.get("telefon", ""),
+            data.get("latitude", ""),
+            data.get("longitude", ""),
+            data.get("koordinator_ismi", ""),
+            data.get("koordinator_tel", ""),
+            data.get("koordinator_tid", ""),
+            data.get("mudir_tel", ""),
+            data.get("mudir_tid", ""),
+        ]
+        ws.append_row(row)
+        logger.info(f"[DORIXONA] Yangi filial saqlandi: {data.get('nomi','')}")
+        return True
+    except Exception as e:
+        logger.error(f"[DORIXONA] Saqlash xato: {e}")
+        return False
+
+
+def _dorixona_progress_text(step: int) -> str:
+    """Qaysi qadamda ekanini ko'rsatuvchi progress satri."""
+    total = len(DORIXONA_ADD_FIELDS)
+    filled = "▓" * step + "░" * (total - step)
+    return f"[{filled}] {step}/{total}"
+
+
+async def dorixona_add_start(update, ctx):
+    """
+    'Dorixona qo'shish' tugmasidan chaqiriladi.
+    Faqat adminlarga ruxsat — birinchi savolni beradi.
+    """
+    if update.effective_user.id not in ADMIN_IDS:
+        await update.message.reply_text("❌ Ruxsat yo'q.")
+        return
+
+    ctx.user_data["dorixona_add_step"] = 0
+    ctx.user_data["dorixona_add_data"] = {}
+
+    from telegram import ReplyKeyboardMarkup
+    cancel_kb = ReplyKeyboardMarkup([["❌ Bekor qilish"]], resize_keyboard=True)
+    field = DORIXONA_ADD_FIELDS[0]
+    await update.message.reply_text(
+        f"➕ *Yangi dorixona qo'shish*\n\n"
+        f"{_dorixona_progress_text(0)}\n\n"
+        f"📌 *{field[1]}*\n{field[2]}",
+        parse_mode="Markdown",
+        reply_markup=cancel_kb,
+    )
+    return DORIXONA_ADD_STEP
+
+
+async def dorixona_add_step_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Har bir qadam uchun javobni qabul qiladi va keyingi savolni beradi.
+    'lokatsiya' maydoni uchun Telegram Location xabari qabul qilinadi."""
+    from telegram import ReplyKeyboardMarkup, ReplyKeyboardRemove, KeyboardButton
+
+    txt = (update.message.text or "").strip()
+
+    if txt == "❌ Bekor qilish":
+        ctx.user_data.pop("dorixona_add_step", None)
+        ctx.user_data.pop("dorixona_add_data", None)
+        from bot import main_keyboard, MENU
+        lang = ctx.user_data.get("lang", "uz")
+        is_admin = update.effective_user.id in ADMIN_IDS
+        await update.message.reply_text(
+            "❌ Bekor qilindi.",
+            reply_markup=main_keyboard(lang, is_admin),
+        )
+        return MENU
+
+    step = ctx.user_data.get("dorixona_add_step", 0)
+    data = ctx.user_data.get("dorixona_add_data", {})
+    total = len(DORIXONA_ADD_FIELDS)
+    _skip = (txt == "⏭ Keyingisi")
+
+    # Joriy maydonni saqlash
+    field_key = DORIXONA_ADD_FIELDS[step][0]
+
+    if field_key == "lokatsiya" and not _skip:
+        # Telegram Location xabarini kutamiz
+        loc = update.message.location
+        if not loc:
+            # Matn yuborildi, lokatsiya emas — qayta so'raymiz
+            loc_kb = ReplyKeyboardMarkup(
+                [[KeyboardButton("📍 Lokatsiyani yuborish", request_location=True)],
+                 ["⏭ Keyingisi", "❌ Bekor qilish"]],
+                resize_keyboard=True,
+            )
+            await update.message.reply_text(
+                "⚠️ Iltimos, *📍 Lokatsiyani yuborish* tugmasini bosib joylashuvni yuboring:\n"
+                "(Ma'lumot bo'lmasa ⏭ Keyingisi ni bosing)",
+                parse_mode="Markdown",
+                reply_markup=loc_kb,
+            )
+            return DORIXONA_ADD_STEP
+        data["latitude"] = str(loc.latitude)
+        data["longitude"] = str(loc.longitude)
+    elif not _skip:
+        data[field_key] = txt
+    # _skip bo'lsa — maydon bo'sh qoladi (data ga yozilmaydi)
+
+    ctx.user_data["dorixona_add_data"] = data
+
+    next_step = step + 1
+
+    if next_step >= total:
+        # Barcha maydonlar to'ldirildi — saqlash
+        ok = await run_write(_save_dorixona_to_sheet, data)
+        from bot import main_keyboard, MENU
+        lang = ctx.user_data.get("lang", "uz")
+        is_admin = update.effective_user.id in ADMIN_IDS
+
+        # Xulosa xabari
+        summary_lines = [f"✅ *Yangi dorixona qo'shildi!*\n"]
+        for fkey, flabel, _ in DORIXONA_ADD_FIELDS:
+            if fkey == "lokatsiya":
+                lat = data.get("latitude", "—")
+                lng = data.get("longitude", "—")
+                summary_lines.append(f"*{flabel}:* {lat}, {lng}")
+            else:
+                val = data.get(fkey, "—")
+                summary_lines.append(f"*{flabel}:* {val}")
+        summary = "\n".join(summary_lines)
+
+        if not ok:
+            summary += "\n\n⚠️ Google Sheets ga saqlashda xato yuz berdi!"
+
+        ctx.user_data.pop("dorixona_add_step", None)
+        ctx.user_data.pop("dorixona_add_data", None)
+
+        await update.message.reply_text(
+            summary,
+            parse_mode="Markdown",
+            reply_markup=main_keyboard(lang, is_admin),
+        )
+        return MENU
+
+    # Keyingi savol
+    ctx.user_data["dorixona_add_step"] = next_step
+    next_field = DORIXONA_ADD_FIELDS[next_step]
+
+    # Lokatsiya maydoni uchun maxsus klaviatura
+    if next_field[0] == "lokatsiya":
+        reply_kb = ReplyKeyboardMarkup(
+            [[KeyboardButton("📍 Lokatsiyani yuborish", request_location=True)],
+             ["⏭ Keyingisi", "❌ Bekor qilish"]],
+            resize_keyboard=True,
+        )
+    else:
+        reply_kb = ReplyKeyboardMarkup(
+            [["⏭ Keyingisi", "❌ Bekor qilish"]],
+            resize_keyboard=True,
+        )
+
+    await update.message.reply_text(
+        f"{_dorixona_progress_text(next_step)}\n\n"
+        f"📌 *{next_field[1]}*\n{next_field[2]}",
+        parse_mode="Markdown",
+        reply_markup=reply_kb,
+    )
+    return DORIXONA_ADD_STEP
+
+
+# ─── Dorixona tahrirlash (edit) oqimi ─────────────────────────────────────────
+
+# Maydon kaliti → Google Sheets ustun nomi(lari)
+_DORIXONA_COL_MAP = {
+    "filial_no":        ["Filial №"],
+    "nomi":             ["Nomi (UZ)", "Nomi (RU)"],
+    "hudud":            ["Hudud (UZ)", "Hudud (RU)"],
+    "manzil":           ["Manzil (UZ)", "Manzil (RU)"],
+    "orientir":         ["Orientir (UZ)", "Orientir (RU)"],
+    "ish_vaqti":        ["Ish vaqti (UZ)", "Ish vaqti (RU)"],
+    "telefon":          ["Telefon"],
+    "lokatsiya":        ["Latitude", "Longitude"],   # 2 ta ustun; qiymat (lat, lng)
+    "latitude":         ["Latitude"],
+    "longitude":        ["Longitude"],
+    "koordinator_ismi": ["Koordinator ismi"],
+    "koordinator_tel":  ["Koordinator tel"],
+    "koordinator_tid":  ["Koordinator Telegram ID"],
+    "mudir_tel":        ["Dorixona mudiri tel"],
+    "mudir_tid":        ["Zav.apteka Telegram ID"],
+}
+
+# Joriy qiymatni ko'rsatish uchun: maydon kaliti → asosiy ustun nomi
+_DORIXONA_DISPLAY_COL = {
+    "filial_no":        "Filial №",
+    "nomi":             "Nomi (UZ)",
+    "hudud":            "Hudud (UZ)",
+    "manzil":           "Manzil (UZ)",
+    "orientir":         "Orientir (UZ)",
+    "ish_vaqti":        "Ish vaqti (UZ)",
+    "telefon":          "Telefon",
+    "lokatsiya":        None,          # Latitude + Longitude birgalikda
+    "koordinator_ismi": "Koordinator ismi",
+    "koordinator_tel":  "Koordinator tel",
+    "koordinator_tid":  "Koordinator Telegram ID",
+    "mudir_tel":        "Dorixona mudiri tel",
+    "mudir_tid":        "Zav.apteka Telegram ID",
+}
+
+
+def _get_dorixona_list() -> list:
+    """Filiallar varag'idagi barcha dorixonalar ro'yxatini (dict list) qaytaradi."""
+    try:
+        client = _get_client()
+        sh = client.open_by_key(PHARMACY_SHEET_ID)
+        ws = sh.worksheet(DORIXONA_WS_NAME)
+        return ws.get_all_records()
+    except Exception as e:
+        logger.error(f"[DORIXONA] Ro'yxat olishda xato: {e}")
+        return []
+
+
+def _update_dorixona_field(filial_no: str, field_key: str, new_value) -> bool:
+    """Mavjud dorixonaning bitta (yoki bir nechta) ustunini yangilaydi.
+    new_value: odatda str; lokatsiya uchun (lat_str, lng_str) tuple."""
+    col_names = _DORIXONA_COL_MAP.get(field_key, [])
+    if not col_names:
+        logger.error(f"[DORIXONA] Noma'lum maydon: {field_key}")
+        return False
+    try:
+        client = _get_client()
+        sh = client.open_by_key(PHARMACY_SHEET_ID)
+        ws = sh.worksheet(DORIXONA_WS_NAME)
+
+        # Filial № bo'yicha qator topish
+        col_a = ws.col_values(1)
+        row_idx = None
+        for i, val in enumerate(col_a[1:], start=2):   # 1-chi qator sarlavha
+            if str(val).strip() == str(filial_no).strip():
+                row_idx = i
+                break
+        if not row_idx:
+            logger.error(f"[DORIXONA] Filial № {filial_no} topilmadi")
+            return False
+
+        headers = ws.row_values(1)
+
+        if field_key == "lokatsiya" and isinstance(new_value, tuple):
+            lat_str, lng_str = new_value
+            for col_name, val in zip(["Latitude", "Longitude"], [lat_str, lng_str]):
+                if col_name in headers:
+                    ws.update_cell(row_idx, headers.index(col_name) + 1, val)
+        else:
+            for col_name in col_names:
+                if col_name in headers:
+                    ws.update_cell(row_idx, headers.index(col_name) + 1, str(new_value))
+
+        logger.info(f"[DORIXONA] Filial {filial_no} → {field_key} yangilandi")
+        return True
+    except Exception as e:
+        logger.error(f"[DORIXONA] Yangilashda xato: {e}")
+        return False
+
+
+def _dorixona_btn_label(fkey: str, flabel: str, row: dict) -> str:
+    """Tahrirlash klaviaturasi uchun: 'Maydon nomi: joriy qiymat' tugma matni."""
+    dcol = _DORIXONA_DISPLAY_COL.get(fkey)
+    if fkey == "lokatsiya":
+        lat = str(row.get("Latitude", "")).strip()
+        lng = str(row.get("Longitude", "")).strip()
+        cur = f"{lat}, {lng}" if (lat or lng) else "—"
+    elif dcol:
+        cur = str(row.get(dcol, "")).strip() or "—"
+    else:
+        cur = "—"
+    if len(cur) > 25:
+        cur = cur[:22] + "…"
+    return f"✏️ {flabel}: {cur}"
+
+
+async def dorixona_edit_start(update, ctx):
+    """'✏️ Dorixona tahrirlash' tugmasidan chaqiriladi — filial ro'yxatini ko'rsatadi."""
+    if update.effective_user.id not in ADMIN_IDS:
+        await update.message.reply_text("❌ Ruxsat yo'q.")
+        return
+
+    rows = await run_read(_get_dorixona_list)
+    if not rows:
+        await update.message.reply_text("❌ Dorixonalar ro'yxati bo'sh yoki xato yuz berdi.")
+        return
+
+    ctx.user_data["dorixona_edit_rows"] = rows
+
+    buttons = []
+    for row in rows:
+        filial_no = str(row.get("Filial №", "?")).strip()
+        nomi = str(row.get("Nomi (UZ)", "?")).strip()
+        buttons.append([f"🏥 {filial_no}: {nomi}"])
+    buttons.append(["❌ Bekor qilish"])
+
+    from telegram import ReplyKeyboardMarkup
+    kb = ReplyKeyboardMarkup(buttons, resize_keyboard=True)
+    await update.message.reply_text(
+        "✏️ *Qaysi dorixonani tahrirlash kerak?*\n\nFilial tanlang:",
+        parse_mode="Markdown",
+        reply_markup=kb,
+    )
+    return DORIXONA_EDIT_SELECT
+
+
+async def dorixona_edit_select_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Foydalanuvchi filial tanlagandan keyin maydonlar ro'yxatini ko'rsatadi."""
+    from telegram import ReplyKeyboardMarkup
+    txt = (update.message.text or "").strip()
+
+    if txt == "❌ Bekor qilish":
+        ctx.user_data.pop("dorixona_edit_rows", None)
+        from bot import main_keyboard, MENU
+        lang = ctx.user_data.get("lang", "uz")
+        is_admin = update.effective_user.id in ADMIN_IDS
+        await update.message.reply_text("❌ Bekor qilindi.", reply_markup=main_keyboard(lang, is_admin))
+        return MENU
+
+    rows = ctx.user_data.get("dorixona_edit_rows", [])
+    selected = None
+    for row in rows:
+        filial_no = str(row.get("Filial №", "?")).strip()
+        nomi = str(row.get("Nomi (UZ)", "?")).strip()
+        if txt == f"🏥 {filial_no}: {nomi}":
+            selected = row
+            break
+
+    if not selected:
+        await update.message.reply_text("❌ Topilmadi, qayta tanlang.")
+        return DORIXONA_EDIT_SELECT
+
+    ctx.user_data["dorixona_edit_filial"] = str(selected.get("Filial №", "")).strip()
+    ctx.user_data["dorixona_edit_row"] = selected
+
+    # Maydonlar ro'yxatini ko'rsatish
+    buttons = []
+    for fkey, flabel, _ in DORIXONA_ADD_FIELDS:
+        btn = _dorixona_btn_label(fkey, flabel, selected)
+        buttons.append([btn])
+    buttons.append(["❌ Bekor qilish"])
+
+    kb = ReplyKeyboardMarkup(buttons, resize_keyboard=True)
+    nomi = str(selected.get("Nomi (UZ)", "?")).strip()
+    filno = str(selected.get("Filial №", "?")).strip()
+    await update.message.reply_text(
+        f"✏️ *{filno}: {nomi}*\n\nQaysi maydonni o'zgartirish kerak?",
+        parse_mode="Markdown",
+        reply_markup=kb,
+    )
+    return DORIXONA_EDIT_FIELD
+
+
+async def dorixona_edit_field_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Foydalanuvchi maydon tanlagandan keyin yangi qiymat so'raydi."""
+    from telegram import ReplyKeyboardMarkup, KeyboardButton
+    txt = (update.message.text or "").strip()
+
+    if txt == "❌ Bekor qilish":
+        ctx.user_data.pop("dorixona_edit_filial", None)
+        ctx.user_data.pop("dorixona_edit_row", None)
+        ctx.user_data.pop("dorixona_edit_rows", None)
+        from bot import main_keyboard, MENU
+        lang = ctx.user_data.get("lang", "uz")
+        is_admin = update.effective_user.id in ADMIN_IDS
+        await update.message.reply_text("❌ Bekor qilindi.", reply_markup=main_keyboard(lang, is_admin))
+        return MENU
+
+    # Qaysi maydon tanlandi?
+    selected_field = None
+    selected_row = ctx.user_data.get("dorixona_edit_row", {})
+    for fkey, flabel, _ in DORIXONA_ADD_FIELDS:
+        btn = _dorixona_btn_label(fkey, flabel, selected_row)
+        if txt == btn:
+            selected_field = (fkey, flabel)
+            break
+
+    if not selected_field:
+        await update.message.reply_text("❌ Noma'lum tanlov, qayta urinib ko'ring.")
+        return DORIXONA_EDIT_FIELD
+
+    fkey, flabel = selected_field
+    ctx.user_data["dorixona_edit_field"] = fkey
+
+    # Lokatsiya uchun maxsus klaviatura
+    if fkey == "lokatsiya":
+        kb = ReplyKeyboardMarkup(
+            [[KeyboardButton("📍 Lokatsiyani yuborish", request_location=True)],
+             ["❌ Bekor qilish"]],
+            resize_keyboard=True,
+        )
+        await update.message.reply_text(
+            f"📌 *{flabel}*\n📍 Yangi joylashuvni yuboring:",
+            parse_mode="Markdown",
+            reply_markup=kb,
+        )
+    else:
+        kb = ReplyKeyboardMarkup([["❌ Bekor qilish"]], resize_keyboard=True)
+        _, _, savol = next(f for f in DORIXONA_ADD_FIELDS if f[0] == fkey)
+        await update.message.reply_text(
+            f"📌 *{flabel}*\n{savol}",
+            parse_mode="Markdown",
+            reply_markup=kb,
+        )
+    return DORIXONA_EDIT_VALUE
+
+
+async def dorixona_edit_value_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Yangi qiymatni qabul qilib, Google Sheets da yangilaydi."""
+    from telegram import ReplyKeyboardMarkup, KeyboardButton
+    txt = (update.message.text or "").strip()
+
+    if txt == "❌ Bekor qilish":
+        ctx.user_data.pop("dorixona_edit_filial", None)
+        ctx.user_data.pop("dorixona_edit_row", None)
+        ctx.user_data.pop("dorixona_edit_rows", None)
+        ctx.user_data.pop("dorixona_edit_field", None)
+        from bot import main_keyboard, MENU
+        lang = ctx.user_data.get("lang", "uz")
+        is_admin = update.effective_user.id in ADMIN_IDS
+        await update.message.reply_text("❌ Bekor qilindi.", reply_markup=main_keyboard(lang, is_admin))
+        return MENU
+
+    filial_no = ctx.user_data.get("dorixona_edit_filial", "")
+    fkey = ctx.user_data.get("dorixona_edit_field", "")
+
+    if fkey == "lokatsiya":
+        loc = update.message.location
+        if not loc:
+            kb = ReplyKeyboardMarkup(
+                [[KeyboardButton("📍 Lokatsiyani yuborish", request_location=True)],
+                 ["❌ Bekor qilish"]],
+                resize_keyboard=True,
+            )
+            await update.message.reply_text(
+                "⚠️ Iltimos, *📍 Lokatsiyani yuborish* tugmasini bosing:",
+                parse_mode="Markdown",
+                reply_markup=kb,
+            )
+            return DORIXONA_EDIT_VALUE
+        new_value = (str(loc.latitude), str(loc.longitude))
+        display_val = f"{loc.latitude}, {loc.longitude}"
+    else:
+        new_value = txt
+        display_val = txt
+
+    ok = await run_write(_update_dorixona_field, filial_no, fkey, new_value)
+
+    ctx.user_data.pop("dorixona_edit_filial", None)
+    ctx.user_data.pop("dorixona_edit_row", None)
+    ctx.user_data.pop("dorixona_edit_rows", None)
+    ctx.user_data.pop("dorixona_edit_field", None)
+
+    from bot import main_keyboard, MENU
+    lang = ctx.user_data.get("lang", "uz")
+    is_admin = update.effective_user.id in ADMIN_IDS
+
+    if ok:
+        flabel = next((f[1] for f in DORIXONA_ADD_FIELDS if f[0] == fkey), fkey)
+        await update.message.reply_text(
+            f"✅ *{flabel}* yangilandi!\n📝 Yangi qiymat: `{display_val}`",
+            parse_mode="Markdown",
+            reply_markup=main_keyboard(lang, is_admin),
+        )
+    else:
+        await update.message.reply_text(
+            "⚠️ Saqlashda xato yuz berdi. Qayta urinib ko'ring.",
+            reply_markup=main_keyboard(lang, is_admin),
+        )
+    return MENU

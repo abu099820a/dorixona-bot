@@ -14,6 +14,7 @@ from salary_handlers import (
     reload_admin_ids, reload_admin_permissions, has_panel, ADMIN_PERMISSIONS,
     admin_list_enter, ADMIN_LIST_STATE, ADMIN_NEW_ID, ADMIN_NEW_NAME,
     get_admin_mgmt_states, get_admin_mgmt_callbacks,
+    dorixona_add_start, dorixona_edit_start,
 )
 from exclusive_handlers import cmd_eksklyuziv, get_eks_states, get_eks_callbacks
 from attendance_handlers import (
@@ -425,14 +426,17 @@ def firm_reports_keyboard(language, is_admin=False, uid=None):
     return ReplyKeyboardMarkup(rows, resize_keyboard=True)
 
 
-def search_keyboard(language):
-    return ReplyKeyboardMarkup([
+def search_keyboard(language, is_admin=False):
+    rows = [
         [T[language]["by_number"], T[language]["by_name"]],
         [T[language]["by_region"], T[language]["nearest"]],
         [T[language]["office_loc"], T[language]["excel_btn"]],
         [T[language]["map_btn"]],
-        [T[language]["back"]],
-    ], resize_keyboard=True)
+    ]
+    if is_admin:
+        rows.append(["➕ Dorixona qo'shish", "✏️ Dorixona tahrirlash"])
+    rows.append([T[language]["back"]])
+    return ReplyKeyboardMarkup(rows, resize_keyboard=True)
 
 def back_keyboard(language):
     return ReplyKeyboardMarkup([[T[language]["back"]]], resize_keyboard=True)
@@ -545,7 +549,7 @@ async def menu_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     elif txt == T[language]["search_btn"]:
         await update.message.reply_text(T[language]["search_menu"],
-                                         reply_markup=search_keyboard(language), parse_mode="Markdown")
+                                         reply_markup=search_keyboard(language, is_admin), parse_mode="Markdown")
         return SEARCH_MENU
 
     elif is_admin and txt == T[language]["appeal_btn"]:
@@ -749,12 +753,18 @@ async def admin_panel_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def search_menu_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     language = get_lang(ctx)
+    is_admin = update.effective_user.id in ADMIN_IDS
     txt = update.message.text
 
     if txt == T[language]["back"]:
-        is_admin = update.effective_user.id in ADMIN_IDS
         await update.message.reply_text(T[language]["menu"], reply_markup=main_keyboard(language, is_admin), parse_mode="Markdown")
         return MENU
+
+    elif is_admin and txt == "➕ Dorixona qo'shish":
+        return await dorixona_add_start(update, ctx)
+
+    elif is_admin and txt == "✏️ Dorixona tahrirlash":
+        return await dorixona_edit_start(update, ctx)
 
     elif txt == T[language]["nearest"]:
         kb = ReplyKeyboardMarkup([
@@ -888,7 +898,7 @@ async def search_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     txt = update.message.text.strip()
     if txt == T[language]["back"]:
         await update.message.reply_text(T[language]["search_menu"],
-                                         reply_markup=search_keyboard(language), parse_mode="Markdown")
+                                         reply_markup=search_keyboard(language, update.effective_user.id in ADMIN_IDS), parse_mode="Markdown")
         return SEARCH_MENU
 
     df = load_df()
@@ -963,7 +973,7 @@ async def location_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     language = get_lang(ctx)
     if update.message.text == T[language]["back"]:
         await update.message.reply_text(T[language]["search_menu"],
-                                         reply_markup=search_keyboard(language), parse_mode="Markdown")
+                                         reply_markup=search_keyboard(language, update.effective_user.id in ADMIN_IDS), parse_mode="Markdown")
         return SEARCH_MENU
     if not update.message.location: return LOCATION_WAIT
 
@@ -976,7 +986,7 @@ async def location_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     if valid.empty:
         await update.message.reply_text("❌ Koordinatalar hali kiritilmagan!")
-        await update.message.reply_text(T[language]["search_menu"], reply_markup=search_keyboard(language), parse_mode="Markdown")
+        await update.message.reply_text(T[language]["search_menu"], reply_markup=search_keyboard(language, update.effective_user.id in ADMIN_IDS), parse_mode="Markdown")
         return SEARCH_MENU
 
     valid["_dist"] = valid.apply(lambda r: haversine(ulat,ulon,r["_lat"],r["_lon"]), axis=1)
@@ -990,7 +1000,7 @@ async def location_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         loc_msg = await update.message.reply_location(latitude=row["_lat"], longitude=row["_lon"])
         await safe_markdown_reply(loc_msg, text, reply_markup=kb)
 
-    await update.message.reply_text(T[language]["search_menu"], reply_markup=search_keyboard(language), parse_mode="Markdown")
+    await update.message.reply_text(T[language]["search_menu"], reply_markup=search_keyboard(language, update.effective_user.id in ADMIN_IDS), parse_mode="Markdown")
     return SEARCH_MENU
 
 async def select_region(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -1032,13 +1042,13 @@ async def select_district(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     if results.empty:
         await q.message.reply_text(T[language]["not_found"])
-        await q.message.reply_text(T[language]["search_menu"], reply_markup=search_keyboard(language), parse_mode="Markdown")
+        await q.message.reply_text(T[language]["search_menu"], reply_markup=search_keyboard(language, update.effective_user.id in ADMIN_IDS), parse_mode="Markdown")
         return SEARCH_MENU
 
     if len(results) <= 3:
         for _, row in results.iterrows():
             await send_card(q.message, row.to_dict(), language)
-        await q.message.reply_text(T[language]["search_menu"], reply_markup=search_keyboard(language), parse_mode="Markdown")
+        await q.message.reply_text(T[language]["search_menu"], reply_markup=search_keyboard(language, update.effective_user.id in ADMIN_IDS), parse_mode="Markdown")
         return SEARCH_MENU
 
     ctx.user_data["results"] = results.to_dict("records")
