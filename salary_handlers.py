@@ -7229,19 +7229,26 @@ def _save_dorixona_to_sheet(data: dict) -> bool:
         hudud_uz, hudud_ru = _hudud_translate(data.get("hudud", ""))
 
         # Koordinator ismi: Координаторлар listidan avtomatik topish
+        # Barcha mavjud spreadsheet larda qidiradi
         koord_tel = data.get("koordinator_tel", "")
         koord_ismi = ""
-        try:
-            kws = sh.worksheet(_KOORDINATORLAR_WS)
-            krecords = kws.get_all_values()
-            norm = lambda p: "".join(c for c in p if c.isdigit())
-            target = norm(koord_tel)
-            for row_ in krecords[1:]:
-                if len(row_) >= 2 and norm(row_[1]) == target:
-                    koord_ismi = row_[0].strip()
+        norm = lambda p: "".join(c for c in p if c.isdigit())
+        target = norm(koord_tel)
+        _all_sheet_ids = [sid for sid in [PHARMACY_SHEET_ID, SALARY_SHEET_ID, SHEETS_ID, FIRMS_SHEET_ID] if sid]
+        for _sid in _all_sheet_ids:
+            try:
+                _ksh = client.open_by_key(_sid)
+                _kws = _ksh.worksheet(_KOORDINATORLAR_WS)
+                _krecords = _kws.get_all_values()
+                for row_ in _krecords[1:]:
+                    if len(row_) >= 2 and norm(row_[1]) == target:
+                        koord_ismi = row_[0].strip()
+                        break
+                if koord_ismi:
                     break
-        except Exception as e:
-            logger.warning(f"[KOORDINATOR LOOKUP] Xato: {e}")
+            except Exception as e:
+                logger.debug(f"[KOORDINATOR] {_sid}: {e}")
+        logger.info(f"[KOORDINATOR LOOKUP] tel={koord_tel} → ismi={koord_ismi!r}")
 
         row = [
             data.get("filial_no", ""),
