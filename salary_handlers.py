@@ -7144,8 +7144,11 @@ def _translate_uz_to_ru(text: str) -> str:
         return text
     try:
         from deep_translator import GoogleTranslator
-        return GoogleTranslator(source="uz", target="ru").translate(text.strip())
-    except Exception:
+        result = GoogleTranslator(source="uz", target="ru").translate(text.strip())
+        logger.debug(f"[TRANSLATE] '{text[:40]}' → '{result[:40] if result else ''}'")
+        return result or text
+    except Exception as e:
+        logger.warning(f"[TRANSLATE] Xato: {e} | matn: '{text[:40]}'")
         return text
 
 

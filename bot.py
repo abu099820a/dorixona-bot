@@ -303,9 +303,19 @@ def format_card(row, language):
     koordinator_tel = row.get("Koordinator tel", "")
     mudiri_tel = row.get("Dorixona mudiri tel", "")
 
+    # Til bo'yicha labellar
+    if language == "ru":
+        lbl_filial  = "Филиал"
+        lbl_koord   = "Координатор"
+        lbl_mudir   = "Зав. аптека"
+    else:
+        lbl_filial  = "Filial"
+        lbl_koord   = "Koordinator"
+        lbl_mudir   = "Dorixona mudiri"
+
     lines = [f"🏥 *{nomi}*"]
     if filial and filial not in ["nan", ""]:
-        lines.append(f"🔢 Filial: #{filial}")
+        lines.append(f"🔢 {lbl_filial}: #{filial}")
     if hudud or tuman:
         lines.append(f"🗺 {hudud}" + (f", {tuman}" if tuman else ""))
     if manzil: lines.append(f"📍 {manzil}")
@@ -318,14 +328,13 @@ def format_card(row, language):
         if koordinator_tel and str(koordinator_tel) not in ["", "nan"]:
             digits_k = re.sub(r"\D", "", str(koordinator_tel))
             tg_k = f"https://t.me/+{digits_k}"
-            lines.append(f"👤 Koordinator: [{koordinator_ismi}]({tg_k})")
+            lines.append(f"👤 {lbl_koord}: [{koordinator_ismi}]({tg_k})")
         else:
-            lines.append(f"👤 Koordinator: {koordinator_ismi}")
+            lines.append(f"👤 {lbl_koord}: {koordinator_ismi}")
     if mudiri_tel and str(mudiri_tel) not in ["", "nan"]:
         digits_m = re.sub(r"\D", "", str(mudiri_tel))
         tg_m = f"https://t.me/+{digits_m}"
-        mudir_label = "Зав. аптека" if language == "ru" else "Dorixona mudiri"
-        lines.append(f"💊 {mudir_label}: [{escape_md(mudiri_tel)}]({tg_m})")
+        lines.append(f"💊 {lbl_mudir}: [{escape_md(mudiri_tel)}]({tg_m})")
     return "\n".join(str(l) for l in lines)
 
 def phone_to_tg(phone):
