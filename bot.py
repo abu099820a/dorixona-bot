@@ -267,13 +267,13 @@ def escape_md(text):
 
 def format_card(row, language):
     lg_up = "UZ" if language == "uz" else "RU"
-    nomi = escape_md(row.get(f"Nomi ({lg_up})", "") or row.get("Nomi (RU)", ""))
+    nomi = escape_md(row.get(f"Nomi ({lg_up})", "") or row.get("Nomi (UZ)", "") or row.get("Nomi (RU)", ""))
     filial = str(row.get("filial_no", "")).strip()
-    hudud = escape_md(row.get(f"Hudud ({lg_up})", "") or row.get("Hudud (RU)", ""))
-    tuman = escape_md(row.get(f"Tuman ({lg_up})", "") or row.get("Tuman (RU)", ""))
-    manzil = escape_md(row.get(f"Manzil ({lg_up})", "") or row.get("Manzil (RU)", ""))
-    orientir = escape_md(row.get(f"Orientir ({lg_up})", "") or row.get("Orientir (RU)", ""))
-    hours = escape_md(row.get(f"Ish vaqti ({lg_up})", "") or row.get("Ish vaqti (RU)", ""))
+    hudud = escape_md(row.get(f"Hudud ({lg_up})", "") or row.get("Hudud (UZ)", "") or row.get("Hudud (RU)", ""))
+    tuman = escape_md(row.get(f"Tuman ({lg_up})", "") or row.get("Tuman (UZ)", "") or row.get("Tuman (RU)", ""))
+    manzil = escape_md(row.get(f"Manzil ({lg_up})", "") or row.get("Manzil (UZ)", "") or row.get("Manzil (RU)", ""))
+    orientir = escape_md(row.get(f"Orientir ({lg_up})", "") or row.get("Orientir (UZ)", "") or row.get("Orientir (RU)", ""))
+    hours = escape_md(row.get(f"Ish vaqti ({lg_up})", "") or row.get("Ish vaqti (UZ)", "") or row.get("Ish vaqti (RU)", ""))
     phone = row.get("Telefon", "")
 
     koordinator_ismi = escape_md(row.get("Koordinator ismi", ""))
