@@ -266,21 +266,29 @@ def escape_md(text):
         s = s.replace(ch, "\\" + ch)
     return s
 
+_UZ_LETTERS = set("ўқғҳЎҚҒҲ")
+
+def _needs_translation(text: str) -> bool:
+    """Matnda o'zbek harflari bormi yoki RU ustun UZ bilan bir xilmi."""
+    return bool(text and any(c in _UZ_LETTERS for c in text))
+
 def format_card(row, language):
     lg_up = "UZ" if language == "uz" else "RU"
     def _get_field(ru_key, uz_key):
-        """RU ustun bo'sh bo'lsa, UZ ni olib tarjima qiladi (faqat rus tilida)."""
-        val = row.get(ru_key, "") or ""
-        if not val.strip() and language == "ru":
-            uz_val = row.get(uz_key, "") or ""
-            if uz_val.strip():
+        """RU ustun bo'sh yoki o'zbek matni bo'lsa, tarjima qiladi."""
+        uz_val = (row.get(uz_key, "") or "").strip()
+        ru_val = (row.get(ru_key, "") or "").strip()
+        if language != "ru":
+            return uz_val or ru_val
+        # Rus tili: RU bo'sh yoki o'zbek harflari bo'lsa tarjima qil
+        if not ru_val or _needs_translation(ru_val) or ru_val == uz_val:
+            if uz_val:
                 try:
-                    val = _translate_uz_to_ru(uz_val) or uz_val
+                    translated = _translate_uz_to_ru(uz_val)
+                    return translated if translated and translated.strip() else uz_val
                 except Exception:
-                    val = uz_val
-        elif not val.strip():
-            val = row.get(uz_key, "") or ""
-        return val
+                    return uz_val
+        return ru_val or uz_val
 
     nomi    = escape_md(_get_field(f"Nomi ({lg_up})",      "Nomi (UZ)"))
     filial  = str(row.get("filial_no", "")).strip()
@@ -316,7 +324,8 @@ def format_card(row, language):
     if mudiri_tel and str(mudiri_tel) not in ["", "nan"]:
         digits_m = re.sub(r"\D", "", str(mudiri_tel))
         tg_m = f"https://t.me/+{digits_m}"
-        lines.append(f"💊 Dorixona mudiri: [{escape_md(mudiri_tel)}]({tg_m})")
+        mudir_label = "Зав. аптека" if language == "ru" else "Dorixona mudiri"
+        lines.append(f"💊 {mudir_label}: [{escape_md(mudiri_tel)}]({tg_m})")
     return "\n".join(str(l) for l in lines)
 
 def phone_to_tg(phone):
