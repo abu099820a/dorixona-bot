@@ -15,6 +15,7 @@ from salary_handlers import (
     admin_list_enter, ADMIN_LIST_STATE, ADMIN_NEW_ID, ADMIN_NEW_NAME,
     get_admin_mgmt_states, get_admin_mgmt_callbacks,
     dorixona_add_start, dorixona_edit_start,
+    _translate_uz_to_ru,
 )
 from exclusive_handlers import cmd_eksklyuziv, get_eks_states, get_eks_callbacks
 from attendance_handlers import (
@@ -267,13 +268,27 @@ def escape_md(text):
 
 def format_card(row, language):
     lg_up = "UZ" if language == "uz" else "RU"
-    nomi = escape_md(row.get(f"Nomi ({lg_up})", "") or row.get("Nomi (UZ)", "") or row.get("Nomi (RU)", ""))
-    filial = str(row.get("filial_no", "")).strip()
-    hudud = escape_md(row.get(f"Hudud ({lg_up})", "") or row.get("Hudud (UZ)", "") or row.get("Hudud (RU)", ""))
-    tuman = escape_md(row.get(f"Tuman ({lg_up})", "") or row.get("Tuman (UZ)", "") or row.get("Tuman (RU)", ""))
-    manzil = escape_md(row.get(f"Manzil ({lg_up})", "") or row.get("Manzil (UZ)", "") or row.get("Manzil (RU)", ""))
-    orientir = escape_md(row.get(f"Orientir ({lg_up})", "") or row.get("Orientir (UZ)", "") or row.get("Orientir (RU)", ""))
-    hours = escape_md(row.get(f"Ish vaqti ({lg_up})", "") or row.get("Ish vaqti (UZ)", "") or row.get("Ish vaqti (RU)", ""))
+    def _get_field(ru_key, uz_key):
+        """RU ustun bo'sh bo'lsa, UZ ni olib tarjima qiladi (faqat rus tilida)."""
+        val = row.get(ru_key, "") or ""
+        if not val.strip() and language == "ru":
+            uz_val = row.get(uz_key, "") or ""
+            if uz_val.strip():
+                try:
+                    val = _translate_uz_to_ru(uz_val) or uz_val
+                except Exception:
+                    val = uz_val
+        elif not val.strip():
+            val = row.get(uz_key, "") or ""
+        return val
+
+    nomi    = escape_md(_get_field(f"Nomi ({lg_up})",      "Nomi (UZ)"))
+    filial  = str(row.get("filial_no", "")).strip()
+    hudud   = escape_md(_get_field(f"Hudud ({lg_up})",     "Hudud (UZ)"))
+    tuman   = escape_md(_get_field(f"Tuman ({lg_up})",     "Tuman (UZ)"))
+    manzil  = escape_md(_get_field(f"Manzil ({lg_up})",   "Manzil (UZ)"))
+    orientir= escape_md(_get_field(f"Orientir ({lg_up})", "Orientir (UZ)"))
+    hours   = escape_md(_get_field(f"Ish vaqti ({lg_up})","Ish vaqti (UZ)"))
     phone = row.get("Telefon", "")
 
     koordinator_ismi = escape_md(row.get("Koordinator ismi", ""))
