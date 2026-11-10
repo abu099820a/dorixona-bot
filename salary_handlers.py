@@ -7248,22 +7248,45 @@ def _save_dorixona_to_sheet(data: dict) -> bool:
                 logger.debug(f"[KOORDINATOR] {_sid}: {e}")
         logger.info(f"[KOORDINATOR LOOKUP] tel={koord_tel} → ismi={koord_ismi!r}")
 
-        row = [
-            data.get("filial_no", ""),
-            data.get("nomi", ""),       data.get("nomi", ""),
-            hudud_uz,                   hudud_ru,
-            data.get("manzil", ""),     _translate_uz_to_ru(data.get("manzil", "")),
-            data.get("orientir", ""),   _translate_uz_to_ru(data.get("orientir", "")),
-            _DEFAULT_ISH_VAQTI,         _DEFAULT_ISH_VAQTI,
-            data.get("telefon", ""),
-            data.get("latitude", ""),
-            data.get("longitude", ""),
-            koord_ismi,
-            koord_tel,
-            data.get("koordinator_tid", ""),
-            data.get("mudir_tel", ""),
-            data.get("mudir_tid", ""),
-        ]
+        # Ustun nomlari bo'yicha lug'at — tartib farqiga chidamli
+        row_dict = {
+            "Filial №":               data.get("filial_no", ""),
+            "Nomi (UZ)":              data.get("nomi", ""),
+            "Nomi (RU)":              data.get("nomi", ""),
+            "Hudud (UZ)":             hudud_uz,
+            "Hudud (RU)":             hudud_ru,
+            "Manzil (UZ)":            data.get("manzil", ""),
+            "Manzil (RU)":            _translate_uz_to_ru(data.get("manzil", "")),
+            "Orientir (UZ)":          data.get("orientir", ""),
+            "Orientir (RU)":          _translate_uz_to_ru(data.get("orientir", "")),
+            "Ish vaqti (UZ)":         _DEFAULT_ISH_VAQTI,
+            "Ish vaqti (RU)":         _DEFAULT_ISH_VAQTI,
+            "Telefon":                data.get("telefon", ""),
+            "Latitude":               data.get("latitude", ""),
+            "Longitude":              data.get("longitude", ""),
+            "Koordinator ismi":       koord_ismi,
+            "Koordinator tel":        koord_tel,
+            "Koordinator Telegram ID": data.get("koordinator_tid", ""),
+            "Dorixona mudiri tel":    data.get("mudir_tel", ""),
+            "Zav.apteka Telegram ID": data.get("mudir_tid", ""),
+        }
+        # Haqiqiy sarlavhalarni o'qib, ustun tartibini aniqlash
+        actual_headers = ws.row_values(1)
+        if not actual_headers:
+            # Sarlavha yo'q — avval header qo'shamiz
+            ws.append_row(DORIXONA_WS_HEADERS)
+            actual_headers = list(DORIXONA_WS_HEADERS)
+        else:
+            # Yetishmayotgan ustunlarni oxiriga qo'shish
+            missing = [h for h in DORIXONA_WS_HEADERS if h not in actual_headers]
+            if missing:
+                extended = actual_headers + missing
+                # 1-qatorni to'liq yangilash
+                ws.update("1:1", [extended])
+                actual_headers = extended
+                logger.info(f"[DORIXONA] Yetishmayotgan ustunlar qo'shildi: {missing}")
+        # Haqiqiy sarlavhalarga mos kelgan qiymatlar ro'yxatini tuzish
+        row = [str(row_dict.get(h, "")) for h in actual_headers]
         ws.append_row(row)
         logger.info(f"[DORIXONA] Yangi filial saqlandi: {data.get('nomi','')}")
         return True
