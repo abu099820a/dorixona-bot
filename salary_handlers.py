@@ -7722,12 +7722,22 @@ async def dorixona_edit_field_handler(update: Update, ctx: ContextTypes.DEFAULT_
 async def dorixona_edit_value_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Yangi qiymatni qabul qilib, Google Sheets da yangilaydi."""
     from telegram import ReplyKeyboardMarkup, KeyboardButton
-    # Kontakt yuborilsa — telefon raqamini matn sifatida olamiz
+    # Kontakt yuborilsa — telefon VA TID olamiz
+    _contact_phone = None
+    _contact_tid   = None
     if update.message.contact:
-        _phone = update.message.contact.phone_number or ""
-        if _phone and not _phone.startswith("+"):
-            _phone = "+" + _phone
-        txt = _phone
+        _p = update.message.contact.phone_number or ""
+        if _p and not _p.startswith("+"):
+            _p = "+" + _p
+        _contact_phone = _p or None
+        if update.message.contact.user_id:
+            _contact_tid = str(update.message.contact.user_id)
+        fkey_now = ctx.user_data.get("dorixona_edit_field", "")
+        # TID maydon uchun — TID ni asosiy qiymat qilamiz
+        if fkey_now in ("koordinator_tid", "mudir_tid") and _contact_tid:
+            txt = _contact_tid
+        else:
+            txt = _contact_phone or ""
     else:
         txt = (update.message.text or "").strip()
 
@@ -7767,6 +7777,13 @@ async def dorixona_edit_value_handler(update: Update, ctx: ContextTypes.DEFAULT_
 
     ok = await run_write(_update_dorixona_field, filial_no, fkey, new_value)
 
+    # Kontakt yuborilganda telefon raqamini ham saqlash
+    if ok and _contact_phone:
+        if fkey == "koordinator_tid":
+            await run_write(_update_dorixona_field, filial_no, "koordinator_tel", _contact_phone)
+        elif fkey == "mudir_tid":
+            await run_write(_update_dorixona_field, filial_no, "mudir_tel", _contact_phone)
+
     ctx.user_data.pop("dorixona_edit_filial", None)
     ctx.user_data.pop("dorixona_edit_row", None)
     ctx.user_data.pop("dorixona_edit_rows", None)
@@ -7778,8 +7795,9 @@ async def dorixona_edit_value_handler(update: Update, ctx: ContextTypes.DEFAULT_
 
     if ok:
         flabel = next((f[1] for f in DORIXONA_ADD_FIELDS if f[0] == fkey), fkey)
+        tid_info = f"\n🆔 TG ID: `{new_value}`\n📞 Tel: `{_contact_phone}`" if _contact_phone and fkey in ("koordinator_tid","mudir_tid") else f"\n📝 Yangi qiymat: `{display_val}`"
         await update.message.reply_text(
-            f"✅ *{flabel}* yangilandi!\n📝 Yangi qiymat: `{display_val}`",
+            f"✅ *{flabel}* yangilandi!{tid_info}",
             parse_mode="Markdown",
             reply_markup=main_keyboard(lang, is_admin),
         )
