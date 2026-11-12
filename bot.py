@@ -1306,6 +1306,14 @@ def main():
     #    asosida).
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, appeal_comment_catcher), group=-1)
 
+    # ── Rasm orqali filial aniqlash + murojaat (OCR) ──────────────────────────
+    # group=-2: img_appeal_text_catcher ConversationHandler'dan OLDIN ishlashi kerak
+    from salary_handlers import get_photo_filial_handlers
+    _photo_handlers = get_photo_filial_handlers()
+    app.add_handler(_photo_handlers[0], group=1)   # PHOTO handler
+    app.add_handler(_photo_handlers[1], group=0)   # imgappeal: callback
+    app.add_handler(_photo_handlers[2], group=-2)  # text catcher (oldin ishla)
+
 
     print("✅ Vaksin Med bot ishga tushdi!")
     from telegram.ext import CommandHandler as CmdHandler
