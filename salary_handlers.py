@@ -6854,6 +6854,9 @@ def get_sal_states():
 
 # === PATCH ===
 import asyncio as _asyncio
+DORIXONA_EDIT_SEARCH = 9801
+DORIXONA_ADD_STEP = 9802
+DORIXONA_ADD_FIELDS = []
 
 def _translate_uz_to_ru(text):
     if not text or not text.strip():
