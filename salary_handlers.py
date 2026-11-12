@@ -1,6 +1,5 @@
 """
 salary_handlers.py — Oylik fayllarni mudirlariga yuborish moduli
-# v2.6 — ish vaqti avtomatik, manzil RU tarjima, koordinator ismi fix
 
 Jarayon:
 1. Admin /send_salaries yozadi
@@ -91,10 +90,6 @@ ADMIN_LIST_STATE = 532              # Super admin adminlar ro'yxatini boshqaradi
 FIRMA_PHONE_CONTRACT_SELECT = 535   # Postawchik telefon orqali kirganda bir nechta shartnomadan birini tanlaydi
 ADMIN_NEW_ID = 533                  # Super admin yangi admin ID kiritadi
 ADMIN_NEW_NAME = 534                # Super admin yangi admin ismini kiritadi
-DORIXONA_ADD_STEP = 537             # Admin yangi dorixona (filial) qo'shmoqda — qadam-qadam
-DORIXONA_EDIT_SELECT = 538          # Admin tahrirlash uchun filial tanlaydi
-DORIXONA_EDIT_FIELD = 539           # Admin qaysi maydonni o'zgartirish kerakligini tanlaydi
-DORIXONA_EDIT_VALUE = 540           # Admin yangi qiymat kiritadi (matn yoki lokatsiya)
 
 
 # ─── Google Sheets ────────────────────────────────────────────────────────────
@@ -1117,58 +1112,6 @@ def get_firma_file_by_telegram_id(telegram_id) -> dict | None:
         return None
 
 
-def get_contracts_by_firma_nomi(firma_nomi: str) -> list:
-    """
-    Firma nomi bo'yicha SALARY_SHEET_ID → To'lovlar varag'idan barcha shartnomalarni qaytaradi.
-    (To'lovlar: A=Firma nomi, B=Shartnoma raqami, C=INN, D=Тел рақами, E=ID)
-    Har bir element: {"shartnoma": str, "phone": str, "tid": str, "_row_idx": int, "_sheet": str}
-    """
-    results = []
-    target = _norm_firma_nomi(firma_nomi)
-
-    # Asosiy manba: SALARY_SHEET_ID → To'lovlar (shartnoma + telefon + ID bor)
-    try:
-        client = _get_client()
-        sh = client.open_by_key(SALARY_SHEET_ID)
-        ws = _find_worksheet_flexible(sh, TOLOVLAR_WS_NAME)
-        all_values = ws.get_all_values()
-        for i, row in enumerate(all_values[1:], start=2):
-            if not row or _norm_firma_nomi(row[0]) != target:
-                continue
-            shartnoma = row[1].strip() if len(row) > 1 else ""
-            phone     = row[3].strip() if len(row) > 3 else ""
-            tid       = row[4].strip() if len(row) > 4 else ""
-            results.append({
-                "shartnoma": shartnoma,
-                "phone":     phone,
-                "tid":       tid,
-                "_row_idx":  i,
-                "_sheet":    "tolovlar",
-            })
-    except Exception as e:
-        logger.error(f"[FIRMS] get_contracts_by_firma_nomi To'lovlar xato: {e}")
-
-    # Zaxira: PHARMACY_SHEET_ID → Firmalar (agar To'lovlar da topilmasa)
-    if not results:
-        try:
-            from register_handlers import _get_firmalar_ws
-            ws1 = _get_firmalar_ws()
-            records1 = ws1.get_all_records()
-            for i, row in enumerate(records1, start=2):
-                if _norm_firma_nomi(str(row.get("Firma nomi", ""))) == target:
-                    results.append({
-                        "shartnoma": str(row.get("Shartnoma raqami", "")).strip(),
-                        "phone":     str(row.get("Telefon",          "")).strip(),
-                        "tid":       str(row.get("TelegramID",       "")).strip(),
-                        "_row_idx":  i,
-                        "_sheet":    "pharmacy",
-                    })
-        except Exception as e:
-            logger.error(f"[FIRMS] get_contracts_by_firma_nomi PHARMACY xato: {e}")
-
-    return results
-
-
 def get_all_firma_files_by_tid(telegram_id) -> list:
     """
     Berilgan TelegramID bo'yicha "Firmalar" varag'idan BARCHA mos
@@ -1297,48 +1240,16 @@ def get_all_firma_files_by_phone(phone: str) -> list:
     return results
 
 
-def save_firma_telegram_id_by_row(row_idx: int, telegram_id: int,
-                                   sheet: str = "pharmacy",
-                                   phone: str = "") -> bool:
+def save_firma_telegram_id_by_row(row_idx: int, telegram_id: int) -> bool:
     """
-    Berilgan qator indeksiga TelegramID (va ixtiyoriy telefon) yozadi.
-    sheet='tolovlar'  → SALARY_SHEET_ID To'lovlar (D=Тел, E=ID)
-    sheet='pharmacy'  → PHARMACY_SHEET_ID Firmalar (TelegramID ustuni)
-    sheet='sheets_id' → SHEETS_ID Firmalar (TelegramID ustuni)
+    Berilgan qator indeksiga TelegramID yozadi (aniq qator bo'yicha).
+    Bir nechta shartnomali firmalar uchun — faqat tanlangan qatorga yoziladi.
     """
     try:
-        if sheet == "tolovlar":
-            client = _get_client()
-            sh = client.open_by_key(SALARY_SHEET_ID)
-            ws = _find_worksheet_flexible(sh, TOLOVLAR_WS_NAME)
-            batch = []
-            if phone:
-                batch.append({"range": f"D{row_idx}", "values": [[phone]]})
-            if telegram_id:
-                batch.append({"range": f"E{row_idx}", "values": [[str(telegram_id)]]})
-            if batch:
-                ws.batch_update(batch)
-            return True
-        elif sheet == "sheets_id" and SHEETS_ID:
-            gc = _get_client()
-            ws = gc.open_by_key(SHEETS_ID).worksheet("Firmalar")
-            headers = ws.row_values(1)
-            try:
-                col = headers.index("TelegramID") + 1
-            except ValueError:
-                col = 3
-            ws.update_cell(row_idx, col, str(telegram_id))
-            return True
-        else:
-            from register_handlers import _get_firmalar_ws
-            ws = _get_firmalar_ws()
-            headers = ws.row_values(1)
-            try:
-                col = headers.index("TelegramID") + 1
-            except ValueError:
-                col = 3
-            ws.update_cell(row_idx, col, str(telegram_id))
-            return True
+        from register_handlers import _get_firmalar_ws
+        ws = _get_firmalar_ws()
+        ws.update_cell(row_idx, 3, str(telegram_id))  # TelegramID — 3-ustun (C)
+        return True
     except Exception as e:
         logger.error(f"[FIRMS] save_firma_telegram_id_by_row xato: {e}")
         return False
@@ -2571,31 +2482,6 @@ async def firm_get_month_pick_handler(update: Update, ctx: ContextTypes.DEFAULT_
 
 # ─── Firma o'zi hisobotini olishi (self-service) ───────────────────────────────
 
-def _round_summa_to_million(summa_str: str) -> tuple:
-    """Summani 1 mln ga yaxlitlaydi: ≥500 000 → yuqoriga, <500 000 → pastga.
-    Qaytaradi: (yaxlitlangan_str, asl_str)
-    Misol: "39 891 299" → ("40 000 000", "39 891 299")
-    Vergul/nuqtali kasr qismini (,45 yoki .45) oldin olib tashlanadi.
-    """
-    import re as _re
-    s = str(summa_str).strip()
-    # Kasr qismini olib tashlash: oxiridagi ,45 yoki .45 ni olib tashla
-    s = _re.sub(r"[,\.]\d{1,2}$", "", s)
-    # Qolgan raqam bo'lmagan belgilarni (bo'shliq, apostrof...) olib tashlash
-    digits = _re.sub(r"[^\d]", "", s)
-    if not digits:
-        return summa_str, summa_str
-    amount = int(digits)
-    # Asl son bo'shliq bilan formatlash
-    asl = f"{amount:,}".replace(",", " ")
-    remainder = amount % 1_000_000
-    if remainder >= 500_000:
-        rounded = (amount // 1_000_000 + 1) * 1_000_000
-    else:
-        rounded = (amount // 1_000_000) * 1_000_000
-    return f"{rounded:,}".replace(",", " "), asl
-
-
 async def _send_firm_direct_report(
     update: Update, ctx: ContextTypes.DEFAULT_TYPE, firm_info: dict,
     from_menu: bool = False, summa_info_override: dict | None = None
@@ -2718,35 +2604,24 @@ async def _send_firm_direct_report(
     # else: available_months > 1 → fayl firm_month_select_handler da yuboriladi
 
     # ── 4. Shartnoma / INN / To'lov bloki ────────────────────────────────────
-    _summa_raw    = (summa_info or {}).get("summa", "")
-    _summa_rounded, _summa_asl = _round_summa_to_million(_summa_raw) if _summa_raw else ("", "")
-    _inn_disp     = (summa_info or {}).get("inn", "")
-    _dogovor_disp = ((summa_info or {}).get("dogovor") or (summa_info or {}).get("shartnoma", ""))
-
-    if language == "uz":
-        lines = [f"*Firma:* `{firma_nomi}`"]
-        if _summa_rounded:
-            _summa_line = f"*Summa:* `{_summa_rounded}`"
-            if _summa_asl and _summa_asl != _summa_rounded:
-                _summa_line += f" ({_summa_asl})"
-            lines.append(_summa_line)
-        if _inn_disp:
-            lines.append(f"*INN:* `{_inn_disp}`")
-        if _dogovor_disp:
-            lines.append(f"*Shartnoma:* `{_dogovor_disp}`")
-        lines.append("реализация")
-    else:
-        lines = [f"*Фирма:* `{firma_nomi}`"]
-        if _summa_rounded:
-            _summa_line = f"*Сумма:* `{_summa_rounded}`"
-            if _summa_asl and _summa_asl != _summa_rounded:
-                _summa_line += f" ({_summa_asl})"
-            lines.append(_summa_line)
-        if _inn_disp:
-            lines.append(f"*ИНН:* `{_inn_disp}`")
-        if _dogovor_disp:
-            lines.append(f"*Договор:* `{_dogovor_disp}`")
-        lines.append("реализация")
+    lines = [f"🏢 *{firma_nomi}*", ""]
+    if summa_info:
+        if summa_info.get("dogovor"):
+            lines.append(f"📄 {'Shartnoma' if language == 'uz' else 'Договор'}: {summa_info['dogovor']}")
+        elif summa_info.get("shartnoma"):
+            lines.append(f"📄 {'Shartnoma' if language == 'uz' else 'Договор'}: {summa_info['shartnoma']}")
+        if summa_info.get("inn"):
+            lines.append(f"🆔 INN: {summa_info['inn']}")
+        holati = summa_info.get("holati", "").strip().lower()
+        belgi  = "✅" if holati in ("to'langan", "оплачено", "✅") else \
+                 "❌" if holati in ("to'lanmagan", "не оплачено", "❌") else "⏳"
+        if summa_info.get("summa") or summa_info.get("holati"):
+            lines.append("")
+            lines.append(
+                f"{belgi} To'lov: {summa_info.get('summa', '—')} ({summa_info.get('holati', '—')})"
+                if language == "uz" else
+                f"{belgi} Оплата: {summa_info.get('summa', '—')} ({summa_info.get('holati', '—')})"
+            )
 
     # ── 5. Hisobot bloki ─────────────────────────────────────────────────────
     if len(available_months) == 0:
@@ -2831,18 +2706,18 @@ async def _send_firm_direct_report(
         # Admin xabardorligi — firma hisobot olganda
         _sotuv_str  = (mdata or {}).get("sotuv", "—")
         _ostatok_str = (mdata or {}).get("ostatok", "—")
-        _notif_text = (
-            f"📩 *Firma hisobot oldi*\n🏢 {firma_nomi}\n📅 {mdisp}\n"
-            f"💰 Sotuv: *{_sotuv_str}*\n📦 Qoldiq: *{_ostatok_str}*"
-            if language == "uz" else
-            f"📩 *Фирма запросила отчёт*\n🏢 {firma_nomi}\n📅 {mdisp}\n"
-            f"💰 Продажи: *{_sotuv_str}*\n📦 Остаток: *{_ostatok_str}*"
-        )
-        if PAYMENT_GROUP_ID:
+        for _aid in ADMIN_IDS:
             try:
-                await ctx.bot.send_message(chat_id=PAYMENT_GROUP_ID, text=_notif_text, parse_mode="Markdown")
+                _notif = (
+                    f"📩 *Firma hisobot oldi*\n🏢 {firma_nomi}\n📅 {mdisp}\n"
+                    f"💰 Sotuv: *{_sotuv_str}*\n📦 Qoldiq: *{_ostatok_str}*"
+                    if language == "uz" else
+                    f"📩 *Фирма запросила отчёт*\n🏢 {firma_nomi}\n📅 {mdisp}\n"
+                    f"💰 Продажи: *{_sotuv_str}*\n📦 Остаток: *{_ostatok_str}*"
+                )
+                await ctx.bot.send_message(chat_id=_aid, text=_notif, parse_mode="Markdown")
             except Exception as _ne:
-                logger.warning(f"[FIRMS] Guruh xabardorlik xato: {_ne}")
+                logger.warning(f"[FIRMS] Admin xabardorlik xato: {_ne}")
 
         if from_menu:
             from bot import main_keyboard, T, MENU
@@ -5944,18 +5819,18 @@ async def firm_month_select_handler(update: Update, ctx: ContextTypes.DEFAULT_TY
         # Admin xabardorligi — firma hisobot olganda
         _sotuv_str   = (mdata or {}).get("sotuv", "—")
         _ostatok_str = (mdata or {}).get("ostatok", "—")
-        _notif_text2 = (
-            f"📩 *Firma hisobot oldi*\n🏢 {firma_nomi}\n📅 {mdisp}\n"
-            f"💰 Sotuv: *{_sotuv_str}*\n📦 Qoldiq: *{_ostatok_str}*"
-            if language == "uz" else
-            f"📩 *Фирма запросила отчёт*\n🏢 {firma_nomi}\n📅 {mdisp}\n"
-            f"💰 Продажи: *{_sotuv_str}*\n📦 Остаток: *{_ostatok_str}*"
-        )
-        if PAYMENT_GROUP_ID:
+        for _aid in ADMIN_IDS:
             try:
-                await ctx.bot.send_message(chat_id=PAYMENT_GROUP_ID, text=_notif_text2, parse_mode="Markdown")
+                _notif = (
+                    f"📩 *Firma hisobot oldi*\n🏢 {firma_nomi}\n📅 {mdisp}\n"
+                    f"💰 Sotuv: *{_sotuv_str}*\n📦 Qoldiq: *{_ostatok_str}*"
+                    if language == "uz" else
+                    f"📩 *Фирма запросила отчёт*\n🏢 {firma_nomi}\n📅 {mdisp}\n"
+                    f"💰 Продажи: *{_sotuv_str}*\n📦 Остаток: *{_ostatok_str}*"
+                )
+                await ctx.bot.send_message(chat_id=_aid, text=_notif, parse_mode="Markdown")
             except Exception as _ne:
-                logger.warning(f"[MONTHLY] Guruh xabardorlik xato: {_ne}")
+                logger.warning(f"[MONTHLY] Admin xabardorlik xato: {_ne}")
 
     except Exception as e:
         logger.error(f"[MONTHLY] firm_month_select_handler xato: {e}")
@@ -6628,66 +6503,19 @@ async def firm_add_name_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     ctx.user_data["new_firma_nomi"] = txt
     import html as _html
-
-    # Sheetdan mavjud shartnomalarni qidirish
-    msg_wait = await update.message.reply_text(
-        "⏳ Qidirilmoqda..." if language == "uz" else "⏳ Поиск..."
+    await update.message.reply_text(
+        f"✅ Firma nomi: <b>{_html.escape(txt)}</b>\n\n"
+        "📄 Shartnoma raqamini kiriting:\n"
+        "<i>(Masalan: №69Ж yoki 3530)\n"
+        "Shartnoma yo'q bo'lsa — «Yo'q» deb yozing</i>"
+        if language == "uz" else
+        f"✅ Название фирмы: <b>{_html.escape(txt)}</b>\n\n"
+        "📄 Введите номер договора:\n"
+        "<i>(Например: №69Ж или 3530)\n"
+        "Если договора нет — напишите «Нет»</i>",
+        parse_mode="HTML",
+        reply_markup=_RKM([[back_txt]], resize_keyboard=True),
     )
-    existing = await run_read(get_contracts_by_firma_nomi, txt)
-    await msg_wait.delete()
-
-    new_btn  = "➕ Yangi shartnoma" if language == "uz" else "➕ Новый договор"
-
-    if existing:
-        # Mavjud shartnomalar bor — ro'yxatini ko'rsat
-        ctx.user_data["existing_contracts"] = existing
-        buttons = []
-        for c in existing:
-            sh = c["shartnoma"] or ("(shartnoma yo'q)" if language == "uz" else "(без договора)")
-            tid_mark = " ✅" if c["tid"] else " ⚠️"
-            buttons.append([f"📄 {sh}{tid_mark}"])
-        buttons.append([new_btn])
-        buttons.append([back_txt])
-
-        lines = []
-        for c in existing:
-            sh  = c["shartnoma"] or "—"
-            tid = c["tid"]  or "—"
-            ph  = c["phone"] or "—"
-            lines.append(f"• <b>{sh}</b> | ID: {tid} | Tel: {ph}")
-        contracts_txt = "\n".join(lines)
-
-        await update.message.reply_text(
-            f"🏢 <b>{_html.escape(txt)}</b> bo'yicha mavjud shartnomalar:\n\n"
-            f"{contracts_txt}\n\n"
-            "✅ — TelegramID ulangan\n"
-            "⚠️ — TelegramID yo'q\n\n"
-            "Qaysi shartnomaga vakil ulaysiz?"
-            if language == "uz" else
-            f"🏢 Существующие договора по <b>{_html.escape(txt)}</b>:\n\n"
-            f"{contracts_txt}\n\n"
-            "✅ — TelegramID подключён\n"
-            "⚠️ — TelegramID не указан\n\n"
-            "К какому договору привязать представителя?",
-            parse_mode="HTML",
-            reply_markup=_RKM(buttons, resize_keyboard=True),
-        )
-    else:
-        # Yangi firma — shartnoma raqamini so'rash
-        ctx.user_data.pop("existing_contracts", None)
-        await update.message.reply_text(
-            f"✅ Firma nomi: <b>{_html.escape(txt)}</b>\n\n"
-            "📄 Shartnoma raqamini kiriting:\n"
-            "<i>(Masalan: №69Ж yoki 3530)\n"
-            "Shartnoma yo'q bo'lsa — «Yo'q» deb yozing</i>"
-            if language == "uz" else
-            f"✅ Название фирмы: <b>{_html.escape(txt)}</b>\n\n"
-            "📄 Введите номер договора:\n"
-            "<i>(Например: №69Ж или 3530)\n"
-            "Если договора нет — напишите «Нет»</i>",
-            parse_mode="HTML",
-            reply_markup=_RKM([[back_txt]], resize_keyboard=True),
-        )
     return FIRM_ADD_CONTRACT
 
 
@@ -6703,13 +6531,8 @@ async def firm_add_contract_handler(update: Update, ctx: ContextTypes.DEFAULT_TY
     back_txt = "⬅️ Orqaga" if language == "uz" else "⬅️ Назад"
     txt = (update.message.text or "").strip()
 
-    new_btn  = "➕ Yangi shartnoma" if language == "uz" else "➕ Новый договор"
-    existing = ctx.user_data.get("existing_contracts", [])
-
     if txt in (back_txt, "⬅️ Orqaga", "⬅️ Назад"):
         ctx.user_data.pop("new_firma_nomi", None)
-        ctx.user_data.pop("existing_contracts", None)
-        ctx.user_data.pop("awaiting_new_contract", None)
         from bot import firm_reports_keyboard, FIRM_REPORTS_MENU
         await update.message.reply_text(
             "📊 Bo'limni tanlang:" if language == "uz" else "📊 Выберите раздел:",
@@ -6719,67 +6542,29 @@ async def firm_add_contract_handler(update: Update, ctx: ContextTypes.DEFAULT_TY
 
     if update.message.contact:
         await update.message.reply_text(
-            "⚠️ Bu yerda *shartnoma raqamini* matn sifatida kiriting."
+            "⚠️ Bu yerda *shartnoma raqamini* matn sifatida kiriting.\n"
+            "Shartnoma yo'q bo'lsa — «Yo'q» deb yozing."
             if language == "uz" else
-            "⚠️ Здесь введите *номер договора* текстом.",
+            "⚠️ Здесь введите *номер договора* текстом.\n"
+            "Если договора нет — напишите «Нет».",
             parse_mode="Markdown",
         )
         return FIRM_ADD_CONTRACT
 
     if not txt:
-        return FIRM_ADD_CONTRACT
-
-    firma_nomi = ctx.user_data.get("new_firma_nomi", "")
-
-    # ── "Yangi shartnoma" tugmasi bosildi ────────────────────────────────────
-    if txt in (new_btn, "➕ Yangi shartnoma", "➕ Новый договор"):
-        ctx.user_data["awaiting_new_contract"] = True
         await update.message.reply_text(
-            "📄 Yangi shartnoma raqamini kiriting:\n"
-            "<i>(Masalan: №69Ж yoki 3530)\n"
-            "Shartnoma yo'q bo'lsa — «Yo'q» deb yozing</i>"
+            "❌ Shartnoma raqamini kiriting (yoki «Yo'q»)."
             if language == "uz" else
-            "📄 Введите номер нового договора:\n"
-            "<i>(Например: №69Ж или 3530)\n"
-            "Если договора нет — напишите «Нет»</i>",
-            parse_mode="HTML",
-            reply_markup=_RKM([[back_txt]], resize_keyboard=True),
+            "❌ Введите номер договора (или «Нет»)."
         )
         return FIRM_ADD_CONTRACT
 
-    # ── Foydalanuvchi shartnoma raqamini yozdi yoki mavjud birini tanladi ────
-    awaiting_new = ctx.user_data.pop("awaiting_new_contract", False)
-
-    if awaiting_new:
-        # Yangi shartnoma raqami kiritildi
-        no_words = {"yo'q", "yoq", "нет", "net", "-", "—"}
-        shartnoma = "" if txt.lower() in no_words else txt
-        ctx.user_data.pop("existing_contracts", None)
-    else:
-        # Mavjud shartnomadan tanlandi — "📄 №69Ж ✅" kabi matndan raqamni ajratamiz
-        clean = txt.lstrip("📄 ").rstrip(" ✅⚠️").strip()
-        matched = None
-        for c in existing:
-            sh = c["shartnoma"] or ""
-            sh_display = sh or ("(shartnoma yo'q)" if language == "uz" else "(без договора)")
-            if clean in (sh, sh_display, f"📄 {sh_display} ✅", f"📄 {sh_display} ⚠️"):
-                matched = c
-                break
-            if clean == sh_display or clean == sh:
-                matched = c
-                break
-        if not matched:
-            # Aniq mos kelmasa — matnni shartnoma sifatida qabul qilish
-            shartnoma = clean
-        else:
-            shartnoma = matched["shartnoma"]
-            # Mavjud qator indeksini va qaysi sheetdan ekanini saqlash
-            ctx.user_data["existing_row_idx"]  = matched["_row_idx"]
-            ctx.user_data["existing_row_sheet"] = matched.get("_sheet", "pharmacy")
-        ctx.user_data.pop("existing_contracts", None)
-
+    # "Yo'q" / "Нет" bo'lsa — bo'sh saqlash
+    no_words = {"yo'q", "yoq", "нет", "net", "-", "—"}
+    shartnoma = "" if txt.lower() in no_words else txt
     ctx.user_data["new_shartnoma"] = shartnoma
 
+    firma_nomi = ctx.user_data.get("new_firma_nomi", "")
     shartnoma_txt = (
         f"📄 Shartnoma: <b>{_html.escape(shartnoma)}</b>\n\n"
         if shartnoma else
@@ -6837,10 +6622,8 @@ async def firm_add_username_handler(update: Update, ctx: ContextTypes.DEFAULT_TY
         )
         return FIRM_REPORTS_MENU
 
-    firma_nomi       = ctx.user_data.pop("new_firma_nomi",      "").strip()
-    shartnoma        = ctx.user_data.pop("new_shartnoma",       "").strip()
-    existing_row_idx = ctx.user_data.pop("existing_row_idx",   None)
-    existing_row_sh  = ctx.user_data.pop("existing_row_sheet", "pharmacy")
+    firma_nomi = ctx.user_data.pop("new_firma_nomi", "").strip()
+    shartnoma  = ctx.user_data.pop("new_shartnoma", "").strip()
 
     # Agar firma nomi yo'q bo'lsa (bot redeploydan keyin user_data yo'qolgan)
     if not firma_nomi:
@@ -6864,22 +6647,10 @@ async def firm_add_username_handler(update: Update, ctx: ContextTypes.DEFAULT_TY
         full_name = (
             f"{contact.first_name or ''} {contact.last_name or ''}".strip() or phone
         )
-        # Mavjud qator tanlangan bo'lsa — FAQAT shu qatorga yozamiz
-        if existing_row_idx:
-            ok = await run_write(save_firma_telegram_id_by_row,
-                                 existing_row_idx, tid or 0, existing_row_sh, phone)
-            # PHARMACY_SHEET_ID Firmalar ga ham auth uchun yangilaymiz
-            if ok:
-                await run_write(save_new_firma, firma_nomi, "", phone, tid, shartnoma)
-            # save_firma_contact_to_tolovlar CHAQIRILMAYDI —
-            # u barcha qatorlarni yangilaydi, biz esa faqat bitta qator yangiladik
-        else:
-            # Yangi firma — To'lovlar dagi barcha mos qatorlarga yozish mumkin
-            ok = await run_write(save_new_firma, firma_nomi, "", phone, tid, shartnoma)
-            if ok:
-                await run_write(save_firma_contact_to_tolovlar, firma_nomi, phone, tid)
-
+        ok = await run_write(save_new_firma, firma_nomi, "", phone, tid, shartnoma)
         if ok:
+            # To'lovlar varag'iga ham yoz (D=Тел рақами, E=ID)
+            await run_write(save_firma_contact_to_tolovlar, firma_nomi, phone, tid)
             if tid:
                 tid_note = (
                     f"\n🆔 TelegramID: <b>{tid}</b>\n✅ Hisobot avtomatik yuboriladi!"
@@ -6892,18 +6663,15 @@ async def firm_add_username_handler(update: Update, ctx: ContextTypes.DEFAULT_TY
                     if language == "uz" else
                     "\n📞 TelegramID нет — будет определён по телефону при запросе отчёта."
                 )
-            sh_note = f"\n📄 Shartnoma: <b>{_html.escape(shartnoma)}</b>" if shartnoma else ""
             await msg.edit_text(
-                f"✅ <b>{_html.escape(firma_nomi)}</b> — saqlandi!\n\n"
+                f"✅ <b>{_html.escape(firma_nomi)}</b> — qo'shildi!\n\n"
                 f"👤 <b>{_html.escape(full_name)}</b>\n"
                 f"📱 {_html.escape(phone)}"
-                f"{sh_note}"
                 f"{tid_note}"
                 if language == "uz" else
-                f"✅ <b>{_html.escape(firma_nomi)}</b> — сохранена!\n\n"
+                f"✅ <b>{_html.escape(firma_nomi)}</b> — добавлена!\n\n"
                 f"👤 <b>{_html.escape(full_name)}</b>\n"
                 f"📱 {_html.escape(phone)}"
-                f"{sh_note}"
                 f"{tid_note}",
                 parse_mode="HTML",
             )
@@ -7081,729 +6849,197 @@ def get_sal_states():
         APPEAL_DORIXONA_MSG: [
             MessageHandler(filters.TEXT & ~filters.COMMAND, appeal_dorixona_msg_handler),
         ],
-        DORIXONA_ADD_STEP: [
-            MessageHandler(filters.TEXT & ~filters.COMMAND, dorixona_add_step_handler),
-            MessageHandler(filters.LOCATION, dorixona_add_step_handler),
-            MessageHandler(filters.CONTACT, dorixona_add_step_handler),
-        ],
-        DORIXONA_EDIT_SELECT: [
-            MessageHandler(filters.TEXT & ~filters.COMMAND, dorixona_edit_select_handler),
-        ],
-        DORIXONA_EDIT_FIELD: [
-            MessageHandler(filters.TEXT & ~filters.COMMAND, dorixona_edit_field_handler),
-        ],
-        DORIXONA_EDIT_VALUE: [
-            MessageHandler(filters.TEXT & ~filters.COMMAND, dorixona_edit_value_handler),
-            MessageHandler(filters.LOCATION, dorixona_edit_value_handler),
-            MessageHandler(filters.CONTACT, dorixona_edit_value_handler),
-        ],
     }
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# DORIXONA QO'SHISH — Admin yangi filial qo'shish oqimi
-# ═══════════════════════════════════════════════════════════════════════════════
+# === PATCH ===
+import asyncio as _asyncio
 
-# Hudud: o'zbek nomi → (UZ to'liq, RU to'liq)
-_HUDUD_MAP = {
-    # Toshkent shahri tumanlari
-    "yunusobod":       ("Yunusobod tumani",          "Юнусабадский район"),
-    "chilonzor":       ("Chilonzor tumani",           "Чиланзарский район"),
-    "mirobod":         ("Mirobod tumani",             "Мирабадский район"),
-    "mirzo ulugbek":   ("Mirzo Ulug'bek tumani",      "Мирзо-Улугбекский район"),
-    "mirzo ulug'bek":  ("Mirzo Ulug'bek tumani",      "Мирзо-Улугбекский район"),
-    "shayxontohur":    ("Shayxontohur tumani",        "Шайхантахурский район"),
-    "olmazor":         ("Olmazor tumani",             "Алмазарский район"),
-    "uchtepa":         ("Uchtepa tumani",             "Учтепинский район"),
-    "yakkasaroy":      ("Yakkasaroy tumani",          "Яккасарайский район"),
-    "bektemir":        ("Bektemir tumani",            "Бектемирский район"),
-    "sergeli":         ("Sergeli tumani",             "Сергелийский район"),
-    # Viloyatlar va shaharlar
-    "toshkent":        ("Toshkent shahri",            "г. Ташкент"),
-    "toshkent viloyati":("Toshkent viloyati",         "Ташкентская область"),
-    "samarqand":       ("Samarqand",                  "Самарканд"),
-    "buxoro":          ("Buxoro",                     "Бухара"),
-    "namangan":        ("Namangan",                   "Наманган"),
-    "andijon":         ("Andijon",                    "Андижан"),
-    "fargona":         ("Farg'ona",                   "Фергана"),
-    "farg'ona":        ("Farg'ona",                   "Фергана"),
-    "qashqadaryo":     ("Qashqadaryo",                "Кашкадарья"),
-    "surxondaryo":     ("Surxondaryo",                "Сурхандарья"),
-    "navoiy":          ("Navoiy",                     "Навои"),
-    "xorazm":          ("Xorazm",                     "Хорезм"),
-    "sirdaryo":        ("Sirdaryo",                   "Сырдарья"),
-    "jizzax":          ("Jizzax",                     "Джизак"),
-    "qoraqalpog'iston":("Qoraqalpog'iston",           "Каракалпакстан"),
-    "nukus":           ("Nukus",                      "Нукус"),
-}
-
-def _translate_uz_to_ru(text: str) -> str:
-    """O'zbek matnini rus tiliga tarjima qiladi (deep-translator orqali).
-    Xato bo'lsa asl matni qaytaradi."""
+def _translate_uz_to_ru(text):
     if not text or not text.strip():
         return text
     try:
         from deep_translator import GoogleTranslator
-        result = GoogleTranslator(source="uz", target="ru").translate(text.strip())
-        logger.debug(f"[TRANSLATE] '{text[:40]}' → '{result[:40] if result else ''}'")
-        return result or text
-    except Exception as e:
-        logger.warning(f"[TRANSLATE] Xato: {e} | matn: '{text[:40]}'")
+        return GoogleTranslator(source='uz', target='ru').translate(text.strip()) or text
+    except Exception:
         return text
 
 
-def _hudud_translate(raw: str):
-    """Hudud matnini normallashtiradi va RU ekvivalentini qaytaradi.
-    Qaytaradi: (hudud_uz, hudud_ru)"""
-    key = raw.strip().lower().replace("tumani", "").replace("shahri", "").replace("viloyati", "").strip()
-    # Avval kalit so'z bilan qidirish
-    for k, (uz, ru) in _HUDUD_MAP.items():
-        if k in key or key in k:
-            return uz, ru
-    # Topilmasa — xom qiymatni ikki tomonga ham qaytarish
-    return raw.strip(), raw.strip()
-
-
-# Maydonlar: (kalit, sarlavha, savol)
-DORIXONA_ADD_FIELDS = [
-    ("filial_no",        "Filial №",           "Filial raqamini kiriting (masalan: 42):"),
-    ("nomi",             "Nomi",               "Dorixona nomini kiriting:"),
-    ("hudud",            "Hudud",              "Hududni kiriting (masalan: Yunusobod):"),
-    ("manzil",           "Manzil",             "Manzilni kiriting (o'zbek tilida):"),
-    ("orientir",         "Orientir",           "Mo'ljalni kiriting:"),
-    ("telefon",          "Telefon",            "Telefon raqamini kiriting:"),
-    ("lokatsiya",        "Lokatsiya",          "📍 Dorixonaning joylashuvini yuboring (pastdagi tugmani bosing):"),
-    ("koordinator_tid",  "Koordinator",    "👤 Koordinator kontaktini yuboring (telefon + TG ID avtomatik olinadi).\nYoki faqat TG ID kiriting:"),
-    ("mudir_tid",        "Zav.apteka",     "👤 Zav.apteka kontaktini yuboring (telefon + TG ID avtomatik olinadi).\nYoki faqat TG ID kiriting:"),
-]
-
-_DEFAULT_ISH_VAQTI = "08:00–00:00"
-
-# Google Sheets ustun sarlavhalari (asl format: UZ va RU alohida)
-DORIXONA_WS_NAME = "Sheet1"
-DORIXONA_WS_HEADERS = [
-    "Filial №", "Nomi (UZ)", "Nomi (RU)",
-    "Hudud (UZ)", "Hudud (RU)",
-    "Manzil (UZ)", "Manzil (RU)",
-    "Orientir (UZ)", "Orientir (RU)",
-    "Ish vaqti (UZ)", "Ish vaqti (RU)",
-    "Telefon", "Latitude", "Longitude",
-    "Koordinator ismi", "Koordinator tel", "Koordinator Telegram ID",
-    "Dorixona mudiri tel", "Zav.apteka Telegram ID",
-]
-
-
-_KOORDINATORLAR_WS = "Координаторлар"
-
-
-def _lookup_koordinator_name(phone: str) -> str:
-    """'Координаторлар' listidan telefon raqami bo'yicha ism topadi.
-    Ustunlar: A=Ismi, B=Raqami. Topilmasa bo'sh satr qaytaradi."""
-    if not phone:
-        return ""
-    try:
-        client = _get_client()
-        sh = client.open_by_key(PHARMACY_SHEET_ID)
-        ws = sh.worksheet(_KOORDINATORLAR_WS)
-        records = ws.get_all_values()
-        # Qidirish: B ustunidagi raqamni solishtirish (raqamlardagi bo'shliq/+ farqi)
-        norm = lambda p: "".join(c for c in p if c.isdigit())
-        target = norm(phone)
-        for row in records[1:]:  # 1-qator sarlavha
-            if len(row) >= 2:
-                if norm(row[1]) == target:
-                    return row[0].strip()
-        return ""
-    except Exception as e:
-        logger.warning(f"[KOORDINATOR LOOKUP] Xato: {e}")
-        return ""
-
-
-def _save_dorixona_to_sheet(data: dict) -> bool:
-    """Yangi dorixona ma'lumotlarini PHARMACY_SHEET_ID → Sheet1 ga yozadi."""
-    try:
-        client = _get_client()
-        sh = client.open_by_key(PHARMACY_SHEET_ID)
-        ws = sh.worksheet(DORIXONA_WS_NAME)
-
-        # Hudud: avtomatik RU tarjimasi
-        hudud_uz, hudud_ru = _hudud_translate(data.get("hudud", ""))
-
-        # Koordinator ismi: Координаторлар listidan avtomatik topish
-        # Barcha mavjud spreadsheet larda qidiradi
-        koord_tel = data.get("koordinator_tel", "")
-        koord_ismi = ""
-        norm = lambda p: "".join(c for c in p if c.isdigit())
-        target = norm(koord_tel)
-        _all_sheet_ids = [sid for sid in [PHARMACY_SHEET_ID, SALARY_SHEET_ID, SHEETS_ID, FIRMS_SHEET_ID] if sid]
-        for _sid in _all_sheet_ids:
-            try:
-                _ksh = client.open_by_key(_sid)
-                _kws = _ksh.worksheet(_KOORDINATORLAR_WS)
-                _krecords = _kws.get_all_values()
-                for row_ in _krecords[1:]:
-                    if len(row_) >= 2 and norm(row_[1]) == target:
-                        koord_ismi = row_[0].strip()
-                        break
-                if koord_ismi:
-                    break
-            except Exception as e:
-                logger.debug(f"[KOORDINATOR] {_sid}: {e}")
-        logger.info(f"[KOORDINATOR LOOKUP] tel={koord_tel} → ismi={koord_ismi!r}")
-
-        # Ustun nomlari bo'yicha lug'at — tartib farqiga chidamli
-        row_dict = {
-            "Filial №":               data.get("filial_no", ""),
-            "Nomi (UZ)":              data.get("nomi", ""),
-            "Nomi (RU)":              data.get("nomi", ""),
-            "Hudud (UZ)":             hudud_uz,
-            "Hudud (RU)":             hudud_ru,
-            "Manzil (UZ)":            data.get("manzil", ""),
-            "Manzil (RU)":            _translate_uz_to_ru(data.get("manzil", "")),
-            "Orientir (UZ)":          data.get("orientir", ""),
-            "Orientir (RU)":          _translate_uz_to_ru(data.get("orientir", "")),
-            "Ish vaqti (UZ)":         _DEFAULT_ISH_VAQTI,
-            "Ish vaqti (RU)":         _DEFAULT_ISH_VAQTI,
-            "Telefon":                data.get("telefon", ""),
-            "Latitude":               data.get("latitude", ""),
-            "Longitude":              data.get("longitude", ""),
-            "Koordinator ismi":       koord_ismi,
-            "Koordinator tel":        koord_tel,
-            "Koordinator Telegram ID": data.get("koordinator_tid", ""),
-            "Dorixona mudiri tel":    data.get("mudir_tel", ""),
-            "Zav.apteka Telegram ID": data.get("mudir_tid", ""),
-        }
-        # Haqiqiy sarlavhalarni o'qib, ustun tartibini aniqlash
-        actual_headers = ws.row_values(1)
-        if not actual_headers:
-            # Sarlavha yo'q — avval header qo'shamiz
-            ws.append_row(DORIXONA_WS_HEADERS)
-            actual_headers = list(DORIXONA_WS_HEADERS)
-        else:
-            # Yetishmayotgan ustunlarni oxiriga qo'shish
-            missing = [h for h in DORIXONA_WS_HEADERS if h not in actual_headers]
-            if missing:
-                extended = actual_headers + missing
-                # 1-qatorni to'liq yangilash
-                ws.update("1:1", [extended])
-                actual_headers = extended
-                logger.info(f"[DORIXONA] Yetishmayotgan ustunlar qo'shildi: {missing}")
-        # Haqiqiy sarlavhalarga mos kelgan qiymatlar ro'yxatini tuzish
-        row = [str(row_dict.get(h, "")) for h in actual_headers]
-        ws.append_row(row)
-        logger.info(f"[DORIXONA] Yangi filial saqlandi: {data.get('nomi','')}")
-        return True
-    except Exception as e:
-        logger.error(f"[DORIXONA] Saqlash xato: {e}")
-        return False
-
-
-def _dorixona_progress_text(step: int) -> str:
-    """Qaysi qadamda ekanini ko'rsatuvchi progress satri."""
-    total = len(DORIXONA_ADD_FIELDS)
-    filled = "▓" * step + "░" * (total - step)
-    return f"[{filled}] {step}/{total}"
-
-
 async def dorixona_add_start(update, ctx):
-    """
-    'Dorixona qo'shish' tugmasidan chaqiriladi.
-    Faqat adminlarga ruxsat — birinchi savolni beradi.
-    """
     if update.effective_user.id not in ADMIN_IDS:
-        await update.message.reply_text("❌ Ruxsat yo'q.")
+        await update.message.reply_text('Ruxsat yoq.')
         return
-
-    ctx.user_data["dorixona_add_step"] = 0
-    ctx.user_data["dorixona_add_data"] = {}
-
+    ctx.user_data['dorixona_add_step'] = 0
+    ctx.user_data['dorixona_add_data'] = {}
     from telegram import ReplyKeyboardMarkup
-    cancel_kb = ReplyKeyboardMarkup([["❌ Bekor qilish"]], resize_keyboard=True)
+    kb = ReplyKeyboardMarkup([['Bekor qilish']], resize_keyboard=True)
     field = DORIXONA_ADD_FIELDS[0]
     await update.message.reply_text(
-        f"➕ *Yangi dorixona qo'shish*\n\n"
-        f"{_dorixona_progress_text(0)}\n\n"
-        f"📌 *{field[1]}*\n{field[2]}",
-        parse_mode="Markdown",
-        reply_markup=cancel_kb,
+        'Yangi dorixona qoshish\n\n' + field[1] + '\n' + field[2],
+        reply_markup=kb,
     )
     return DORIXONA_ADD_STEP
-
-
-async def dorixona_add_step_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """Har bir qadam uchun javobni qabul qiladi va keyingi savolni beradi.
-    'lokatsiya' maydoni uchun Telegram Location xabari qabul qilinadi."""
-    from telegram import ReplyKeyboardMarkup, ReplyKeyboardRemove, KeyboardButton
-
-    # Kontakt yuborilsa — telefon va TID ajratib olinadi
-    _contact_phone = None
-    _contact_tid = None
-    if update.message.contact:
-        _p = update.message.contact.phone_number or ""
-        if _p and not _p.startswith("+"):
-            _p = "+" + _p
-        _contact_phone = _p
-        if update.message.contact.user_id:
-            _contact_tid = str(update.message.contact.user_id)
-        # TID maydonlarida kontakt yuborilsa — TID ni txt qilamiz
-        step = ctx.user_data.get("dorixona_add_step", 0)
-        if step < len(DORIXONA_ADD_FIELDS):
-            _fk = DORIXONA_ADD_FIELDS[step][0]
-            if _fk in ("koordinator_tid", "mudir_tid") and _contact_tid:
-                txt = _contact_tid
-            else:
-                txt = _contact_phone
-        else:
-            txt = _contact_phone
-    else:
-        txt = (update.message.text or "").strip()
-
-    if txt == "❌ Bekor qilish":
-        ctx.user_data.pop("dorixona_add_step", None)
-        ctx.user_data.pop("dorixona_add_data", None)
-        from bot import main_keyboard, MENU
-        lang = ctx.user_data.get("lang", "uz")
-        is_admin = update.effective_user.id in ADMIN_IDS
-        await update.message.reply_text(
-            "❌ Bekor qilindi.",
-            reply_markup=main_keyboard(lang, is_admin),
-        )
-        return MENU
-
-    step = ctx.user_data.get("dorixona_add_step", 0)
-    data = ctx.user_data.get("dorixona_add_data", {})
-    total = len(DORIXONA_ADD_FIELDS)
-    _skip = (txt == "⏭ Keyingisi")
-
-    # Joriy maydonni saqlash
-    field_key = DORIXONA_ADD_FIELDS[step][0]
-
-    if field_key == "lokatsiya" and not _skip:
-        # Telegram Location xabarini kutamiz
-        loc = update.message.location
-        if not loc:
-            # Matn yuborildi, lokatsiya emas — qayta so'raymiz
-            loc_kb = ReplyKeyboardMarkup(
-                [[KeyboardButton("📍 Lokatsiyani yuborish", request_location=True)],
-                 ["⏭ Keyingisi", "❌ Bekor qilish"]],
-                resize_keyboard=True,
-            )
-            await update.message.reply_text(
-                "⚠️ Iltimos, *📍 Lokatsiyani yuborish* tugmasini bosib joylashuvni yuboring:\n"
-                "(Ma'lumot bo'lmasa ⏭ Keyingisi ni bosing)",
-                parse_mode="Markdown",
-                reply_markup=loc_kb,
-            )
-            return DORIXONA_ADD_STEP
-        data["latitude"] = str(loc.latitude)
-        data["longitude"] = str(loc.longitude)
-    elif not _skip:
-        data[field_key] = txt
-        # Kontakt yuborilganda telefon raqamini ham saqlash
-        if _contact_phone and field_key == "koordinator_tid":
-            data["koordinator_tel"] = _contact_phone
-        elif _contact_phone and field_key == "mudir_tid":
-            data["mudir_tel"] = _contact_phone
-    # _skip bo'lsa — maydon bo'sh qoladi (data ga yozilmaydi)
-
-    ctx.user_data["dorixona_add_data"] = data
-    next_step = step + 1
-
-    if next_step >= total:
-        # Barcha maydonlar to'ldirildi — saqlash
-        ok = await run_write(_save_dorixona_to_sheet, data)
-        from bot import main_keyboard, MENU
-        lang = ctx.user_data.get("lang", "uz")
-        is_admin = update.effective_user.id in ADMIN_IDS
-
-        # Xulosa xabari
-        summary_lines = [f"✅ *Yangi dorixona qo'shildi!*\n"]
-        for fkey, flabel, _ in DORIXONA_ADD_FIELDS:
-            if fkey == "lokatsiya":
-                lat = data.get("latitude", "—")
-                lng = data.get("longitude", "—")
-                summary_lines.append(f"*{flabel}:* {lat}, {lng}")
-            else:
-                val = data.get(fkey, "—")
-                summary_lines.append(f"*{flabel}:* {val}")
-        summary = "\n".join(summary_lines)
-
-        if not ok:
-            summary += "\n\n⚠️ Google Sheets ga saqlashda xato yuz berdi!"
-
-        ctx.user_data.pop("dorixona_add_step", None)
-        ctx.user_data.pop("dorixona_add_data", None)
-
-        await update.message.reply_text(
-            summary,
-            parse_mode="Markdown",
-            reply_markup=main_keyboard(lang, is_admin),
-        )
-        return MENU
-
-    # Keyingi savol
-    ctx.user_data["dorixona_add_step"] = next_step
-    next_field = DORIXONA_ADD_FIELDS[next_step]
-
-    # Klaviatura: maydon turiga qarab
-    if next_field[0] == "lokatsiya":
-        reply_kb = ReplyKeyboardMarkup(
-            [[KeyboardButton("📍 Lokatsiyani yuborish", request_location=True)],
-             ["⏭ Keyingisi", "❌ Bekor qilish"]],
-            resize_keyboard=True,
-        )
-    else:
-        reply_kb = ReplyKeyboardMarkup(
-            [["⏭ Keyingisi", "❌ Bekor qilish"]],
-            resize_keyboard=True,
-        )
-
-    await update.message.reply_text(
-        f"{_dorixona_progress_text(next_step)}\n\n"
-        f"📌 *{next_field[1]}*\n{next_field[2]}",
-        parse_mode="Markdown",
-        reply_markup=reply_kb,
-    )
-    return DORIXONA_ADD_STEP
-
-
-# ─── Dorixona tahrirlash (edit) oqimi ─────────────────────────────────────────
-
-# Maydon kaliti → Google Sheets ustun nomi(lari)
-_DORIXONA_COL_MAP = {
-    "filial_no":        ["Filial №"],
-    "nomi":             ["Nomi (UZ)", "Nomi (RU)"],
-    "hudud":            ["Hudud (UZ)", "Hudud (RU)"],
-    "manzil":           ["Manzil (UZ)", "Manzil (RU)"],
-    "orientir":         ["Orientir (UZ)", "Orientir (RU)"],
-    "ish_vaqti":        ["Ish vaqti (UZ)", "Ish vaqti (RU)"],
-    "telefon":          ["Telefon"],
-    "lokatsiya":        ["Latitude", "Longitude"],   # 2 ta ustun; qiymat (lat, lng)
-    "latitude":         ["Latitude"],
-    "longitude":        ["Longitude"],
-    "koordinator_ismi": ["Koordinator ismi"],
-    "koordinator_tel":  ["Koordinator tel"],
-    "koordinator_tid":  ["Koordinator Telegram ID"],
-    "mudir_tel":        ["Dorixona mudiri tel"],
-    "mudir_tid":        ["Zav.apteka Telegram ID"],
-}
-
-# Joriy qiymatni ko'rsatish uchun: maydon kaliti → asosiy ustun nomi
-_DORIXONA_DISPLAY_COL = {
-    "filial_no":        "Filial №",
-    "nomi":             "Nomi (UZ)",
-    "hudud":            "Hudud (UZ)",
-    "manzil":           "Manzil (UZ)",
-    "orientir":         "Orientir (UZ)",
-    "ish_vaqti":        "Ish vaqti (UZ)",
-    "telefon":          "Telefon",
-    "lokatsiya":        None,          # Latitude + Longitude birgalikda
-    "koordinator_ismi": "Koordinator ismi",
-    "koordinator_tel":  "Koordinator tel",
-    "koordinator_tid":  "Koordinator Telegram ID",
-    "mudir_tel":        "Dorixona mudiri tel",
-    "mudir_tid":        "Zav.apteka Telegram ID",
-}
-
-
-def _get_dorixona_list() -> list:
-    """Filiallar varag'idagi barcha dorixonalar ro'yxatini (dict list) qaytaradi."""
-    try:
-        client = _get_client()
-        sh = client.open_by_key(PHARMACY_SHEET_ID)
-        ws = sh.worksheet(DORIXONA_WS_NAME)
-        return ws.get_all_records()
-    except Exception as e:
-        logger.error(f"[DORIXONA] Ro'yxat olishda xato: {e}")
-        return []
-
-
-def _update_dorixona_field(filial_no: str, field_key: str, new_value) -> bool:
-    """Mavjud dorixonaning bitta (yoki bir nechta) ustunini yangilaydi.
-    new_value: odatda str; lokatsiya uchun (lat_str, lng_str) tuple."""
-    col_names = _DORIXONA_COL_MAP.get(field_key, [])
-    if not col_names:
-        logger.error(f"[DORIXONA] Noma'lum maydon: {field_key}")
-        return False
-    try:
-        client = _get_client()
-        sh = client.open_by_key(PHARMACY_SHEET_ID)
-        ws = sh.worksheet(DORIXONA_WS_NAME)
-
-        # Filial № bo'yicha qator topish
-        col_a = ws.col_values(1)
-        row_idx = None
-        for i, val in enumerate(col_a[1:], start=2):   # 1-chi qator sarlavha
-            if str(val).strip() == str(filial_no).strip():
-                row_idx = i
-                break
-        if not row_idx:
-            logger.error(f"[DORIXONA] Filial № {filial_no} topilmadi")
-            return False
-
-        headers = ws.row_values(1)
-
-        if field_key == "lokatsiya" and isinstance(new_value, tuple):
-            lat_str, lng_str = new_value
-            for col_name, val in zip(["Latitude", "Longitude"], [lat_str, lng_str]):
-                if col_name in headers:
-                    ws.update_cell(row_idx, headers.index(col_name) + 1, val)
-        else:
-            for col_name in col_names:
-                if col_name in headers:
-                    ws.update_cell(row_idx, headers.index(col_name) + 1, str(new_value))
-
-        logger.info(f"[DORIXONA] Filial {filial_no} → {field_key} yangilandi")
-        return True
-    except Exception as e:
-        logger.error(f"[DORIXONA] Yangilashda xato: {e}")
-        return False
-
-
-def _dorixona_btn_label(fkey: str, flabel: str, row: dict) -> str:
-    """Tahrirlash klaviaturasi uchun: 'Maydon nomi: joriy qiymat' tugma matni."""
-    dcol = _DORIXONA_DISPLAY_COL.get(fkey)
-    if fkey == "lokatsiya":
-        lat = str(row.get("Latitude", "")).strip()
-        lng = str(row.get("Longitude", "")).strip()
-        cur = f"{lat}, {lng}" if (lat or lng) else "—"
-    elif dcol:
-        cur = str(row.get(dcol, "")).strip() or "—"
-    else:
-        cur = "—"
-    if len(cur) > 25:
-        cur = cur[:22] + "…"
-    return f"✏️ {flabel}: {cur}"
 
 
 async def dorixona_edit_start(update, ctx):
-    """'✏️ Dorixona tahrirlash' tugmasidan chaqiriladi — filial ro'yxatini ko'rsatadi."""
     if update.effective_user.id not in ADMIN_IDS:
-        await update.message.reply_text("❌ Ruxsat yo'q.")
+        await update.message.reply_text('Ruxsat yoq.')
         return
-
-    rows = await run_read(_get_dorixona_list)
-    if not rows:
-        await update.message.reply_text("❌ Dorixonalar ro'yxati bo'sh yoki xato yuz berdi.")
-        return
-
-    ctx.user_data["dorixona_edit_rows"] = rows
-
-    buttons = []
-    for row in rows:
-        filial_no = str(row.get("Filial №", "?")).strip()
-        nomi = str(row.get("Nomi (UZ)", "?")).strip()
-        buttons.append([f"🏥 {filial_no}: {nomi}"])
-    buttons.append(["❌ Bekor qilish"])
-
-    from telegram import ReplyKeyboardMarkup
-    kb = ReplyKeyboardMarkup(buttons, resize_keyboard=True)
-    await update.message.reply_text(
-        "✏️ *Qaysi dorixonani tahrirlash kerak?*\n\nFilial tanlang:",
-        parse_mode="Markdown",
-        reply_markup=kb,
-    )
-    return DORIXONA_EDIT_SELECT
+    await update.message.reply_text('Filial raqamini yozing:')
+    return DORIXONA_EDIT_SEARCH
 
 
-async def dorixona_edit_select_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """Foydalanuvchi filial tanlagandan keyin maydonlar ro'yxatini ko'rsatadi."""
-    from telegram import ReplyKeyboardMarkup
-    txt = (update.message.text or "").strip()
-
-    if txt == "❌ Bekor qilish":
-        ctx.user_data.pop("dorixona_edit_rows", None)
-        from bot import main_keyboard, MENU
-        lang = ctx.user_data.get("lang", "uz")
-        is_admin = update.effective_user.id in ADMIN_IDS
-        await update.message.reply_text("❌ Bekor qilindi.", reply_markup=main_keyboard(lang, is_admin))
-        return MENU
-
-    rows = ctx.user_data.get("dorixona_edit_rows", [])
-    selected = None
-    txt_low = txt.lower()
-    for row in rows:
-        filial_no = str(row.get("Filial №", "?")).strip()
-        nomi = str(row.get("Nomi (UZ)", "?")).strip()
-        # Tugma matni bilan aniq moslik
-        if txt == f"🏥 {filial_no}: {nomi}":
-            selected = row
-            break
-        # Filial raqami bilan qidirish
-        if txt == filial_no:
-            selected = row
-            break
-        # Nomi bo'yicha qidirish (kichik harfda, qisman)
-        if txt_low and txt_low in nomi.lower():
-            selected = row
-            break
-
-    if not selected:
-        await update.message.reply_text(
-            "❌ Topilmadi. Filial raqami (masalan: 61) yoki nomi (masalan: БЕЛТЕПА) kiriting, yoki pastdagi ro'yxatdan tanlang."
-        )
-        return DORIXONA_EDIT_SELECT
-
-    ctx.user_data["dorixona_edit_filial"] = str(selected.get("Filial №", "")).strip()
-    ctx.user_data["dorixona_edit_row"] = selected
-
-    # Maydonlar ro'yxatini ko'rsatish
-    buttons = []
-    for fkey, flabel, _ in DORIXONA_ADD_FIELDS:
-        btn = _dorixona_btn_label(fkey, flabel, selected)
-        buttons.append([btn])
-    buttons.append(["❌ Bekor qilish"])
-
-    kb = ReplyKeyboardMarkup(buttons, resize_keyboard=True)
-    nomi = str(selected.get("Nomi (UZ)", "?")).strip()
-    filno = str(selected.get("Filial №", "?")).strip()
-    await update.message.reply_text(
-        f"✏️ *{filno}: {nomi}*\n\nQaysi maydonni o'zgartirish kerak?",
-        parse_mode="Markdown",
-        reply_markup=kb,
-    )
-    return DORIXONA_EDIT_FIELD
+# --- OCR rasm aniqlash ---
+def _tg_error_reason(exc):
+    s = str(exc).lower()
+    if 'blocked' in s: return 'Bot bloklangan'
+    if 'deactivated' in s: return 'Akkaunt ochiq emas'
+    if 'chat not found' in s or 'user not found' in s: return 'Chat topilmadi'
+    if 'forbidden' in s: return 'Ruxsat yoq'
+    return str(exc)[:60]
 
 
-async def dorixona_edit_field_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """Foydalanuvchi maydon tanlagandan keyin yangi qiymat so'raydi."""
-    from telegram import ReplyKeyboardMarkup, KeyboardButton
-    txt = (update.message.text or "").strip()
-
-    if txt == "❌ Bekor qilish":
-        ctx.user_data.pop("dorixona_edit_filial", None)
-        ctx.user_data.pop("dorixona_edit_row", None)
-        ctx.user_data.pop("dorixona_edit_rows", None)
-        from bot import main_keyboard, MENU
-        lang = ctx.user_data.get("lang", "uz")
-        is_admin = update.effective_user.id in ADMIN_IDS
-        await update.message.reply_text("❌ Bekor qilindi.", reply_markup=main_keyboard(lang, is_admin))
-        return MENU
-
-    # Qaysi maydon tanlandi?
-    selected_field = None
-    selected_row = ctx.user_data.get("dorixona_edit_row", {})
-    for fkey, flabel, _ in DORIXONA_ADD_FIELDS:
-        btn = _dorixona_btn_label(fkey, flabel, selected_row)
-        if txt == btn:
-            selected_field = (fkey, flabel)
-            break
-
-    if not selected_field:
-        await update.message.reply_text("❌ Noma'lum tanlov, qayta urinib ko'ring.")
-        return DORIXONA_EDIT_FIELD
-
-    fkey, flabel = selected_field
-    ctx.user_data["dorixona_edit_field"] = fkey
-
-    # Lokatsiya uchun maxsus klaviatura
-    if fkey == "lokatsiya":
-        kb = ReplyKeyboardMarkup(
-            [[KeyboardButton("📍 Lokatsiyani yuborish", request_location=True)],
-             ["❌ Bekor qilish"]],
-            resize_keyboard=True,
-        )
-        await update.message.reply_text(
-            f"📌 *{flabel}*\n📍 Yangi joylashuvni yuboring:",
-            parse_mode="Markdown",
-            reply_markup=kb,
-        )
-    else:
-        kb = ReplyKeyboardMarkup([["❌ Bekor qilish"]], resize_keyboard=True)
-        _, _, savol = next(f for f in DORIXONA_ADD_FIELDS if f[0] == fkey)
-        await update.message.reply_text(
-            f"📌 *{flabel}*\n{savol}",
-            parse_mode="Markdown",
-            reply_markup=kb,
-        )
-    return DORIXONA_EDIT_VALUE
+def _ocr_read_image(image_bytes):
+    import pytesseract
+    from PIL import Image, ImageFilter, ImageEnhance
+    import io as _io, sys
+    if sys.platform == 'win32':
+        tess = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+        if __import__('os').path.exists(tess):
+            pytesseract.pytesseract.tesseract_cmd = tess
+    img = Image.open(_io.BytesIO(image_bytes)).convert('L')
+    img = ImageEnhance.Contrast(img).enhance(2.0)
+    img = img.filter(ImageFilter.SHARPEN)
+    cfg = r'--oem 1 --psm 6'
+    for lang in ('rus+uzb', 'rus'):
+        try: return pytesseract.image_to_string(img, lang=lang, config=cfg)
+        except Exception: continue
+    return pytesseract.image_to_string(img, config=cfg)
 
 
-async def dorixona_edit_value_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """Yangi qiymatni qabul qilib, Google Sheets da yangilaydi."""
-    from telegram import ReplyKeyboardMarkup, KeyboardButton
-    # Kontakt yuborilsa — telefon VA TID olamiz
-    _contact_phone = None
-    _contact_tid   = None
-    if update.message.contact:
-        _p = update.message.contact.phone_number or ""
-        if _p and not _p.startswith("+"):
-            _p = "+" + _p
-        _contact_phone = _p or None
-        if update.message.contact.user_id:
-            _contact_tid = str(update.message.contact.user_id)
-        fkey_now = ctx.user_data.get("dorixona_edit_field", "")
-        # TID maydon uchun — TID ni asosiy qiymat qilamiz
-        if fkey_now in ("koordinator_tid", "mudir_tid") and _contact_tid:
-            txt = _contact_tid
-        else:
-            txt = _contact_phone or ""
-    else:
-        txt = (update.message.text or "").strip()
+def _match_lines_to_dorixonalar(lines, all_dorixonalar):
+    import re as _re
+    seen = set()
+    matched, unmatched = [], []
+    for line in lines:
+        line_up = _re.sub(r'\s+', ' ', _re.sub(r'[^\w\s]', ' ', line).upper().strip())
+        if len(line_up) < 3: continue
+        best, score = None, 0.0
+        for d in all_dorixonalar:
+            nu = d['nomi'].upper()
+            if line_up == nu: best = d; score = 1.0; break
+            if line_up in nu or nu in line_up:
+                s = min(len(line_up), len(nu)) / max(len(line_up), len(nu))
+                if s > score: score = s; best = d
+        if best and score >= 0.5 and best['nomi'] not in seen:
+            seen.add(best['nomi']); matched.append(best)
+        elif not best or score < 0.5:
+            unmatched.append(line.strip())
+    return matched, unmatched
 
-    if txt == "❌ Bekor qilish":
-        ctx.user_data.pop("dorixona_edit_filial", None)
-        ctx.user_data.pop("dorixona_edit_row", None)
-        ctx.user_data.pop("dorixona_edit_rows", None)
-        ctx.user_data.pop("dorixona_edit_field", None)
-        from bot import main_keyboard, MENU
-        lang = ctx.user_data.get("lang", "uz")
-        is_admin = update.effective_user.id in ADMIN_IDS
-        await update.message.reply_text("❌ Bekor qilindi.", reply_markup=main_keyboard(lang, is_admin))
-        return MENU
 
-    filial_no = ctx.user_data.get("dorixona_edit_filial", "")
-    fkey = ctx.user_data.get("dorixona_edit_field", "")
+async def photo_filial_detector(update, ctx):
+    uid = update.effective_user.id
+    try:
+        from bot import ADMIN_IDS as _AIDS, has_panel
+        if uid not in _AIDS and not has_panel(uid, 'murojaat'): return
+    except Exception: return
+    msg = await update.message.reply_text('Rasm tahlil qilinmoqda...')
+    try:
+        photo = update.message.photo[-1]
+        tg_file = await ctx.bot.get_file(photo.file_id)
+        image_bytes = await tg_file.download_as_bytearray()
+    except Exception as e:
+        await msg.edit_text('Rasmni yuklab bolmadi: ' + str(e)); return
+    try:
+        ocr_text = await _asyncio.to_thread(_ocr_read_image, bytes(image_bytes))
+    except ImportError:
+        await msg.edit_text('Tesseract onatilmagan.\nsudo apt install tesseract-ocr tesseract-ocr-rus\npip install pytesseract pillow'); return
+    except Exception as e:
+        await msg.edit_text('OCR xato: ' + str(e)); return
+    lines = [l.strip() for l in ocr_text.split('\n') if l.strip()]
+    if not lines:
+        await msg.edit_text('Rasmdan matn oqilmadi.'); return
+    all_d = await run_read(get_all_dorixonalar_for_broadcast)
+    matched, _ = await _asyncio.to_thread(_match_lines_to_dorixonalar, lines, all_d)
+    if not matched:
+        await msg.edit_text('Hech qanday dorixona topilmadi.\nOqilgan: ' + ', '.join(lines[:5])); return
+    tid_ok = sum(1 for d in matched if d['tid'])
+    rows = ''
+    for d in matched:
+        rows += ('OK ' if d['tid'] else 'TID yoq ') + d['nomi'] + ' (Filial ' + d['filial_no'] + ')\n'
+    ctx.user_data['img_appeal_names'] = [d['nomi'] for d in matched]
+    ctx.user_data['img_appeal_wait_text'] = False
+    from telegram import InlineKeyboardMarkup, InlineKeyboardButton
+    kb = InlineKeyboardMarkup([[InlineKeyboardButton('Murojaat yuborish', callback_data='imgappeal:send'), InlineKeyboardButton('Bekor', callback_data='imgappeal:cancel')]])
+    await msg.edit_text('Topildi: ' + str(len(matched)) + ' ta\n\n' + rows + '\nMurojaat yuborasizmi?', reply_markup=kb)
 
-    if fkey == "lokatsiya":
-        loc = update.message.location
-        if not loc:
-            kb = ReplyKeyboardMarkup(
-                [[KeyboardButton("📍 Lokatsiyani yuborish", request_location=True)],
-                 ["❌ Bekor qilish"]],
-                resize_keyboard=True,
-            )
-            await update.message.reply_text(
-                "⚠️ Iltimos, *📍 Lokatsiyani yuborish* tugmasini bosing:",
-                parse_mode="Markdown",
-                reply_markup=kb,
-            )
-            return DORIXONA_EDIT_VALUE
-        new_value = (str(loc.latitude), str(loc.longitude))
-        display_val = f"{loc.latitude}, {loc.longitude}"
-    else:
-        new_value = txt
-        display_val = txt
 
-    ok = await run_write(_update_dorixona_field, filial_no, fkey, new_value)
+async def img_appeal_callback(update, ctx):
+    q = update.callback_query; await q.answer()
+    action = q.data.split(':')[1]
+    if action == 'cancel':
+        ctx.user_data.pop('img_appeal_names', None)
+        ctx.user_data.pop('img_appeal_wait_text', None)
+        try: await q.edit_message_reply_markup(None)
+        except Exception: pass
+        await q.message.reply_text('Bekor qilindi.'); return
+    names = ctx.user_data.get('img_appeal_names', [])
+    if not names: await q.message.reply_text('Filiallar topilmadi.'); return
+    ctx.user_data['img_appeal_wait_text'] = True
+    try: await q.edit_message_reply_markup(None)
+    except Exception: pass
+    await q.message.reply_text(str(len(names)) + ' ta filial uchun xabar matnini yozing:\n(Bekor: /imgcancel)')
 
-    # Kontakt yuborilganda telefon raqamini ham saqlash
-    if ok and _contact_phone:
-        if fkey == "koordinator_tid":
-            await run_write(_update_dorixona_field, filial_no, "koordinator_tel", _contact_phone)
-        elif fkey == "mudir_tid":
-            await run_write(_update_dorixona_field, filial_no, "mudir_tel", _contact_phone)
 
-    ctx.user_data.pop("dorixona_edit_filial", None)
-    ctx.user_data.pop("dorixona_edit_row", None)
-    ctx.user_data.pop("dorixona_edit_rows", None)
-    ctx.user_data.pop("dorixona_edit_field", None)
+async def img_appeal_text_catcher(update, ctx):
+    from telegram.ext import ApplicationHandlerStop
+    if not ctx.user_data.get('img_appeal_wait_text'): return
+    txt = (update.message.text or '').strip()
+    if txt == '/imgcancel':
+        ctx.user_data.pop('img_appeal_names', None)
+        ctx.user_data.pop('img_appeal_wait_text', None)
+        await update.message.reply_text('Bekor qilindi.')
+        raise ApplicationHandlerStop()
+    if len(txt) < 2:
+        await update.message.reply_text('Juda qisqa. Qayta yozing:')
+        raise ApplicationHandlerStop()
+    names = ctx.user_data.pop('img_appeal_names', [])
+    ctx.user_data.pop('img_appeal_wait_text', None)
+    msg = await update.message.reply_text('Yuborilmoqda...')
+    dorixonalar = await run_read(get_all_dorixonalar_for_broadcast, names)
+    if not dorixonalar:
+        await msg.edit_text('Mos dorixona topilmadi.')
+        raise ApplicationHandlerStop()
+    from telegram import InlineKeyboardMarkup, InlineKeyboardButton
+    user = update.effective_user
+    sender = (user.first_name or '') + ' ' + (user.last_name or '')
+    sender = sender.strip() or ('@' + user.username if user.username else 'Admin')
+    aid = update.effective_chat.id
+    kb = InlineKeyboardMarkup([[InlineKeyboardButton('Bajarildi', callback_data='appealresp:done:' + str(aid)), InlineKeyboardButton('Bekor', callback_data='appealresp:cancel:' + str(aid))]])
+    log_rows = ctx.bot_data.setdefault('appeal_log_rows', {})
+    sent = failed = no_tid = 0
+    seen_tids = set()
+    for d in dorixonalar:
+        tid = d['tid']
+        if not tid: no_tid += 1; continue
+        if tid in seen_tids: continue
+        seen_tids.add(tid)
+        try:
+            await ctx.bot.send_message(chat_id=int(tid), text='Murojaat\nKimdan: ' + sender + '\n\n' + txt, reply_markup=kb)
+            sent += 1
+            row_idx = await run_write(log_murojaat, tid, txt)
+            if row_idx and row_idx > 0: log_rows[int(tid)] = row_idx
+        except Exception as exc:
+            failed += 1
+    await msg.edit_text('Yuborildi: ' + str(sent) + '\nYuborilmadi: ' + str(failed) + '\nTID yoq: ' + str(no_tid))
+    raise ApplicationHandlerStop()
 
-    from bot import main_keyboard, MENU
-    lang = ctx.user_data.get("lang", "uz")
-    is_admin = update.effective_user.id in ADMIN_IDS
 
-    if ok:
-        flabel = next((f[1] for f in DORIXONA_ADD_FIELDS if f[0] == fkey), fkey)
-        tid_info = f"\n🆔 TG ID: `{new_value}`\n📞 Tel: `{_contact_phone}`" if _contact_phone and fkey in ("koordinator_tid","mudir_tid") else f"\n📝 Yangi qiymat: `{display_val}`"
-        await update.message.reply_text(
-            f"✅ *{flabel}* yangilandi!{tid_info}",
-            parse_mode="Markdown",
-            reply_markup=main_keyboard(lang, is_admin),
-        )
-    else:
-        await update.message.reply_text(
-            "⚠️ Saqlashda xato yuz berdi. Qayta urinib ko'ring.",
-            reply_markup=main_keyboard(lang, is_admin),
-        )
-    return MENU
+def get_photo_filial_handlers():
+    from telegram.ext import MessageHandler, CallbackQueryHandler, filters
+    return [
+        MessageHandler(filters.PHOTO, photo_filial_detector),
+        CallbackQueryHandler(img_appeal_callback, pattern='^imgappeal:'),
+        MessageHandler(filters.TEXT & ~filters.COMMAND, img_appeal_text_catcher),
+    ]
