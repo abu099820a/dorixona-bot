@@ -6954,7 +6954,7 @@ async def photo_filial_detector(update, ctx):
     try:
         ocr_text = await _asyncio.to_thread(_ocr_read_image, bytes(image_bytes))
     except ImportError:
-        await msg.edit_text('Tesseract onatilmagan.\nsudo apt install tesseract-ocr tesseract-ocr-rus\npip install pytesseract pillow'); return
+        await msg.edit_text('Tesseract onatilmagan.\npip install pytesseract pillow'); return
     except Exception as e:
         await msg.edit_text('OCR xato: ' + str(e)); return
     lines = [l.strip() for l in ocr_text.split('\n') if l.strip()]
@@ -6992,6 +6992,40 @@ async def img_appeal_callback(update, ctx):
     await q.message.reply_text(str(len(names)) + ' ta filial uchun xabar matnini yozing:\n(Bekor: /imgcancel)')
 
 
+def _build_img_appeal_excel(results):
+    import openpyxl
+    from openpyxl.styles import PatternFill, Font, Alignment
+    import io as _io
+    GREEN = PatternFill('solid', fgColor='C6EFCE')
+    RED   = PatternFill('solid', fgColor='FFC7CE')
+    YELLOW= PatternFill('solid', fgColor='FFEB9C')
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = 'Murojaat'
+    headers = ['Filial', 'Nomi', 'Status', 'Sabab']
+    for col, h in enumerate(headers, 1):
+        c = ws.cell(row=1, column=col, value=h)
+        c.font = Font(bold=True)
+        c.alignment = Alignment(horizontal='center')
+    ws.column_dimensions['A'].width = 10
+    ws.column_dimensions['B'].width = 35
+    ws.column_dimensions['C'].width = 18
+    ws.column_dimensions['D'].width = 30
+    for row_i, r in enumerate(results, 2):
+        ws.cell(row=row_i, column=1, value=r.get('filial_no', ''))
+        ws.cell(row=row_i, column=2, value=r.get('nomi', ''))
+        status = r.get('status', '')
+        ws.cell(row=row_i, column=3, value=status)
+        ws.cell(row=row_i, column=4, value=r.get('sabab', ''))
+        fill = GREEN if status.startswith('OK') else (RED if status.startswith('XATO') else YELLOW)
+        for col in range(1, 5):
+            ws.cell(row=row_i, column=col).fill = fill
+    buf = _io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return buf
+
+
 async def img_appeal_text_catcher(update, ctx):
     from telegram.ext import ApplicationHandlerStop
     if not ctx.user_data.get('img_appeal_wait_text'): return
@@ -7018,21 +7052,40 @@ async def img_appeal_text_catcher(update, ctx):
     aid = update.effective_chat.id
     kb = InlineKeyboardMarkup([[InlineKeyboardButton('Bajarildi', callback_data='appealresp:done:' + str(aid)), InlineKeyboardButton('Bekor', callback_data='appealresp:cancel:' + str(aid))]])
     log_rows = ctx.bot_data.setdefault('appeal_log_rows', {})
+    results = []
     sent = failed = no_tid = 0
     seen_tids = set()
     for d in dorixonalar:
         tid = d['tid']
-        if not tid: no_tid += 1; continue
+        if not tid:
+            no_tid += 1
+            mudir = d.get('mudir_tel') or ''
+            sabab = ('Tel: ' + mudir) if mudir else 'TID yoq'
+            results.append({'filial_no': d['filial_no'], 'nomi': d['nomi'], 'status': 'TID yoq', 'sabab': sabab})
+            continue
         if tid in seen_tids: continue
         seen_tids.add(tid)
         try:
             await ctx.bot.send_message(chat_id=int(tid), text='Murojaat\nKimdan: ' + sender + '\n\n' + txt, reply_markup=kb)
             sent += 1
+            results.append({'filial_no': d['filial_no'], 'nomi': d['nomi'], 'status': 'OK yuborildi', 'sabab': ''})
             row_idx = await run_write(log_murojaat, tid, txt)
             if row_idx and row_idx > 0: log_rows[int(tid)] = row_idx
         except Exception as exc:
             failed += 1
-    await msg.edit_text('Yuborildi: ' + str(sent) + '\nYuborilmadi: ' + str(failed) + '\nTID yoq: ' + str(no_tid))
+            results.append({'filial_no': d['filial_no'], 'nomi': d['nomi'], 'status': 'XATO', 'sabab': _tg_error_reason(exc)})
+    summary = (
+        'Murojaat yuborildi:\n'
+        + 'OK Yuborildi: ' + str(sent) + ' ta\n'
+        + 'XATO Yuborilmadi: ' + str(failed) + ' ta\n'
+        + 'TID yoq: ' + str(no_tid) + ' ta'
+    )
+    await msg.edit_text(summary)
+    if results:
+        import io as _io
+        from telegram import InputFile
+        buf = await _asyncio.to_thread(_build_img_appeal_excel, results)
+        await update.message.reply_document(document=InputFile(buf, filename='murojaat_hisobot.xlsx'), caption='Batafsil hisobot')
     raise ApplicationHandlerStop()
 
 
