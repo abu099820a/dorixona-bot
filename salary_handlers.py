@@ -47,7 +47,7 @@ FIRMS_SHEET_ID = os.getenv("FIRMS_SHEET_ID", "")
 SHEETS_ID = os.getenv("SHEETS_ID", "1CfuogH-yY--y5kiBK0qXsl5AFi_Hmzj_onWcA-Qyvco")
 SUPER_ADMIN_ID = 709544046   # Bosh admin — o'zgartirilmaydi
 ADMIN_IDS = {SUPER_ADMIN_ID}  # Mutable set — botstart da Sheet dan to'ldiriladi
-APPEAL_NOTIFY_CHAT_ID = -1004461834831  # VAKSINA MED AXBOROT Chat
+APPEAL_NOTIFY_CHAT_ID = -1004461834831  # VAKSINA MED AXBOROT Chat — faqat shu chatga yuboriladi
 # Permission matrix: {telegram_id: set_of_panel_keys}
 # Panel keys: "davomat", "royxat", "hisobot", "eksklyuziv", "murojaat"
 ADMIN_PERMISSIONS: dict = {}
