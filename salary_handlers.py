@@ -5037,12 +5037,8 @@ async def appeal_comment_catcher(update: Update, ctx: ContextTypes.DEFAULT_TYPE)
             f"{info['label']}\n"
             f"💬 Izoh: {comment}"
         )
-        await ctx.bot.send_message(
-            chat_id=info["admin_chat_id"],
-            text=notify_text,
-        )
-        # Alohida notify chatga ham yuborish
-        if APPEAL_NOTIFY_CHAT_ID and info["admin_chat_id"] != APPEAL_NOTIFY_CHAT_ID:
+        # Faqat VAKSINA MED AXBOROT Chat ga yuborish (bot chati emas)
+        if APPEAL_NOTIFY_CHAT_ID:
             try:
                 await ctx.bot.send_message(
                     chat_id=APPEAL_NOTIFY_CHAT_ID,
@@ -5051,7 +5047,7 @@ async def appeal_comment_catcher(update: Update, ctx: ContextTypes.DEFAULT_TYPE)
             except Exception as e2:
                 logger.warning(f"[APPEAL] Notify chat ga yuborishda xato: {e2}")
     except Exception as e:
-        logger.warning(f"[APPEAL] Admin ga yuborishda xato: {e}")
+        logger.warning(f"[APPEAL] Notify chat ga yuborishda xato: {e}")
 
     if info.get("row_index"):
         await run_write(mark_murojaat_answered, info["row_index"], comment, info["responder_name"], info["label"])
