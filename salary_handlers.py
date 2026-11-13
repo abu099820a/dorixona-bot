@@ -47,6 +47,7 @@ FIRMS_SHEET_ID = os.getenv("FIRMS_SHEET_ID", "")
 SHEETS_ID = os.getenv("SHEETS_ID", "1CfuogH-yY--y5kiBK0qXsl5AFi_Hmzj_onWcA-Qyvco")
 SUPER_ADMIN_ID = 709544046   # Bosh admin — o'zgartirilmaydi
 ADMIN_IDS = {SUPER_ADMIN_ID}  # Mutable set — botstart da Sheet dan to'ldiriladi
+APPEAL_NOTIFY_CHAT_ID = -1004461834831  # VAKSINA MED AXBOROT Chat
 # Permission matrix: {telegram_id: set_of_panel_keys}
 # Panel keys: "davomat", "royxat", "hisobot", "eksklyuziv", "murojaat"
 ADMIN_PERMISSIONS: dict = {}
@@ -2696,6 +2697,16 @@ async def _send_firm_direct_report(
                 filename=_fdata.get("file_name") or "hisobot.xlsx",
                 caption=f"📊 {_month_lbl} hisoboti" if language == "uz" else f"📊 Отчёт за {_month_lbl}",
             )
+            # Notify chat ga xabar
+            try:
+                _user = update.effective_user
+                _uname = " ".join(filter(None, [_user.first_name, _user.last_name])).strip() or f"@{_user.username or _user.id}"
+                await ctx.bot.send_message(
+                    chat_id=APPEAL_NOTIFY_CHAT_ID,
+                    text=f"📥 Hisobot olindi\n\n🏢 Firma: {firma_nomi}\n👤 Kim oldi: {_uname}\n📅 Oy: {_month_lbl}",
+                )
+            except Exception as _ne:
+                logger.warning(f"[NOTIFY] Firma hisobot xabari xato: {_ne}")
         else:
             # Bir nechta oy bor — tanlash so'rash (FIRM_GET_MONTH_PICK)
             _sorted_months = sorted(_months.keys(), reverse=True)
@@ -5019,16 +5030,26 @@ async def appeal_comment_catcher(update: Update, ctx: ContextTypes.DEFAULT_TYPE)
 
     try:
         org_line = f"{info['org_label']}\n" if info.get("org_label") else ""
+        notify_text = (
+            f"📩 Murojaatga javob\n\n"
+            f"{org_line}"
+            f"👤 Kimdan: {info['responder_name']}\n"
+            f"{info['label']}\n"
+            f"💬 Izoh: {comment}"
+        )
         await ctx.bot.send_message(
             chat_id=info["admin_chat_id"],
-            text=(
-                f"📩 Murojaatga javob\n\n"
-                f"{org_line}"
-                f"👤 Kimdan: {info['responder_name']}\n"
-                f"{info['label']}\n"
-                f"💬 Izoh: {comment}"
-            ),
+            text=notify_text,
         )
+        # Alohida notify chatga ham yuborish
+        if APPEAL_NOTIFY_CHAT_ID and info["admin_chat_id"] != APPEAL_NOTIFY_CHAT_ID:
+            try:
+                await ctx.bot.send_message(
+                    chat_id=APPEAL_NOTIFY_CHAT_ID,
+                    text=notify_text,
+                )
+            except Exception as e2:
+                logger.warning(f"[APPEAL] Notify chat ga yuborishda xato: {e2}")
     except Exception as e:
         logger.warning(f"[APPEAL] Admin ga yuborishda xato: {e}")
 
