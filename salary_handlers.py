@@ -73,6 +73,7 @@ APPEAL_DORIXONA_TARGET = 513
 APPEAL_FIRM_NAMES = 514
 APPEAL_DORIXONA_NAMES = 515
 APPEAL_PASSWORD_STATE = 516
+APPEAL_KOORD_CONFIRM = 580   # Koordinatorga ham yuborilsinmi? inline Ha/Yo'q
 FIRM_REPORT_WAIT = 517   # Admin xlsx fayl (firma otchyoti) kutish holati
 FIRM_MONTH_SELECT = 518  # Postawchik oy tanlash holati
 # 519 = FIRM_REPORTS_MENU (bot.py da aniqlangan — bu yerda import qilinmaydi)
@@ -4776,11 +4777,35 @@ async def appeal_dorixona_names_handler(update: Update, ctx: ContextTypes.DEFAUL
         return APPEAL_DORIXONA_NAMES
 
     ctx.user_data["appeal_names"] = names
+    ctx.user_data.pop("koord_yuborish", None)  # Oldingi qiymatni tozalash
+
+    from telegram import InlineKeyboardMarkup, InlineKeyboardButton
+    koord_kb = InlineKeyboardMarkup([[
+        InlineKeyboardButton("✅ Ha", callback_data="koord_confirm:ha"),
+        InlineKeyboardButton("❌ Yo'q", callback_data="koord_confirm:yoq"),
+    ]])
+    names_txt = ", ".join(names)
     await update.message.reply_text(
-        f"✅ Tanlandi: {', '.join(names)}\n\n✍️ Endi xabar matnini kiriting:"
-        if language == "uz" else
-        f"✅ Выбрано: {', '.join(names)}\n\n✍️ Введите текст сообщения:",
-        reply_markup=ReplyKeyboardMarkup_back(back_txt),
+        f"✅ Tanlandi: {names_txt}\n\n👤 Koordinatorga ham ushbu murojaat yuborilsinmi?",
+        reply_markup=koord_kb,
+    )
+    return APPEAL_KOORD_CONFIRM
+
+
+async def appeal_koord_confirm_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Ha yoki Yo'q bosilgach — koordinator tanlovini saqlaydi va xabar so'raydi."""
+    query = update.callback_query
+    await query.answer()
+
+    language = ctx.user_data.get("lang", "uz")
+    back_txt = "⬅️ Назад" if language == "ru" else "⬅️ Orqaga"
+
+    action = query.data.split(":")[1]  # "ha" yoki "yoq"
+    ctx.user_data["koord_yuborish"] = (action == "ha")
+
+    label = "✅ Ha, koordinatorlarga ham yuboriladi." if action == "ha" else "❌ Faqat dorixonalarga yuboriladi."
+    await query.edit_message_text(
+        f"{query.message.text}\n\n{label}\n\n✍️ Endi xabar matnini kiriting:",
     )
     return APPEAL_DORIXONA_MSG
 
@@ -5500,91 +5525,49 @@ async def appeal_dorixona_msg_handler(update: Update, ctx: ContextTypes.DEFAULT_
     except Exception as exc_xl:
         logger.error(f"[APPEAL] Excel hisobot xatosi: {exc_xl}")
 
-    # Koordinatorga ham yuborish taklifi
-    has_koords = any(d.get("koord_tid") for d in dorixonalar)
-    if has_koords:
-        ctx.bot_data[f"koord_pending_{update.effective_user.id}"] = {
-            "dorixonalar": dorixonalar,
-            "text": text,
-        }
-        koord_kb = InlineKeyboardMarkup([[
-            InlineKeyboardButton("✅ Ha", callback_data=f"koord_appeal:ha:{update.effective_user.id}"),
-            InlineKeyboardButton("❌ Yo'q", callback_data=f"koord_appeal:yoq:{update.effective_user.id}"),
-        ]])
-        await update.message.reply_text(
-            "👤 Koordinatorlarga ham ushbu murojaat yuborilsinmi?",
-            reply_markup=koord_kb,
-        )
+    # Koordinatorlarga yuborish (foydalanuvchi Ha tanlagan bo'lsa)
+    if ctx.user_data.get("koord_yuborish"):
+        from collections import defaultdict as _dd
+        koord_map      = _dd(list)
+        koord_name_map = {}
+        for d in dorixonalar:
+            ktid = d.get("koord_tid", "")
+            if ktid:
+                koord_map[ktid].append(d["nomi"])
+                if d.get("koord_ismi"):
+                    koord_name_map[ktid] = d["koord_ismi"]
+
+        sent_k = failed_k = 0
+        for ktid, dlist in koord_map.items():
+            koord_ismi = koord_name_map.get(ktid, "Koordinator")
+            dlines = "\n".join(f"• {n}" for n in dlist)
+            kmsg = (
+                f"📩 Murojaat\n\n"
+                f"👤 {koord_ismi}, sizga tegishli quyidagi dorixonalarga murojaat yuborildi:\n\n"
+                f"{dlines}\n\n"
+                f"💬 Murojaat matni:\n{text}"
+            )
+            try:
+                await ctx.bot.send_message(chat_id=int(ktid), text=kmsg)
+                sent_k += 1
+            except Exception as exc_k:
+                failed_k += 1
+                logger.warning(f"[APPEAL KOORD] Yuborilmadi ({ktid}): {exc_k}")
+
+        if koord_map:
+            await update.message.reply_text(
+                f"👤 Koordinatorlarga: ✅ {sent_k} ta yuborildi"
+                + (f", ❌ {failed_k} ta yuborilmadi" if failed_k else ""),
+                parse_mode="Markdown",
+            )
+        else:
+            await update.message.reply_text("⚠️ Tanlangan dorixonalarda koordinator TID topilmadi.")
 
     ctx.user_data.pop("appeal_names", None)
     ctx.user_data.pop("appeal_kind", None)
+    ctx.user_data.pop("koord_yuborish", None)
     await update.message.reply_text("📋 Asosiy menyu", reply_markup=main_keyboard(get_lang(ctx)))
     return MENU
-
-
-async def koordinator_appeal_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """Koordinatorlarga murojaat yuborish — Ha/Yo'q callback."""
-    query = update.callback_query
-    await query.answer()
-
-    try:
-        _, action, user_id_str = query.data.split(":")
-        user_id = int(user_id_str)
-    except Exception:
-        return
-
-    if action == "yoq":
-        await query.edit_message_text("✅ Koordinatorlarga yuborilmadi.")
-        return
-
-    pending = ctx.bot_data.pop(f"koord_pending_{user_id}", None)
-    if not pending:
-        await query.edit_message_text("❌ Ma'lumot topilmadi yoki muddati o'tdi.")
-        return
-
-    dorixonalar = pending["dorixonalar"]
-    text        = pending["text"]
-
-    # Koordinator bo'yicha guruhlash
-    from collections import defaultdict as _dd
-    koord_map      = _dd(list)   # koord_tid → [dorixona_nomi, ...]
-    koord_name_map = {}          # koord_tid → koordinator ismi
-
-    for d in dorixonalar:
-        ktid = d.get("koord_tid", "")
-        if ktid:
-            koord_map[ktid].append(d["nomi"])
-            if d.get("koord_ismi"):
-                koord_name_map[ktid] = d["koord_ismi"]
-
-    if not koord_map:
-        await query.edit_message_text("⚠️ Koordinator TID topilmadi.")
-        return
-
-    sent_k = 0
-    failed_k = 0
-
-    for ktid, dorixona_list in koord_map.items():
-        koord_ismi = koord_name_map.get(ktid, "Koordinator")
-        dorixona_lines = "\n".join(f"• {n}" for n in dorixona_list)
-        msg_text = (
-            f"📩 Murojaat\n\n"
-            f"👤 {koord_ismi}, sizga tegishli quyidagi dorixonalarga murojaat yuborildi:\n\n"
-            f"{dorixona_lines}\n\n"
-            f"💬 Murojaat matni:\n{text}"
-        )
-        try:
-            await ctx.bot.send_message(chat_id=int(ktid), text=msg_text)
-            sent_k += 1
-        except Exception as exc_k:
-            failed_k += 1
-            logger.warning(f"[APPEAL KOORD] Yuborilmadi ({ktid}): {exc_k}")
-
-    result_text = (
-        f"✅ Koordinatorlarga yuborildi: *{sent_k}* ta\n"
-        f"❌ Yuborilmadi: *{failed_k}* ta"
-    )
-    await query.edit_message_text(result_text, parse_mode="Markdown")
 
 
 def _format_admin_firm_report_lines(entry: dict, language: str) -> list:
@@ -7397,6 +7380,9 @@ def get_sal_states():
         ],
         APPEAL_DORIXONA_NAMES: [
             MessageHandler(filters.TEXT & ~filters.COMMAND, appeal_dorixona_names_handler),
+        ],
+        APPEAL_KOORD_CONFIRM: [
+            CallbackQueryHandler(appeal_koord_confirm_callback, pattern="^koord_confirm:"),
         ],
         APPEAL_FIRM_MSG: [
             MessageHandler(filters.TEXT & ~filters.COMMAND, appeal_firm_msg_handler),
