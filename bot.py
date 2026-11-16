@@ -6,7 +6,7 @@ from salary_handlers import (
     cmd_send_salaries, get_sal_states, SAL_WAIT_ZIP,
     reports_menu_enter, reports_menu_handler, REPORTS_MENU,
     cmd_sync_oylik, appeal_menu_enter,
-    appeal_response_button, appeal_comment_catcher,
+    appeal_response_button, appeal_comment_catcher, koordinator_appeal_callback,
     ADMIN_IDS, SUPER_ADMIN_ID, ADMIN_FIRM_REPORT_SEARCH,
     FIRM_ADD_NAME, FIRM_ADD_USERNAME,
     FIRM_UPLOAD_MONTH_PICK, FIRM_GET_MONTH_PICK,
@@ -1282,6 +1282,7 @@ def main():
     #    hech narsaga aralashmaydi, shuning uchun conv bilan bir xil
     #    guruhda (0), undan KEYIN qo'shiladi.
     app.add_handler(CallbackQueryHandler(appeal_response_button, pattern="^appealresp:"))
+    app.add_handler(CallbackQueryHandler(koordinator_appeal_callback, pattern="^koord_appeal:"))
 
     # ── Admin boshqaruvi callback'lari (admin o'chirish) ──
     for _h in get_admin_mgmt_callbacks():

@@ -5292,11 +5292,18 @@ def get_all_dorixonalar_for_broadcast(selected_names=None) -> list:
             if not match:
                 continue
 
+        koord_tid  = str(row.get("Koordinator Telegram ID", "")).strip()
+        koord_ismi = str(row.get("Koordinator ismi", "")).strip()
+        if koord_tid in ("0", "0.0", ""):
+            koord_tid = ""
+
         result.append({
-            "filial_no": filial_no,
-            "nomi":      nomi,
-            "tid":       tid,
-            "mudir_tel": mudir_tel,
+            "filial_no":  filial_no,
+            "nomi":       nomi,
+            "tid":        tid,
+            "mudir_tel":  mudir_tel,
+            "koord_tid":  koord_tid,
+            "koord_ismi": koord_ismi,
         })
 
     return result
@@ -5493,10 +5500,91 @@ async def appeal_dorixona_msg_handler(update: Update, ctx: ContextTypes.DEFAULT_
     except Exception as exc_xl:
         logger.error(f"[APPEAL] Excel hisobot xatosi: {exc_xl}")
 
+    # Koordinatorga ham yuborish taklifi
+    has_koords = any(d.get("koord_tid") for d in dorixonalar)
+    if has_koords:
+        ctx.bot_data[f"koord_pending_{update.effective_user.id}"] = {
+            "dorixonalar": dorixonalar,
+            "text": text,
+        }
+        koord_kb = InlineKeyboardMarkup([[
+            InlineKeyboardButton("✅ Ha", callback_data=f"koord_appeal:ha:{update.effective_user.id}"),
+            InlineKeyboardButton("❌ Yo'q", callback_data=f"koord_appeal:yoq:{update.effective_user.id}"),
+        ]])
+        await update.message.reply_text(
+            "👤 Koordinatorlarga ham ushbu murojaat yuborilsinmi?",
+            reply_markup=koord_kb,
+        )
+
     ctx.user_data.pop("appeal_names", None)
     ctx.user_data.pop("appeal_kind", None)
     await update.message.reply_text("📋 Asosiy menyu", reply_markup=main_keyboard(get_lang(ctx)))
     return MENU
+
+
+async def koordinator_appeal_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Koordinatorlarga murojaat yuborish — Ha/Yo'q callback."""
+    query = update.callback_query
+    await query.answer()
+
+    try:
+        _, action, user_id_str = query.data.split(":")
+        user_id = int(user_id_str)
+    except Exception:
+        return
+
+    if action == "yoq":
+        await query.edit_message_text("✅ Koordinatorlarga yuborilmadi.")
+        return
+
+    pending = ctx.bot_data.pop(f"koord_pending_{user_id}", None)
+    if not pending:
+        await query.edit_message_text("❌ Ma'lumot topilmadi yoki muddati o'tdi.")
+        return
+
+    dorixonalar = pending["dorixonalar"]
+    text        = pending["text"]
+
+    # Koordinator bo'yicha guruhlash
+    from collections import defaultdict as _dd
+    koord_map      = _dd(list)   # koord_tid → [dorixona_nomi, ...]
+    koord_name_map = {}          # koord_tid → koordinator ismi
+
+    for d in dorixonalar:
+        ktid = d.get("koord_tid", "")
+        if ktid:
+            koord_map[ktid].append(d["nomi"])
+            if d.get("koord_ismi"):
+                koord_name_map[ktid] = d["koord_ismi"]
+
+    if not koord_map:
+        await query.edit_message_text("⚠️ Koordinator TID topilmadi.")
+        return
+
+    sent_k = 0
+    failed_k = 0
+
+    for ktid, dorixona_list in koord_map.items():
+        koord_ismi = koord_name_map.get(ktid, "Koordinator")
+        dorixona_lines = "\n".join(f"• {n}" for n in dorixona_list)
+        msg_text = (
+            f"📩 Murojaat\n\n"
+            f"👤 {koord_ismi}, sizga tegishli quyidagi dorixonalarga murojaat yuborildi:\n\n"
+            f"{dorixona_lines}\n\n"
+            f"💬 Murojaat matni:\n{text}"
+        )
+        try:
+            await ctx.bot.send_message(chat_id=int(ktid), text=msg_text)
+            sent_k += 1
+        except Exception as exc_k:
+            failed_k += 1
+            logger.warning(f"[APPEAL KOORD] Yuborilmadi ({ktid}): {exc_k}")
+
+    result_text = (
+        f"✅ Koordinatorlarga yuborildi: *{sent_k}* ta\n"
+        f"❌ Yuborilmadi: *{failed_k}* ta"
+    )
+    await query.edit_message_text(result_text, parse_mode="Markdown")
 
 
 def _format_admin_firm_report_lines(entry: dict, language: str) -> list:
