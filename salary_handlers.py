@@ -4969,6 +4969,7 @@ def _get_sender_org_label(user_id: int) -> str:
     Topilmasa — bo'sh qaytaradi.
     """
     uid_str = str(user_id)
+    # 1) Firma
     try:
         firma_map = get_firma_map()
         for nomi, tid in firma_map.items():
@@ -4976,11 +4977,25 @@ def _get_sender_org_label(user_id: int) -> str:
                 return f"🏢 Firma: {nomi.title()}"
     except Exception:
         pass
+    # 2) Farmatsevtlar varag'idan (mudir)
     try:
         mudir_map = get_mudir_map()
         for filial, tid in mudir_map.items():
             if tid == uid_str:
                 return f"🏥 Apteka: {filial}"
+    except Exception:
+        pass
+    # 3) Sheet1 — "Zav.apteka Telegram ID" ustunidan (asosiy manba)
+    try:
+        client = _get_client()
+        ws = client.open_by_key(PHARMACY_SHEET_ID).worksheet("Sheet1")
+        for row in ws.get_all_records():
+            tid = str(row.get("Zav.apteka Telegram ID", "")).strip()
+            if tid and tid not in ("0", "0.0") and tid == uid_str:
+                filial_no = str(row.get("Filial №", "")).strip().replace(".0", "")
+                nomi = str(row.get("Nomi (UZ)", "")).strip() or str(row.get("Nomi (RU)", "")).strip()
+                label = f"{filial_no} - {nomi}" if filial_no else nomi
+                return f"🏥 Apteka: {label}"
     except Exception:
         pass
     return ""
@@ -5005,7 +5020,13 @@ async def appeal_response_button(update: Update, ctx: ContextTypes.DEFAULT_TYPE)
         responder_name = f"{responder_name} (@{user.username})"
 
     # Firma yoki apteka nomini aniqlash
-    org_label = await run_read(_get_sender_org_label, user.id)
+    # 1) Avval yuborilgan murojaatlar xotirasidan qidir (ishonchli)
+    tid_names = ctx.bot_data.get("appeal_tid_names", {})
+    cached_name = tid_names.get(user.id)
+    if cached_name:
+        org_label = f"🏥 Apteka: {cached_name}"
+    else:
+        org_label = await run_read(_get_sender_org_label, user.id)
 
     pending = ctx.bot_data.setdefault("appeal_pending", {})
     row_idx = ctx.bot_data.get("appeal_log_rows", {}).get(user.id)
@@ -5402,7 +5423,8 @@ async def appeal_dorixona_msg_handler(update: Update, ctx: ContextTypes.DEFAULT_
         InlineKeyboardButton("❌ Bekor qilish", callback_data=f"appealresp:cancel:{admin_chat_id}"),
     ]])
 
-    log_rows = ctx.bot_data.setdefault("appeal_log_rows", {})
+    log_rows  = ctx.bot_data.setdefault("appeal_log_rows", {})
+    tid_names = ctx.bot_data.setdefault("appeal_tid_names", {})  # int(tid) → apteka nomi
 
     # results: [(filial_no, nomi, holat_emoji, sabab)]
     results = []
@@ -5441,6 +5463,7 @@ async def appeal_dorixona_msg_handler(update: Update, ctx: ContextTypes.DEFAULT_
             )
             sent += 1
             results.append((filial_no, nomi, "✅", "Yuborildi"))
+            tid_names[int(tid)] = f"{filial_no} - {nomi}" if filial_no else nomi
             row_idx = await run_write(log_murojaat, tid, text)
             if row_idx and row_idx > 0:
                 log_rows[int(tid)] = row_idx
