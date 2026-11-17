@@ -8209,52 +8209,35 @@ def _get_pharmacy_row_by_filial(filial_no_str: str) -> dict | None:
         return None
 
 
-async def dorixona_kanal_start(update, ctx):
-    """Admin '📢 Kanalga yuborish' tugmasini bosdi — filial raqam so'raydi."""
-    if update.effective_user.id not in ADMIN_IDS:
-        await update.message.reply_text("❌ Ruxsat yo'q.")
-        return
-    from telegram import ReplyKeyboardMarkup
-    kb = ReplyKeyboardMarkup([["❌ Bekor qilish"]], resize_keyboard=True)
-    await update.message.reply_text(
-        "📢 *Kanalga yuborish*\n\n"
-        "Qaysi filialning kartasini kanalga yubormoqchisiz?\n"
-        "Filial raqamini kiriting (masalan: *101*):",
-        parse_mode="Markdown",
-        reply_markup=kb,
-    )
-    return DORIXONA_KANAL_STEP
+def _get_pharmacy_rows_in_range(start: int, end: int) -> list:
+    """Sheet1 dan filial raqami start..end oralig'idagi qatorlarni qaytaradi (tartibda)."""
+    try:
+        client = _get_client()
+        sh = client.open_by_key(PHARMACY_SHEET_ID)
+        ws = sh.worksheet("Sheet1")
+        result = []
+        for row in ws.get_all_records():
+            fn_str = str(row.get("Filial №", "")).strip().replace(".0", "")
+            try:
+                fn_int = int(fn_str)
+            except ValueError:
+                continue
+            if start <= fn_int <= end:
+                result.append(row)
+        result.sort(key=lambda r: int(str(r.get("Filial №", "0")).strip().replace(".0", "") or "0"))
+        return result
+    except Exception as e:
+        logger.error(f"[KANAL] Sheet1 oraliq o'qishda xato: {e}")
+        return []
 
 
-async def dorixona_kanal_send_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """Admin filial raqamini kiritdi — Sheet1 dan o'qib kanalga yuboradi."""
-    from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
-    txt = (update.message.text or "").strip()
-    from bot import main_keyboard, MENU
-    lang = ctx.user_data.get("lang", "uz")
-    is_admin = update.effective_user.id in ADMIN_IDS
+async def _send_one_pharmacy_to_channel(bot, row: dict):
+    """Bitta apteka kartasini kanalga yuboradi: send_venue + send_message."""
+    import asyncio
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
-    if txt == "❌ Bekor qilish":
-        await update.message.reply_text(
-            "❌ Bekor qilindi.",
-            reply_markup=main_keyboard(lang, is_admin),
-        )
-        return MENU
-
-    # Filial qidirish
-    row = await run_read(_get_pharmacy_row_by_filial, txt)
-    if not row:
-        await update.message.reply_text(
-            f"⚠️ *{txt}* raqamli filial topilmadi.\n\nQaytadan kiriting yoki ❌ Bekor qilish:",
-            parse_mode="Markdown",
-        )
-        return DORIXONA_KANAL_STEP
-
-    # Ma'lumotlar
-    filial_no = str(row.get("Filial №", "")).strip().replace(".0", "")
     nomi_uz   = str(row.get("Nomi (UZ)", "")).strip()
     nomi_ru   = str(row.get("Nomi (RU)", "")).strip()
-    nomi      = nomi_uz or nomi_ru
     manzil_uz = str(row.get("Manzil (UZ)", "")).strip()
     manzil_ru = str(row.get("Manzil (RU)", "")).strip()
     manzil    = manzil_ru or manzil_uz
@@ -8272,10 +8255,8 @@ async def dorixona_kanal_send_handler(update: Update, ctx: ContextTypes.DEFAULT_
     except Exception:
         pass
 
-    # Matn kartasi
     card_text = _build_pharmacy_card_text(row)
 
-    # Tugmalar: Yandex + Google + Telegram (agar tel bo'lsa)
     buttons = []
     if has_coords:
         yandex_url = f"https://maps.yandex.ru/?pt={lon},{lat}&z=17&l=map"
@@ -8289,46 +8270,153 @@ async def dorixona_kanal_send_handler(update: Update, ctx: ContextTypes.DEFAULT_
         if digits:
             if not digits.startswith("998"):
                 digits = "998" + digits.lstrip("0")
-            tg_url = f"https://t.me/+{digits}"
-            buttons.append([InlineKeyboardButton("💬 Telegram", url=tg_url)])
+            buttons.append([InlineKeyboardButton("💬 Telegram", url=f"https://t.me/+{digits}")])
     reply_markup = InlineKeyboardMarkup(buttons) if buttons else None
 
-    # Kanalga yuborish
-    try:
-        # 1) Xarita (send_venue — koordinatalar bo'lsa)
-        if has_coords:
-            venue_title   = nomi_uz or nomi_ru or "VAKSINA MED"
-            venue_address = manzil or ""
-            await ctx.bot.send_venue(
-                chat_id=VAKSINA_CHANNEL,
-                latitude=lat,
-                longitude=lon,
-                title=venue_title,
-                address=venue_address,
-            )
-
-        # 2) Matn kartasi + tugmalar
-        await ctx.bot.send_message(
+    if has_coords:
+        await bot.send_venue(
             chat_id=VAKSINA_CHANNEL,
-            text=card_text,
-            reply_markup=reply_markup,
+            latitude=lat,
+            longitude=lon,
+            title=nomi_uz or nomi_ru or "VAKSINA MED",
+            address=manzil or "",
+        )
+        await asyncio.sleep(0.5)
+
+    await bot.send_message(
+        chat_id=VAKSINA_CHANNEL,
+        text=card_text,
+        reply_markup=reply_markup,
+    )
+
+
+async def dorixona_kanal_start(update, ctx):
+    """Admin '📢 Kanalga yuborish' tugmasini bosdi — filial raqam yoki oraliq so'raydi."""
+    if update.effective_user.id not in ADMIN_IDS:
+        await update.message.reply_text("❌ Ruxsat yo'q.")
+        return
+    from telegram import ReplyKeyboardMarkup
+    kb = ReplyKeyboardMarkup([["❌ Bekor qilish"]], resize_keyboard=True)
+    await update.message.reply_text(
+        "📢 *Kanalga yuborish*\n\n"
+        "Bitta filial uchun raqam kiriting:\n"
+        "  *87*\n\n"
+        "Yoki oraliq kiriting (yangi filiallar):\n"
+        "  *101-140*",
+        parse_mode="Markdown",
+        reply_markup=kb,
+    )
+    return DORIXONA_KANAL_STEP
+
+
+async def dorixona_kanal_send_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Admin filial raqami yoki oraliq kiritdi — kanalga yuboradi."""
+    import asyncio
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+    txt = (update.message.text or "").strip()
+    from bot import main_keyboard, MENU
+    lang = ctx.user_data.get("lang", "uz")
+    is_admin = update.effective_user.id in ADMIN_IDS
+
+    if txt == "❌ Bekor qilish":
+        await update.message.reply_text(
+            "❌ Bekor qilindi.",
+            reply_markup=main_keyboard(lang, is_admin),
+        )
+        return MENU
+
+    # Oraliqmi yoki bitta raqam?
+    is_range = "-" in txt and not txt.startswith("-")
+    if is_range:
+        parts = txt.split("-", 1)
+        try:
+            start_fn = int(parts[0].strip())
+            end_fn   = int(parts[1].strip())
+        except ValueError:
+            await update.message.reply_text(
+                "⚠️ Noto'g'ri format. Masalan: *101-140* yoki *87*",
+                parse_mode="Markdown",
+            )
+            return DORIXONA_KANAL_STEP
+
+        if start_fn > end_fn:
+            start_fn, end_fn = end_fn, start_fn
+
+        rows = await run_read(_get_pharmacy_rows_in_range, start_fn, end_fn)
+        if not rows:
+            await update.message.reply_text(
+                f"⚠️ {start_fn}–{end_fn} oralig'ida filial topilmadi.",
+                parse_mode="Markdown",
+            )
+            return DORIXONA_KANAL_STEP
+
+        total = len(rows)
+        progress_msg = await update.message.reply_text(
+            f"⏳ {total} ta filial kanalga yuborilmoqda...\n0 / {total}",
         )
 
+        sent = failed = 0
+        for i, row in enumerate(rows, 1):
+            fn  = str(row.get("Filial №", "")).strip().replace(".0", "")
+            nom = str(row.get("Nomi (UZ)", "")).strip() or str(row.get("Nomi (RU)", "")).strip()
+            try:
+                await _send_one_pharmacy_to_channel(ctx.bot, row)
+                sent += 1
+            except Exception as e:
+                failed += 1
+                logger.warning(f"[KANAL] {fn} - {nom} yuborishda xato: {e}")
+            # Progress yangilash (har 5 ta da bir)
+            if i % 5 == 0 or i == total:
+                try:
+                    await progress_msg.edit_text(
+                        f"⏳ Yuborilmoqda... {i} / {total}"
+                    )
+                except Exception:
+                    pass
+            # Telegram flood limitdan himoya
+            await asyncio.sleep(1.5)
+
+        await progress_msg.edit_text(
+            f"✅ Kanalga yuborildi: *{sent}* ta\n"
+            f"{'❌ Xato: ' + str(failed) + ' ta' if failed else ''}",
+            parse_mode="Markdown",
+        )
         await update.message.reply_text(
-            f"✅ *{filial_no} - {nomi}* kartasi kanalga muvaffaqiyatli yuborildi!\n\n"
             f"📢 {VAKSINA_CHANNEL}",
-            parse_mode="Markdown",
             reply_markup=main_keyboard(lang, is_admin),
         )
-    except Exception as e:
-        logger.error(f"[KANAL] Kanalga yuborishda xato: {e}")
-        await update.message.reply_text(
-            f"❌ Kanalga yuborishda xato:\n`{e}`\n\n"
-            f"Bot kanalga admin qilib qo'shilganmi?",
-            parse_mode="Markdown",
-            reply_markup=main_keyboard(lang, is_admin),
-        )
-    return MENU
+        return MENU
+
+    else:
+        # Bitta filial raqami
+        row = await run_read(_get_pharmacy_row_by_filial, txt)
+        if not row:
+            await update.message.reply_text(
+                f"⚠️ *{txt}* raqamli filial topilmadi.\n\nQaytadan kiriting yoki ❌ Bekor qilish:",
+                parse_mode="Markdown",
+            )
+            return DORIXONA_KANAL_STEP
+
+        filial_no = str(row.get("Filial №", "")).strip().replace(".0", "")
+        nomi = str(row.get("Nomi (UZ)", "")).strip() or str(row.get("Nomi (RU)", "")).strip()
+
+        try:
+            await _send_one_pharmacy_to_channel(ctx.bot, row)
+            await update.message.reply_text(
+                f"✅ *{filial_no} - {nomi}* kartasi kanalga yuborildi!\n\n"
+                f"📢 {VAKSINA_CHANNEL}",
+                parse_mode="Markdown",
+                reply_markup=main_keyboard(lang, is_admin),
+            )
+        except Exception as e:
+            logger.error(f"[KANAL] Kanalga yuborishda xato: {e}")
+            await update.message.reply_text(
+                f"❌ Kanalga yuborishda xato:\n`{e}`\n\n"
+                f"Bot kanalga admin qilib qo'shilganmi?",
+                parse_mode="Markdown",
+                reply_markup=main_keyboard(lang, is_admin),
+            )
+        return MENU
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
