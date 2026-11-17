@@ -98,6 +98,7 @@ DORIXONA_ADD_STEP = 537             # Admin yangi dorixona (filial) qo'shmoqda �
 DORIXONA_EDIT_SELECT = 538          # Admin tahrirlash uchun filial tanlaydi
 DORIXONA_EDIT_FIELD = 539           # Admin qaysi maydonni o'zgartirish kerakligini tanlaydi
 DORIXONA_EDIT_VALUE = 540           # Admin yangi qiymat kiritadi (matn yoki lokatsiya)
+DORIXONA_KANAL_STEP = 541           # Admin kanalga yuborish uchun filial raqam kiritadi
 
 
 # ─── Google Sheets ────────────────────────────────────────────────────────────
@@ -7429,6 +7430,9 @@ def get_sal_states():
             MessageHandler(filters.LOCATION, dorixona_edit_value_handler),
             MessageHandler(filters.CONTACT, dorixona_edit_value_handler),
         ],
+        DORIXONA_KANAL_STEP: [
+            MessageHandler(filters.TEXT & ~filters.COMMAND, dorixona_kanal_send_handler),
+        ],
     }
 
 
@@ -8136,6 +8140,192 @@ async def dorixona_edit_value_handler(update: Update, ctx: ContextTypes.DEFAULT_
     else:
         await update.message.reply_text(
             "⚠️ Saqlashda xato yuz berdi. Qayta urinib ko'ring.",
+            reply_markup=main_keyboard(lang, is_admin),
+        )
+    return MENU
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 📢 KANALGA DORIXONA KARTASI YUBORISH
+# ═══════════════════════════════════════════════════════════════════════════════
+
+VAKSINA_CHANNEL = "@Vaksina_med_axborot"
+
+
+def _build_pharmacy_card_text(row: dict) -> str:
+    """Sheet1 qatoridan chiroyli kanal kartasi matni tuzadi (xuddi kanalda ko'rinadigan format)."""
+    filial_no = str(row.get("Filial №", "")).strip().replace(".0", "")
+    nomi_uz   = str(row.get("Nomi (UZ)", "")).strip()
+    nomi_ru   = str(row.get("Nomi (RU)", "")).strip()
+    nomi      = nomi_uz or nomi_ru
+    hudud_uz  = str(row.get("Hudud (UZ)", "")).strip()
+    hudud_ru  = str(row.get("Hudud (RU)", "")).strip()
+    manzil_uz = str(row.get("Manzil (UZ)", "")).strip()
+    manzil_ru = str(row.get("Manzil (RU)", "")).strip()
+    orientir  = str(row.get("Orientir (UZ)", "")).strip()
+    ish_vaqti = str(row.get("Ish vaqti (UZ)", "")).strip()
+    telefon   = str(row.get("Telefon", "")).strip()
+
+    # Sarlavha: apteka nomi
+    lines = [f"🏥 {nomi_uz}" if nomi_uz else f"🏥 {nomi_ru}"]
+    # Filial raqami
+    if filial_no:
+        lines.append(f"🔢 Filial: #{filial_no}")
+    # Hudud (RU — kanalda rus tilida ko'rsatiladi)
+    if hudud_ru:
+        lines.append(f"🏙 {hudud_ru}")
+    elif hudud_uz:
+        lines.append(f"🏙 {hudud_uz}")
+    # Manzil (ikki tilda)
+    if manzil_ru:
+        lines.append(f"📍 {manzil_ru}")
+    if manzil_uz and manzil_uz != manzil_ru:
+        lines.append(f"📍 {manzil_uz}")
+    # Orientir
+    if orientir:
+        lines.append(f"🔴 {orientir}")
+    # Ish vaqti
+    if ish_vaqti:
+        lines.append(f"🕐 {ish_vaqti}")
+    # Telefon
+    if telefon:
+        lines.append(f"📞 {telefon}")
+    return "\n".join(lines)
+
+
+def _get_pharmacy_row_by_filial(filial_no_str: str) -> dict | None:
+    """Sheet1 dan filial raqami bo'yicha qatorni topadi. Topilmasa None qaytaradi."""
+    try:
+        client = _get_client()
+        sh = client.open_by_key(PHARMACY_SHEET_ID)
+        ws = sh.worksheet("Sheet1")
+        for row in ws.get_all_records():
+            fn = str(row.get("Filial №", "")).strip().replace(".0", "")
+            if fn == filial_no_str.strip():
+                return row
+        return None
+    except Exception as e:
+        logger.error(f"[KANAL] Sheet1 o'qishda xato: {e}")
+        return None
+
+
+async def dorixona_kanal_start(update, ctx):
+    """Admin '📢 Kanalga yuborish' tugmasini bosdi — filial raqam so'raydi."""
+    if update.effective_user.id not in ADMIN_IDS:
+        await update.message.reply_text("❌ Ruxsat yo'q.")
+        return
+    from telegram import ReplyKeyboardMarkup
+    kb = ReplyKeyboardMarkup([["❌ Bekor qilish"]], resize_keyboard=True)
+    await update.message.reply_text(
+        "📢 *Kanalga yuborish*\n\n"
+        "Qaysi filialning kartasini kanalga yubormoqchisiz?\n"
+        "Filial raqamini kiriting (masalan: *101*):",
+        parse_mode="Markdown",
+        reply_markup=kb,
+    )
+    return DORIXONA_KANAL_STEP
+
+
+async def dorixona_kanal_send_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Admin filial raqamini kiritdi — Sheet1 dan o'qib kanalga yuboradi."""
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
+    txt = (update.message.text or "").strip()
+    from bot import main_keyboard, MENU
+    lang = ctx.user_data.get("lang", "uz")
+    is_admin = update.effective_user.id in ADMIN_IDS
+
+    if txt == "❌ Bekor qilish":
+        await update.message.reply_text(
+            "❌ Bekor qilindi.",
+            reply_markup=main_keyboard(lang, is_admin),
+        )
+        return MENU
+
+    # Filial qidirish
+    row = await run_read(_get_pharmacy_row_by_filial, txt)
+    if not row:
+        await update.message.reply_text(
+            f"⚠️ *{txt}* raqamli filial topilmadi.\n\nQaytadan kiriting yoki ❌ Bekor qilish:",
+            parse_mode="Markdown",
+        )
+        return DORIXONA_KANAL_STEP
+
+    # Ma'lumotlar
+    filial_no = str(row.get("Filial №", "")).strip().replace(".0", "")
+    nomi_uz   = str(row.get("Nomi (UZ)", "")).strip()
+    nomi_ru   = str(row.get("Nomi (RU)", "")).strip()
+    nomi      = nomi_uz or nomi_ru
+    manzil_uz = str(row.get("Manzil (UZ)", "")).strip()
+    manzil_ru = str(row.get("Manzil (RU)", "")).strip()
+    manzil    = manzil_ru or manzil_uz
+    telefon   = str(row.get("Telefon", "")).strip()
+
+    lat_str = str(row.get("Latitude", "")).strip()
+    lon_str = str(row.get("Longitude", "")).strip()
+    has_coords = False
+    lat = lon = 0.0
+    try:
+        if lat_str and lon_str and lat_str not in ("0", "0.0", "") and lon_str not in ("0", "0.0", ""):
+            lat = float(lat_str)
+            lon = float(lon_str)
+            has_coords = True
+    except Exception:
+        pass
+
+    # Matn kartasi
+    card_text = _build_pharmacy_card_text(row)
+
+    # Tugmalar: Yandex + Google + Telegram (agar tel bo'lsa)
+    buttons = []
+    if has_coords:
+        yandex_url = f"https://maps.yandex.ru/?pt={lon},{lat}&z=17&l=map"
+        google_url = f"https://maps.google.com/?q={lat},{lon}"
+        buttons.append([
+            InlineKeyboardButton("🗺 Yandex Maps", url=yandex_url),
+            InlineKeyboardButton("🗺 Google Maps", url=google_url),
+        ])
+    if telefon:
+        digits = "".join(c for c in telefon if c.isdigit())
+        if digits:
+            if not digits.startswith("998"):
+                digits = "998" + digits.lstrip("0")
+            tg_url = f"https://t.me/+{digits}"
+            buttons.append([InlineKeyboardButton("💬 Telegram", url=tg_url)])
+    reply_markup = InlineKeyboardMarkup(buttons) if buttons else None
+
+    # Kanalga yuborish
+    try:
+        # 1) Xarita (send_venue — koordinatalar bo'lsa)
+        if has_coords:
+            venue_title   = nomi_uz or nomi_ru or "VAKSINA MED"
+            venue_address = manzil or ""
+            await ctx.bot.send_venue(
+                chat_id=VAKSINA_CHANNEL,
+                latitude=lat,
+                longitude=lon,
+                title=venue_title,
+                address=venue_address,
+            )
+
+        # 2) Matn kartasi + tugmalar
+        await ctx.bot.send_message(
+            chat_id=VAKSINA_CHANNEL,
+            text=card_text,
+            reply_markup=reply_markup,
+        )
+
+        await update.message.reply_text(
+            f"✅ *{filial_no} - {nomi}* kartasi kanalga muvaffaqiyatli yuborildi!\n\n"
+            f"📢 {VAKSINA_CHANNEL}",
+            parse_mode="Markdown",
+            reply_markup=main_keyboard(lang, is_admin),
+        )
+    except Exception as e:
+        logger.error(f"[KANAL] Kanalga yuborishda xato: {e}")
+        await update.message.reply_text(
+            f"❌ Kanalga yuborishda xato:\n`{e}`\n\n"
+            f"Bot kanalga admin qilib qo'shilganmi?",
+            parse_mode="Markdown",
             reply_markup=main_keyboard(lang, is_admin),
         )
     return MENU

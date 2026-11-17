@@ -15,6 +15,8 @@ from salary_handlers import (
     admin_list_enter, ADMIN_LIST_STATE, ADMIN_NEW_ID, ADMIN_NEW_NAME,
     get_admin_mgmt_states, get_admin_mgmt_callbacks,
     dorixona_add_start, dorixona_edit_start,
+    dorixona_kanal_start,
+    DORIXONA_KANAL_STEP,
     _translate_uz_to_ru,
 )
 from exclusive_handlers import cmd_eksklyuziv, get_eks_states, get_eks_callbacks
@@ -468,6 +470,7 @@ def search_keyboard(language, is_admin=False):
     ]
     if is_admin:
         rows.append(["➕ Dorixona qo'shish", "✏️ Dorixona tahrirlash"])
+        rows.append(["📢 Kanalga yuborish"])
     rows.append([T[language]["back"]])
     return ReplyKeyboardMarkup(rows, resize_keyboard=True)
 
@@ -798,6 +801,9 @@ async def search_menu_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     elif is_admin and txt == "✏️ Dorixona tahrirlash":
         return await dorixona_edit_start(update, ctx)
+
+    elif is_admin and txt == "📢 Kanalga yuborish":
+        return await dorixona_kanal_start(update, ctx)
 
     elif txt == T[language]["nearest"]:
         kb = ReplyKeyboardMarkup([
