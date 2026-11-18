@@ -816,6 +816,32 @@ async def vozvrat_confirm_callback(update: Update, ctx: ContextTypes.DEFAULT_TYP
         await _back_to_main(ctx, chat_id, "⚠️ Ma'lumot topilmadi, qaytadan boshlang.")
         return MENU
     ph = base["ph"]
+
+    # 1-qadam: "✅ Yuborish" → koordinatorga ham yuborilsinmi?
+    if query.data == "vz:send":
+        koords = {ph[f].get("koord_tid") for f in plan["items"] if ph[f].get("koord_tid")}
+        await ctx.bot.send_message(
+            chat_id,
+            f"👤 Koordinatorlarga ham ushbu vozvrat ro'yxati yuborilsinmi?\n"
+            f"(tanlangan filiallarda {len(koords)} ta koordinator bor)",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("✅ Ha", callback_data="vz:koord:ha"),
+                InlineKeyboardButton("❌ Yo'q", callback_data="vz:koord:yoq"),
+            ], [
+                InlineKeyboardButton("🚫 Bekor qilish", callback_data="vz:cancel"),
+            ]]),
+        )
+        return VOZVRAT_CONFIRM
+
+    # 2-qadam: vz:koord:ha / vz:koord:yoq → yuborish
+    koord_yuborish = query.data == "vz:koord:ha"
+    try:
+        await query.edit_message_text(
+            query.message.text + ("\n\n✅ Ha — koordinatorlarga ham yuboriladi."
+                                  if koord_yuborish else "\n\n❌ Faqat dorixonalarga yuboriladi.")
+        )
+    except Exception:
+        pass
     sender = _sender_name(update.effective_user)
 
     messages, detail = [], []
@@ -837,6 +863,42 @@ async def vozvrat_confirm_callback(update: Update, ctx: ContextTypes.DEFAULT_TYP
 
     progress = await ctx.bot.send_message(chat_id, f"⏳ Yuborilmoqda... 0 / {len(messages)}")
     results = await _send_messages(ctx, chat_id, messages, progress)
+
+    # ── Koordinatorlarga: har biriga faqat o'ziga tegishli filiallar ro'yxati ──
+    if koord_yuborish:
+        status = {r[0]: r[3] for r in results}   # filial_no → ✅/❌/⚠️
+        by_koord = OrderedDict()
+        for fno in plan["items"]:
+            ktid = ph[fno].get("koord_tid")
+            if ktid:
+                by_koord.setdefault(ktid, []).append(fno)
+        sent_k = failed_k = 0
+        for ktid, fnos in by_koord.items():
+            ismi = next((ph[f].get("koord_ismi") for f in fnos if ph[f].get("koord_ismi")), "") or "Koordinator"
+            klines = []
+            for fno in fnos:
+                st = status.get(fno, "")
+                note = "" if st == "✅" else ("  ⚠️ zavga yetmadi (TID yo'q)" if st == "⚠️"
+                                              else "  ❌ zavga yuborilmadi")
+                klines.append(f"\n🏥 {_label(ph[fno])}{note}")
+                for i, (dori, q) in enumerate(plan["items"][fno].items(), 1):
+                    klines.append(f"  {i}. {dori} — {_fmt_qty(q)} ta")
+            header = (f"📦 Skladga vozvrat\n👤 Kimdan: {sender}\n\n"
+                      f"{ismi}, sizga tegishli {len(fnos)} ta dorixonaga vozvrat ro'yxati yuborildi:\n")
+            try:
+                for part in _chunks(header, klines, "\nℹ️ Nazorat qilib boring."):
+                    await ctx.bot.send_message(chat_id=int(ktid), text=part)
+                sent_k += 1
+            except Exception as e:
+                failed_k += 1
+                logger.warning(f"[VOZVRAT KOORD] {ktid} ga yuborilmadi: {e}")
+            await asyncio.sleep(0.05)
+        await ctx.bot.send_message(
+            chat_id,
+            (f"👤 Koordinatorlarga: ✅ {sent_k} ta yuborildi" + (f", ❌ {failed_k} ta yuborilmadi" if failed_k else ""))
+            if by_koord else "⚠️ Tanlangan dorixonalarda koordinator TID topilmadi.",
+        )
+
     for raw, (why, drugs) in plan["unmatched"].items():
         results.append(("", raw, "Vozvrat", "⚠️", f"Bazada topilmadi ({why})", len(drugs)))
         for dori, q in drugs.items():
