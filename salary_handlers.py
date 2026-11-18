@@ -4632,13 +4632,9 @@ async def appeal_menu_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return APPEAL_FIRM_TARGET
 
     if txt == dorixona_txt:
-        ctx.user_data["appeal_kind"] = "dorixona"
-        await update.message.reply_text(
-            "💊 Dorixonalarga qanday yubormoqchisiz?" if language == "uz"
-            else "💊 Как хотите отправить аптекам?",
-            reply_markup=appeal_target_keyboard(language),
-        )
-        return APPEAL_DORIXONA_TARGET
+        # Oddiy murojaat / Skladga vozvrat / Peremeshenie tanlash (vozvrat_handlers.py)
+        from vozvrat_handlers import show_dorixona_type_menu
+        return await show_dorixona_type_menu(update, ctx)
 
     await update.message.reply_text("Iltimos, tugmalardan birini tanlang.", reply_markup=appeal_keyboard(language))
     return APPEAL_MENU
@@ -7433,7 +7429,14 @@ def get_sal_states():
         DORIXONA_KANAL_STEP: [
             MessageHandler(filters.TEXT & ~filters.COMMAND, dorixona_kanal_send_handler),
         ],
+        # 📦 Skladga vozvrat / 🔄 Peremeshenie (vozvrat_handlers.py)
+        **_get_vozvrat_states(),
     }
+
+
+def _get_vozvrat_states():
+    from vozvrat_handlers import get_vozvrat_states
+    return get_vozvrat_states()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
