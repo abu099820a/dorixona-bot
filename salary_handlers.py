@@ -5360,7 +5360,7 @@ def _tg_error_reason(exc: Exception) -> str:
     if "deactivated" in s:
         return "Akkaunt o'chirilgan"
     if "chat not found" in s or "user not found" in s:
-        return "Chat topilmadi (ID noto'g'ri)"
+        return "Botga /start bosmagan (yoki ID noto'g'ri)"
     if "not enough rights" in s or "forbidden" in s:
         return "Ruxsat yo'q"
     if "too many requests" in s:
@@ -7737,6 +7737,11 @@ async def dorixona_add_step_handler(update: Update, ctx: ContextTypes.DEFAULT_TY
         data["latitude"] = str(loc.latitude)
         data["longitude"] = str(loc.longitude)
     elif not _skip:
+        if field_key in ("koordinator_tid", "mudir_tid"):
+            _err = _validate_tid_input(txt, from_contact_without_id=bool(update.message.contact and not _contact_tid))
+            if _err:
+                await update.message.reply_text(_err, parse_mode="Markdown")
+                return DORIXONA_ADD_STEP
         data[field_key] = txt
         # Kontakt yuborilganda telefon raqamini ham saqlash
         if _contact_phone and field_key == "koordinator_tid":
@@ -7778,6 +7783,13 @@ async def dorixona_add_step_handler(update: Update, ctx: ContextTypes.DEFAULT_TY
             parse_mode="Markdown",
             reply_markup=main_keyboard(lang, is_admin),
         )
+        if ok:
+            for _k in ("mudir_tid", "koordinator_tid"):
+                if data.get(_k):
+                    _warn = await _tid_reach_warning(ctx.bot, data[_k])
+                    if _warn:
+                        _who = "Zav.apteka" if _k == "mudir_tid" else "Koordinator"
+                        await update.message.reply_text(f"👤 {_who}: {_warn}", parse_mode="Markdown")
         return MENU
 
     # Keyingi savol
@@ -8058,6 +8070,49 @@ async def dorixona_edit_field_handler(update: Update, ctx: ContextTypes.DEFAULT_
     return DORIXONA_EDIT_VALUE
 
 
+def _validate_tid_input(txt: str, from_contact_without_id: bool = False) -> str:
+    """TID maydoniga kiritilgan qiymatni tekshiradi. Xato bo'lsa — xabar matni, aks holda ''."""
+    if from_contact_without_id:
+        return ("⚠️ Bu kontaktda *Telegram ID yo'q* (odam Telegramda boshqa raqam bilan "
+                "ro'yxatdan o'tgan yoki maxfiylik sozlamasi yopiq).\n\n"
+                "Telefon raqami TID o'rniga saqlanmadi. Iltimos, zavning o'zidan bot orqali "
+                "kontakt yuborishini so'rang yoki TID ni raqam bilan qo'lda kiriting.")
+    t = str(txt or "").strip()
+    if t.startswith("+") and t[1:].isdigit():
+        t = t[1:]
+        if t.startswith("998"):
+            return ("⚠️ Bu *telefon raqam*, Telegram ID emas.\n"
+                    "Zav kontaktini yuboring (📎 → Kontakt) yoki to'g'ri TID ni kiriting:")
+    if not t.isdigit():
+        return "⚠️ TID faqat raqamlardan iborat bo'lishi kerak (masalan: `8378435569`). Qaytadan kiriting:"
+    if t.startswith("998") and len(t) == 12:
+        return ("⚠️ Bu *telefon raqam*ga o'xshaydi, Telegram ID emas.\n"
+                "Zav kontaktini yuboring (📎 → Kontakt) yoki to'g'ri TID ni kiriting:")
+    return ""
+
+
+async def _tid_reach_warning(bot, tid) -> str:
+    """Bot shu TID ga xabar yubora oladimi? Yubora olmasa — ogohlantirish matni."""
+    try:
+        await bot.get_chat(int(str(tid).strip()))
+        return ""
+    except Exception as e:
+        s = str(e).lower()
+        try:
+            me = await bot.get_me()
+            link = f"https://t.me/{me.username}"
+        except Exception:
+            link = "botga"
+        if "chat not found" in s or "user not found" in s:
+            return ("✅ TID saqlandi, lekin ⚠️ *bu odam botga hali /start bosmagan* — "
+                    "unga murojaat va vozvrat xabarlari BORMAYDI.\n\n"
+                    f"Unga shu linkni yuboring va *Start* ni bossin:\n{link}")
+        if "blocked" in s:
+            return ("✅ TID saqlandi, lekin ⚠️ *bu odam botni bloklagan*.\n"
+                    f"U botni blokdan chiqarib, Start bosishi kerak: {link}")
+        return ""
+
+
 async def dorixona_edit_value_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Yangi qiymatni qabul qilib, Google Sheets da yangilaydi."""
     from telegram import ReplyKeyboardMarkup, KeyboardButton
@@ -8111,10 +8166,22 @@ async def dorixona_edit_value_handler(update: Update, ctx: ContextTypes.DEFAULT_
         new_value = (str(loc.latitude), str(loc.longitude))
         display_val = f"{loc.latitude}, {loc.longitude}"
     else:
+        # TID maydonlari: telefon raqami TID o'rniga yozilib qolmasligi uchun tekshiramiz
+        if fkey in ("koordinator_tid", "mudir_tid"):
+            _err = _validate_tid_input(txt, from_contact_without_id=bool(update.message.contact and not _contact_tid))
+            if _err:
+                await update.message.reply_text(_err, parse_mode="Markdown")
+                return DORIXONA_EDIT_VALUE
         new_value = txt
         display_val = txt
 
     ok = await run_write(_update_dorixona_field, filial_no, fkey, new_value)
+
+    # TID saqlangach — bot bu odamga xabar yubora oladimi, darhol tekshiramiz
+    if ok and fkey in ("koordinator_tid", "mudir_tid"):
+        _warn = await _tid_reach_warning(ctx.bot, new_value)
+        if _warn:
+            await update.message.reply_text(_warn, parse_mode="Markdown")
 
     # Kontakt yuborilganda telefon raqamini ham saqlash
     if ok and _contact_phone:
