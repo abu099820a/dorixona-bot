@@ -153,9 +153,16 @@ def match_filial(raw: str, base: dict):
         if rd and cd and not (rd <= cd or cd <= rd):
             continue
         cn = _nm(d["nomi"])
+        # Qisqa nom bazadagi to'liq nom ichida bo'lsa ham topilsin:
+        # "БЕШКАЙРАГАЧ" ↔ "УЧТЕПА БЕШКАЙРАГОЧ" (har bir so'z eng o'xshash so'zga solishtiriladi)
+        rt = [w for w in n.split() if not w.isdigit()]
+        ct = cn.split()
+        cover = (sum(max(difflib.SequenceMatcher(None, w, c).ratio() for c in ct) for w in rt) / len(rt)
+                 if rt and ct and sum(len(w) for w in rt) >= 6 else 0.0)
         s = max(
             difflib.SequenceMatcher(None, n, cn).ratio(),
             difflib.SequenceMatcher(None, t, _tok(d["nomi"])).ratio(),
+            cover * 0.97,
         )
         scored.append((s, fno))
     scored.sort(reverse=True)
@@ -198,72 +205,116 @@ def _to_num(v):
 # 2) FAYL / RASMNI O'QISH
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def _find_header(rows: list, groups: dict, scan: int = 15):
+def _find_header(rows: list, groups: dict, optional: tuple = (), scan: int = 15):
     """
-    Sarlavha qatorini topadi. groups = {"kalit": ["so'z1", "so'z2"], ...}
+    Sarlavha qatorini topadi.
+    groups = {"kalit": [regex1, regex2, ...]} — regexlar ustuvorlik tartibida
+    (avval 1-regex barcha ustunlarda qidiriladi, topilmasa 2-si va h.k.).
+    optional — topilmasa ham bo'ladigan kalitlar.
     Qaytaradi: (sarlavha_qator_indeksi, {kalit: ustun_indeksi}) yoki (None, None)
     """
+    need = [k for k in groups if k not in optional]
     for ri, row in enumerate(rows[:scan]):
         cells = [str(c or "").strip().lower() for c in row]
-        found = {}
-        for key, words in groups.items():
-            for ci, c in enumerate(cells):
-                if ci in found.values():
-                    continue
-                if any(w in c for w in words):
+        found, used = {}, set()
+        for key, pats in groups.items():
+            for pat in pats:
+                ci = next((i for i, c in enumerate(cells)
+                           if i not in used and c and re.search(pat, c)), None)
+                if ci is not None:
                     found[key] = ci
+                    used.add(ci)
                     break
-        if len(found) == len(groups):
+        if all(k in found for k in need):
             return ri, found
     return None, None
 
 
-def _read_xlsx_rows(data: bytes) -> list:
-    """Excel (xlsx) ning birinchi varag'ini qiymatlar ro'yxati sifatida qaytaradi."""
+def _read_xlsx_sheets(data: bytes) -> list:
+    """Excel (xlsx) ning BARCHA varaqlari: [[qator, ...], ...]"""
     import openpyxl
     wb = openpyxl.load_workbook(io.BytesIO(data), data_only=True, read_only=True)
-    ws = wb.worksheets[0]
-    return [list(r) for r in ws.iter_rows(values_only=True)]
+    return [[list(r) for r in ws.iter_rows(values_only=True)] for ws in wb.worksheets]
+
+
+def _cell(r, ci):
+    return r[ci] if ci is not None and ci < len(r) else None
+
+
+def _is_total_row(r) -> bool:
+    return any(re.match(r"^\s*(итого|всего|jami)", str(c or ""), re.I) for c in r)
 
 
 def parse_vozvrat_excel(data: bytes) -> list:
     """Vozvrat Excel: Филиал | Наименование | Кол-во → [{filial, dori, soni}]"""
-    rows = _read_xlsx_rows(data)
-    hi, cols = _find_header(rows, {
-        "filial": ["филиал", "аптека", "filial"],
-        "dori":   ["наименование", "препарат", "товар", "dori"],
-        "soni":   ["кол", "soni", "кол-во"],
-    })
-    if hi is None:
+    out, found_any = [], False
+    for rows in _read_xlsx_sheets(data):
+        hi, cols = _find_header(rows, {
+            "filial": [r"филиал", r"аптека", r"filial"],
+            "dori":   [r"наименование", r"препарат", r"товар", r"dori"],
+            "soni":   [r"^кол", r"кол-во", r"soni"],
+        })
+        if hi is None:
+            continue
+        found_any = True
+        for r in rows[hi + 1:]:
+            if _is_total_row(r):
+                break
+            f = str(_cell(r, cols["filial"]) or "").strip()
+            d = str(_cell(r, cols["dori"]) or "").strip()
+            q = _to_num(_cell(r, cols["soni"]))
+            if f and d and q:
+                out.append({"filial": f, "dori": d, "soni": q})
+    if not found_any:
         raise ValueError("Sarlavha topilmadi (kerakli ustunlar: Филиал, Наименование, Кол-во)")
-    out = []
-    for r in rows[hi + 1:]:
-        f = str(r[cols["filial"]] or "").strip() if cols["filial"] < len(r) else ""
-        d = str(r[cols["dori"]] or "").strip() if cols["dori"] < len(r) else ""
-        q = _to_num(r[cols["soni"]]) if cols["soni"] < len(r) else None
-        if f and d and q:
-            out.append({"filial": f, "dori": d, "soni": q})
     return out
 
 
+def _drug_from_title(rows: list, hi: int) -> str:
+    """Dori ustuni yo'q bo'lsa — sarlavhadan yuqoridagi nomdan olinadi:
+    'Перемещение товара: АМИКОС ФЛАК 250МЛ №1 / FUREN ...' → 'АМИКОС ФЛАК 250МЛ №1 / FUREN ...'"""
+    texts = [str(c).strip() for r in rows[:hi] for c in r if isinstance(c, str) and c.strip()]
+    for t in texts:
+        m = re.search(r"(?:товар[а-я]*|препарат[а-я]*|dori)\s*[:\-–]\s*(.+)$", t, re.I)
+        if m:
+            return m.group(1).strip()
+    for t in texts:
+        if ":" in t:
+            return t.split(":", 1)[1].strip()
+    return texts[0] if texts else ""
+
+
 def parse_peremesh_excel(data: bytes) -> list:
-    """Peremeshenie Excel: Откуда | Кол-во | Препарат | Куда → [{dan, ga, dori, soni}]"""
-    rows = _read_xlsx_rows(data)
-    hi, cols = _find_header(rows, {
-        "dan":  ["откуда", "отправител", "qayerdan", "beruvchi"],
-        "ga":   ["куда", "получател", "qayerga", "oluvchi"],
-        "dori": ["препарат", "наименование", "товар", "dori"],
-        "soni": ["кол", "soni"],
-    })
-    if hi is None:
-        raise ValueError("Sarlavha topilmadi (kerakli ustunlar: Откуда, Куда, Препарат, Кол-во)")
-    out = []
-    for r in rows[hi + 1:]:
-        g = lambda k: (r[cols[k]] if cols[k] < len(r) else None)
-        dan, ga, dori = str(g("dan") or "").strip(), str(g("ga") or "").strip(), str(g("dori") or "").strip()
-        q = _to_num(g("soni"))
-        if dan and ga and dori and q:
-            out.append({"dan": dan, "ga": ga, "dori": dori, "soni": q})
+    """
+    Peremeshenie Excel → [{dan, ga, dori, soni}]
+    Qo'llab-quvvatlanadigan ko'rinishlar:
+      • Откуда | Кол-во | Препарат | Куда                (bir nechta dori bitta jadvalda)
+      • Откуда | Куда | Остаток | Кол-во к перемещению   (dori nomi jadval tepasidagi sarlavhada)
+    Har bir varaq alohida o'qiladi (har varaqda boshqa dori bo'lishi mumkin).
+    """
+    out, found_any = [], False
+    for rows in _read_xlsx_sheets(data):
+        hi, cols = _find_header(rows, {
+            "dan":  [r"^откуда", r"отправител", r"qayerdan", r"beruvchi"],
+            "ga":   [r"^куда", r"получател", r"qayerga", r"oluvchi"],
+            "dori": [r"препарат", r"наименование", r"товар", r"dori"],
+            "soni": [r"к перемещ", r"перемещ", r"^кол", r"кол-во", r"soni"],
+        }, optional=("dori",))
+        if hi is None:
+            continue
+        found_any = True
+        title_drug = _drug_from_title(rows, hi) if "dori" not in cols else ""
+        for r in rows[hi + 1:]:
+            if _is_total_row(r):
+                break
+            dan = str(_cell(r, cols["dan"]) or "").strip()
+            ga = str(_cell(r, cols["ga"]) or "").strip()
+            dori = str(_cell(r, cols.get("dori")) or "").strip() or title_drug
+            q = _to_num(_cell(r, cols["soni"]))
+            if dan and ga and dori and q:
+                out.append({"dan": dan, "ga": ga, "dori": dori, "soni": q})
+    if not found_any:
+        raise ValueError("Sarlavha topilmadi (kerakli ustunlar: Откуда, Куда, Кол-во, Препарат)")
     return out
 
 
