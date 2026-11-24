@@ -204,20 +204,40 @@ T = {
 
 def get_lang(ctx): return ctx.user_data.get("lang", "uz")
 
+# Sheet1 varag'ining gid raqami (Google Sheets URL'idagi "#gid=..." qismi)
+SHEET1_GID = os.getenv("SHEET1_GID", "1350416660")
+_DF_CACHE = {"df": None, "ts": 0.0}
+_DF_TTL = 300  # soniya — filiallar ro'yxati 5 daqiqa xotirada saqlanadi
+
+
 def load_df():
+    """
+    Filiallar ro'yxatini (Sheet1) yuklaydi.
+
+    MUHIM: avval "export?format=xlsx&sheet=Sheet1" ishlatilgan edi — lekin xlsx
+    eksporti "sheet=" parametrini e'tiborsiz qoldiradi va BUTUN jadvalni
+    (OSTATOK ning ~500 ming qatori bilan) yuklab olardi → qidiruv juda sekin
+    edi. Endi faqat Sheet1 CSV ko'rinishida olinadi (gid orqali) va 5 daqiqa
+    keshlanadi.
+    """
+    import time as _time
+    if _DF_CACHE["df"] is not None and _time.time() - _DF_CACHE["ts"] < _DF_TTL:
+        return _DF_CACHE["df"].copy()
     try:
-        # Google Sheets dan o'qish (requests bilan)
-        url = f"https://docs.google.com/spreadsheets/d/{SHEETS_ID}/export?format=xlsx&sheet=Sheet1"
+        url = f"https://docs.google.com/spreadsheets/d/{SHEETS_ID}/export?format=csv&gid={SHEET1_GID}"
         import requests as req_lib
         resp = req_lib.get(url, timeout=30)
         resp.raise_for_status()
         import io as _io
-        df = pd.read_excel(_io.BytesIO(resp.content)).fillna("")
+        df = pd.read_csv(_io.BytesIO(resp.content), dtype=str, keep_default_na=False).fillna("")
+        if "Filial №" not in df.columns:
+            raise ValueError("Sheet1 da 'Filial №' ustuni topilmadi (SHEET1_GID to'g'rimi?)")
         df["filial_no"] = df["Filial №"].astype(str).str.strip().str.replace(r"\.0$","",regex=True)
         df["_sort"] = pd.to_numeric(df["filial_no"], errors="coerce").fillna(9999)
         df = df.sort_values("_sort").reset_index(drop=True)
         print(f"Google Sheets dan {len(df)} ta filial yuklandi")
-        return df
+        _DF_CACHE["df"], _DF_CACHE["ts"] = df, _time.time()
+        return df.copy()
     except Exception as e:
         print(f"Google Sheets xato: {e}, local fayldan o'qilmoqda...")
         try:
@@ -850,11 +870,9 @@ async def search_menu_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     elif txt == T[language]["excel_btn"]:
         try:
-            import urllib.request as _ur
             import io as _io
-            url = f"https://docs.google.com/spreadsheets/d/{SHEETS_ID}/export?format=xlsx"
-            data = _ur.urlopen(url).read()
-            df_all = pd.read_excel(_io.BytesIO(data)).fillna("")
+            # Faqat Sheet1 (load_df) — butun jadvalni yuklab olmaslik uchun
+            df_all = load_df()
             # Faqat kerakli ustunlar
             cols = ["Filial №", "Nomi (RU)", "Manzil (RU)", "Telefon"]
             cols_exist = [c for c in cols if c in df_all.columns]

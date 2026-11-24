@@ -7558,6 +7558,15 @@ def _lookup_koordinator_name(phone: str) -> str:
         return ""
 
 
+def _reset_filial_cache():
+    """bot.load_df() keshini tozalaydi — qo'shilgan/tahrirlangan filial qidiruvda darhol ko'rinsin."""
+    try:
+        from bot import _DF_CACHE
+        _DF_CACHE["df"] = None
+    except Exception:
+        pass
+
+
 def _save_dorixona_to_sheet(data: dict) -> bool:
     """Yangi dorixona ma'lumotlarini PHARMACY_SHEET_ID → Sheet1 ga yozadi."""
     try:
@@ -7631,6 +7640,7 @@ def _save_dorixona_to_sheet(data: dict) -> bool:
         row = [str(row_dict.get(h, "")) for h in actual_headers]
         ws.append_row(row)
         logger.info(f"[DORIXONA] Yangi filial saqlandi: {data.get('nomi','')}")
+        _reset_filial_cache()
         return True
     except Exception as e:
         logger.error(f"[DORIXONA] Saqlash xato: {e}")
@@ -7905,6 +7915,7 @@ def _update_dorixona_field(filial_no: str, field_key: str, new_value) -> bool:
                     ws.update_cell(row_idx, headers.index(col_name) + 1, str(new_value))
 
         logger.info(f"[DORIXONA] Filial {filial_no} → {field_key} yangilandi")
+        _reset_filial_cache()
         return True
     except Exception as e:
         logger.error(f"[DORIXONA] Yangilashda xato: {e}")
