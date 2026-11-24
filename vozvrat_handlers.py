@@ -49,12 +49,13 @@ BTN_VOZVRAT  = "📦 Skladga vozvrat"
 BTN_PEREMESH = "🔄 Peremeshenie"
 BTN_TAYYOR   = "✅ Tayyor"
 BTN_BEKOR    = "❌ Bekor qilish"
+BTN_TASKS    = "📥 Tayyor topshiriqlar"
 
 
 def dorixona_type_keyboard(language: str = "uz"):
     back_txt = "⬅️ Назад" if language == "ru" else "⬅️ Orqaga"
     return ReplyKeyboardMarkup(
-        [[BTN_ODDIY], [BTN_VOZVRAT], [BTN_PEREMESH], [back_txt]],
+        [[BTN_ODDIY], [BTN_VOZVRAT], [BTN_PEREMESH], [BTN_TASKS], [back_txt]],
         resize_keyboard=True,
     )
 
@@ -137,6 +138,10 @@ def match_filial(raw: str, base: dict):
     n = _nm(raw)
     if not n:
         return None, "bo'sh"
+    # Filial raqami bilan yozilgan bo'lsa: "48" yoki "48 - ШАХРИСТАНСКИЙ"
+    mnum = re.match(r"^\s*(\d+)\s*(-|$)", str(raw))
+    if mnum and mnum.group(1) in ph:
+        return mnum.group(1), "aniq"
     if n in alias and alias[n] in ph:
         return alias[n], "alias"
 
@@ -517,7 +522,7 @@ async def _send_messages(ctx, admin_chat_id: int, messages: list, progress_msg=N
     return results
 
 
-def _report_xlsx(results: list, detail_header: list, detail_rows: list, title: str) -> io.BytesIO:
+def _report_xlsx(results: list, detail_header: list, detail_rows: list, title: str, extra=None) -> io.BytesIO:
     """Natija + batafsil ro'yxat — ikki varaqli Excel hisobot."""
     import openpyxl
     from openpyxl.styles import Font, PatternFill, Alignment
@@ -555,6 +560,8 @@ def _report_xlsx(results: list, detail_header: list, detail_rows: list, title: s
         ws2 = ws1
         ws2.title = "Ro'yxat"
     sheet(ws2, detail_header, detail_rows, [10, 34, 60, 10, 34, 14])
+    if extra:  # (varaq nomi, sarlavha, qatorlar)
+        sheet(wb.create_sheet(extra[0]), extra[1], extra[2], [34, 60, 12, 10, 16, 28])
 
     buf = io.BytesIO()
     wb.save(buf)
@@ -564,7 +571,8 @@ def _report_xlsx(results: list, detail_header: list, detail_rows: list, title: s
 
 async def _back_to_main(ctx, chat_id: int, text: str = "📋 Asosiy menyu"):
     from bot import main_keyboard, get_lang
-    for k in ("vz_rows", "vz_plan", "vz_base", "pm_rows", "pm_plan", "pm_base", "vz_files"):
+    for k in ("vz_rows", "vz_plan", "vz_base", "pm_rows", "pm_plan", "pm_base", "vz_files",
+              "vz_title", "vz_sklad", "vz_src", "vz_src_opts", "vz_src_pick", "cv_task_id", "cv_tasks", "pm_title"):
         ctx.user_data.pop(k, None)
     await ctx.bot.send_message(chat_id=chat_id, text=text, reply_markup=main_keyboard(get_lang(ctx)))
 
@@ -613,7 +621,8 @@ async def show_dorixona_type_menu(update: Update, ctx: ContextTypes.DEFAULT_TYPE
         "💊 *Dorixonalarga murojaat* — turini tanlang:\n\n"
         f"{BTN_ODDIY} — matnli xabar\n"
         f"{BTN_VOZVRAT} — skrinshot/Excel → har filialga o'z ro'yxati\n"
-        f"{BTN_PEREMESH} — tayyor Excel → beruvchi va qabul qiluvchiga",
+        f"{BTN_PEREMESH} — tayyor Excel → beruvchi va qabul qiluvchiga\n"
+        f"{BTN_TASKS} — Claude tayyorlagan ro'yxatlar (Claude_vazifa varag'i)",
         parse_mode="Markdown",
         reply_markup=dorixona_type_keyboard(language),
     )
@@ -645,18 +654,27 @@ async def dorixona_type_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return APPEAL_DORIXONA_TARGET
 
     if txt == BTN_VOZVRAT:
+        for k in ("vz_title", "vz_sklad", "vz_src", "vz_src_opts", "vz_src_pick"):
+            ctx.user_data.pop(k, None)
         ctx.user_data["vz_rows"] = []
         ctx.user_data["vz_files"] = 0
         await update.message.reply_text(
             "📦 *Skladga vozvrat*\n\n"
-            "Dasturdagi jadval *skrinshot(lar)ini* yoki *Excel* faylini yuboring "
-            "(ustunlar: Филиал, Наименование, Кол-во).\n\n"
-            "Bir nechta skrinshot bo'lsa — hammasini ketma-ket yuboring, "
-            f"so'ng *{BTN_TAYYOR}* tugmasini bosing.",
+            "1️⃣ Dasturdagi jadval *skrinshot(lar)ini* yoki *Excel* faylini yuboring "
+            "(ustunlar: Филиал, Наименование, Кол-во), so'ng "
+            f"*{BTN_TAYYOR}* ni bosing.\n\n"
+            f"2️⃣ Yoki ro'yxatni OSTATOK'dan avtomatik oling:\n"
+            f"*{BTN_BY_POST}* — partiya qaysi postavshikdan kelgan bo'lsa\n"
+            f"*{BTN_BY_PRED}* — spravochnikdagi predstavitelstvo bo'yicha\n\n"
+            "📚 Spravochnikni yangilash uchun «итоговый справочник» (.csv yoki .xlsx) faylini shu yerga yuboring.",
             parse_mode="Markdown",
-            reply_markup=ReplyKeyboardMarkup([[BTN_TAYYOR], [BTN_BEKOR]], resize_keyboard=True),
+            reply_markup=ReplyKeyboardMarkup([[BTN_BY_POST, BTN_BY_PRED], [BTN_TAYYOR], [BTN_BEKOR]],
+                                             resize_keyboard=True),
         )
         return VOZVRAT_UPLOAD
+
+    if txt == BTN_TASKS:
+        return await cv_list_tasks(update, ctx)
 
     if txt == BTN_PEREMESH:
         await update.message.reply_text(
@@ -689,6 +707,8 @@ async def vozvrat_upload_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE)
             await _back_to_main(ctx, msg.chat_id, "❌ Bekor qilindi.")
             from bot import MENU
             return MENU
+        if txt in (BTN_BY_POST, BTN_BY_PRED):
+            return await vz_src_start(update, ctx, "post" if txt == BTN_BY_POST else "pred")
         if txt == BTN_TAYYOR:
             if not rows:
                 await msg.reply_text("⚠️ Hali hech qanday ma'lumot yuklanmadi. Skrinshot yoki Excel yuboring.")
@@ -697,12 +717,29 @@ async def vozvrat_upload_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE)
         await msg.reply_text(f"📎 Skrinshot yoki Excel yuboring, tugatgach {BTN_TAYYOR} ni bosing.")
         return VOZVRAT_UPLOAD
 
-    # ── Excel ──
+    # ── Excel / CSV ──
     doc = msg.document
-    if doc and (doc.file_name or "").lower().endswith((".xlsx", ".xlsm")):
+    if doc and (doc.file_name or "").lower().endswith((".xlsx", ".xlsm", ".csv")):
         try:
             f = await ctx.bot.get_file(doc.file_id)
             data = bytes(await f.download_as_bytearray())
+            sprav = parse_spravochnik(data, doc.file_name or "")
+        except Exception:
+            sprav = None
+        if sprav is not None:   # bu — spravochnik fayli
+            from attendance import run_write
+            wait = await msg.reply_text(f"⏳ Spravochnik saqlanmoqda ({len(sprav)} ta tovar)...")
+            ok = await run_write(save_spravochnik, sprav)
+            await wait.edit_text(
+                f"✅ Spravochnik yangilandi: {len(sprav)} ta tovar, "
+                f"{sum(1 for r in sprav if r[3])} tasida predstavitelstvo bor."
+                if ok else "❌ Spravochnikni saqlashda xato (logni tekshiring)."
+            )
+            return VOZVRAT_UPLOAD
+        if (doc.file_name or "").lower().endswith(".csv"):
+            await msg.reply_text("⚠️ CSV faqat spravochnik uchun qabul qilinadi. Vozvrat ro'yxati uchun Excel yuboring.")
+            return VOZVRAT_UPLOAD
+        try:
             new = parse_vozvrat_excel(data)
         except Exception as e:
             await msg.reply_text(f"❌ Excel o'qilmadi: {e}")
@@ -771,11 +808,16 @@ async def _vozvrat_analyze_and_preview(update: Update, ctx: ContextTypes.DEFAULT
 
     n_pos = sum(len(v) for v in plan["items"].values())
     no_tid = [f for f in plan["items"] if not ph[f].get("tid")]
+    title = ctx.user_data.get("vz_title")
     lines = [
-        "📦 *Vozvrat — tahlil natijasi*\n",
+        "📦 *Vozvrat — tahlil natijasi*" + (f"\n🏢 {title}" if title else "") + "\n",
         f"🏥 Filiallar: *{len(plan['items'])}* ta",
         f"💊 Pozitsiyalar: *{n_pos}* ta",
     ]
+    sklad = ctx.user_data.get("vz_sklad") or []
+    if sklad:
+        lines.append(f"🏬 Skladda: {_fmt_qty(sum(r[2] for r in sklad))} dona, "
+                     f"{len(sklad)} ta partiya — xabar yuborilmaydi (faylda alohida varaqda)")
     if no_tid:
         lines.append(f"⚠️ TID yo'q (yuborilmaydi): {len(no_tid)} ta")
     lines.append("")
@@ -808,8 +850,10 @@ async def _vozvrat_analyze_and_preview(update: Update, ctx: ContextTypes.DEFAULT
     for raw, (why, drugs) in plan["unmatched"].items():
         for dori, q in drugs.items():
             detail.append(["", "", dori, q, raw, f"⚠️ {why}"])
+    extra = ("SKLAD", ["Dori", "Srok / seriya", "Soni", "", "Summa (prixod)", "Postavshik"],
+             [[r[0], r[1], r[2], "", r[3], r[4]] for r in sklad]) if sklad else None
     buf = _report_xlsx([], ["Filial №", "Dorixona", "Dori", "Soni", "1C dagi nomi", "Holat"],
-                       detail, "Vozvrat")
+                       detail, "Vozvrat", extra=extra)
 
     text = "\n".join(lines)
     if len(text) > 4000:
@@ -894,6 +938,7 @@ async def vozvrat_confirm_callback(update: Update, ctx: ContextTypes.DEFAULT_TYP
     except Exception:
         pass
     sender = _sender_name(update.effective_user)
+    _tline = f" — {ctx.user_data['vz_title']}" if ctx.user_data.get("vz_title") else ""
 
     messages, detail = [], []
     for fno, drugs in plan["items"].items():
@@ -902,7 +947,7 @@ async def vozvrat_confirm_callback(update: Update, ctx: ContextTypes.DEFAULT_TYP
         dlines = [f"{i}. {dori} — {_fmt_qty(q)} ta" for i, (dori, q) in enumerate(drugs.items(), 1)]
         messages.append({
             "filial_no": fno, "label": label, "rol": "Vozvrat", "tid": d.get("tid", ""),
-            "header": (f"📦 Skladga vozvrat\n👤 Kimdan: {sender}\n\n🏥 {label}\n\n"
+            "header": (f"📦 Skladga vozvrat{_tline}\n👤 Kimdan: {sender}\n\n🏥 {label}\n\n"
                        f"Quyidagi dorilarni skladga vozvrat qiling:\n\n"),
             "lines": dlines,
             "footer": "\n✅ Vozvrat qilingach «Bajarildi» tugmasini bosing.",
@@ -934,7 +979,7 @@ async def vozvrat_confirm_callback(update: Update, ctx: ContextTypes.DEFAULT_TYP
                 klines.append(f"\n🏥 {_label(ph[fno])}{note}")
                 for i, (dori, q) in enumerate(plan["items"][fno].items(), 1):
                     klines.append(f"  {i}. {dori} — {_fmt_qty(q)} ta")
-            header = (f"📦 Skladga vozvrat\n👤 Kimdan: {sender}\n\n"
+            header = (f"📦 Skladga vozvrat{_tline}\n👤 Kimdan: {sender}\n\n"
                       f"{ismi}, sizga tegishli {len(fnos)} ta dorixonaga vozvrat ro'yxati yuborildi:\n")
             try:
                 for part in _chunks(header, klines, "\nℹ️ Nazorat qilib boring."):
@@ -970,8 +1015,356 @@ async def vozvrat_confirm_callback(update: Update, ctx: ContextTypes.DEFAULT_TYP
         chat_id, document=InputFile(buf, filename=f"vozvrat_hisobot_{_dt.now():%Y%m%d_%H%M}.xlsx"),
         caption=summary, parse_mode="Markdown",
     )
+    await _cv_mark_done(ctx, chat_id, summary)
     await _back_to_main(ctx, chat_id)
     return MENU
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 6b) 📦 VOZVRAT — OSTATOK'dan avtomatik (postavshik / predstavitelstvo bo'yicha)
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# OSTATOK varag'i (Excel makrosi yuklaydi) ustunlari:
+#   A Поставщик | B Филиал | C Наименование | D Производитель | E Остаток | F Серия |
+#   G Тип наценки | H Срок годности | ... | N Сумма приходная
+# Varaq juda katta (~340 ming qator), shuning uchun to'liq o'qilmaydi — Google
+# Visualization (gviz) so'rovi bilan faqat kerakli qatorlar olinadi.
+#
+# Spravochnik varag'i (admin «итоговый справочник» faylini botga yuborganda yoziladi):
+#   A Код | B Наименование | C Производитель | D Представительство |
+#   E Ответственный снабженец | F Снабженцы представительства
+
+VZ_SRC_SEARCH = 595   # postavshik/predstavitelstvo nomini qidirish
+VZ_SRC_PICK   = 596   # topilganlardan tanlash + partiya filtri
+VZ_SRC_DATE   = 597   # "muddati yaqin" uchun sana
+
+BTN_BY_POST = "🏢 Поставщик бўйича"
+BTN_BY_PRED = "🏷 Представительство бўйича"
+SPRAV_WS = "Spravochnik"
+OSTATOK_WS = "OSTATOK"
+SPRAV_HEADERS = ["Код", "Наименование", "Производитель", "Представительство",
+                 "Ответственный снабженец", "Снабженцы представительства"]
+
+
+def _ostatok_sheet_id() -> str:
+    from salary_handlers import PHARMACY_SHEET_ID
+    return os.getenv("OSTATOK_SHEET_ID", "").strip() or PHARMACY_SHEET_ID
+
+
+_GV_SESSION = None
+
+
+def _gv_session():
+    """Service account bilan avtorizatsiyalangan HTTP sessiya (gviz so'rovlari uchun)."""
+    global _GV_SESSION
+    if _GV_SESSION is None:
+        from google.auth.transport.requests import AuthorizedSession
+        from google.oauth2.service_account import Credentials
+        from salary_handlers import SCOPES
+        info = os.getenv("GOOGLE_CREDENTIALS")
+        creds = (Credentials.from_service_account_info(json.loads(info), scopes=SCOPES) if info
+                 else Credentials.from_service_account_file("credentials.json", scopes=SCOPES))
+        _GV_SESSION = AuthorizedSession(creds)
+    return _GV_SESSION
+
+
+def _q(s: str) -> str:
+    """gviz so'rovi uchun matnli literal."""
+    s = str(s)
+    return f'"{s}"' if "'" in s else f"'{s}'"
+
+
+def gviz_query(sheet: str, rng: str, tq: str) -> list:
+    """Google Sheets'dan gviz so'rovi bilan qatorlarni oladi (sarlavhasiz, matn ko'rinishida)."""
+    import csv as _csv
+    url = f"https://docs.google.com/spreadsheets/d/{_ostatok_sheet_id()}/gviz/tq"
+    r = _gv_session().get(url, params={"sheet": sheet, "range": rng, "headers": "1",
+                                       "tqx": "out:csv", "tq": tq}, timeout=180)
+    r.raise_for_status()
+    text = r.content.decode("utf-8-sig", errors="replace")
+    if text.lstrip().startswith("<"):
+        raise RuntimeError("gviz so'rovi bajarilmadi (varaq yoki ustun topilmadi)")
+    rows = list(_csv.reader(io.StringIO(text)))
+    return rows[1:] if rows else []
+
+
+def _parse_date(s):
+    import datetime as _d
+    s = str(s or "").strip()
+    m = re.match(r"^(\d{1,2})\.(\d{1,2})\.(\d{4})", s)
+    if m:
+        return _d.date(int(m.group(3)), int(m.group(2)), int(m.group(1)))
+    m = re.match(r"^(\d{4})-(\d{1,2})-(\d{1,2})", s)
+    if m:
+        return _d.date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+    return None
+
+
+def _num(s) -> float:
+    v = _to_num(str(s or "").replace("\xa0", "").replace(" ", ""))
+    return v or 0.0
+
+
+# ── Spravochnik ─────────────────────────────────────────────────────────────
+
+def parse_spravochnik(data: bytes, fname: str):
+    """«итоговый справочник» (.csv/.xlsx) → [[kod, nomi, ishlab chiqaruvchi, predst., snabjenets, predst. snabjenetslari]].
+    Fayl spravochnik bo'lmasa None qaytaradi."""
+    import csv as _csv
+    if fname.lower().endswith(".csv"):
+        rows = list(_csv.reader(io.StringIO(data.decode("utf-8-sig", errors="replace"))))
+    else:
+        rows = _read_xlsx_sheets(data)[0]
+    hi, cols = _find_header(rows, {
+        "kod": [r"^код"], "nomi": [r"^наименование"], "proizv": [r"производител"],
+        "pred": [r"^представительство"], "otv": [r"ответственный"], "snab": [r"снабженцы представ"],
+    }, optional=("kod", "proizv", "otv", "snab"), scan=5)
+    if hi is None:
+        return None
+    out = []
+    for r in rows[hi + 1:]:
+        g = lambda k: str(_cell(r, cols.get(k)) or "").strip()
+        if g("nomi"):
+            out.append([g("kod"), g("nomi"), g("proizv"), g("pred"), g("otv"), g("snab")])
+    return out
+
+
+def save_spravochnik(rows: list) -> bool:
+    """Spravochnikni OSTATOK turgan jadvaldagi "Spravochnik" varag'iga yozadi (eskisini almashtiradi)."""
+    from salary_handlers import _get_client
+    try:
+        sh = _get_client().open_by_key(_ostatok_sheet_id())
+        try:
+            ws = sh.worksheet(SPRAV_WS)
+        except Exception:
+            ws = sh.add_worksheet(title=SPRAV_WS, rows=len(rows) + 10, cols=len(SPRAV_HEADERS))
+        ws.clear()
+        ws.resize(rows=len(rows) + 10, cols=len(SPRAV_HEADERS))
+        data = [SPRAV_HEADERS] + rows
+        step = 5000
+        for i in range(0, len(data), step):
+            ws.update(range_name=f"A{i + 1}", values=data[i:i + step], value_input_option="RAW")
+        return True
+    except Exception as e:
+        logger.error(f"[SPRAV] Saqlashda xato: {e}")
+        return False
+
+
+# ── Qidirish va ma'lumot olish ──────────────────────────────────────────────
+
+def search_sources(mode: str, term: str) -> list:
+    """Nomi bo'yicha postavshik (OSTATOK!A) yoki predstavitelstvo (Spravochnik!D) qidiradi.
+    Qaytaradi: [(nomi, soni), ...] — eng ko'p qatorlilari oldin."""
+    t = term.strip().lower().replace("'", "").replace('"', "")
+    if mode == "post":
+        rows = gviz_query(OSTATOK_WS, "A2:P",
+                          f"select A, count(C) where E > 0 and lower(A) contains {_q(t)} "
+                          f"group by A order by count(C) desc")
+    else:
+        rows = gviz_query(SPRAV_WS, "A1:F",
+                          f"select D, count(B) where lower(D) contains {_q(t)} "
+                          f"group by D order by count(B) desc")
+    return [(r[0], int(_num(r[1]))) for r in rows if r and r[0].strip()][:20]
+
+
+def fetch_source_rows(mode: str, name: str) -> list:
+    """Tanlangan postavshik/predstavitelstvo bo'yicha OSTATOK qatorlari:
+    [{filial, dori, seriya, srok(date|None), srok_txt, soni, summa, post}]"""
+    cols = "B, C, F, H, E, N, A"
+    if mode == "post":
+        raw = gviz_query(OSTATOK_WS, "A2:P", f"select {cols} where E > 0 and A = {_q(name)}")
+    else:
+        names = [r[0] for r in gviz_query(SPRAV_WS, "A1:F", f"select B where D = {_q(name)}") if r and r[0]]
+        raw = []
+        for i in range(0, len(names), 20):
+            cond = " or ".join(f"C = {_q(n)}" for n in names[i:i + 20])
+            raw += gviz_query(OSTATOK_WS, "A2:P", f"select {cols} where E > 0 and ({cond})")
+    out = []
+    for r in raw:
+        if len(r) < 7:
+            continue
+        q = _num(r[4])
+        if q < 0.01:
+            continue
+        out.append({"filial": r[0].strip(), "dori": re.sub(r"\s+", " ", r[1]).strip(),
+                    "seriya": r[2].strip(), "srok": _parse_date(r[3]), "srok_txt": r[3].strip(),
+                    "soni": q, "summa": _num(r[5]), "post": r[6].strip()})
+    return out
+
+
+def _ostatok_date_text() -> str:
+    try:
+        rows = gviz_query(OSTATOK_WS, "A1:A1", "select A")
+        return rows[0][0] if rows and rows[0] else ""
+    except Exception:
+        return ""
+
+
+# ── Handlerlar ──────────────────────────────────────────────────────────────
+
+async def vz_src_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE, mode: str):
+    ctx.user_data["vz_src"] = mode
+    what = "postavshik" if mode == "post" else "predstavitelstvo"
+    await update.message.reply_text(
+        f"🔎 {what.capitalize()} nomining bir qismini yozing (masalan: `эмир`):",
+        parse_mode="Markdown",
+        reply_markup=ReplyKeyboardMarkup([[BTN_BEKOR]], resize_keyboard=True),
+    )
+    return VZ_SRC_SEARCH
+
+
+async def vz_src_search_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    from attendance import run_read
+    txt = (update.message.text or "").strip()
+    if txt == BTN_BEKOR:
+        await _back_to_main(ctx, update.effective_chat.id, "❌ Bekor qilindi.")
+        from bot import MENU
+        return MENU
+    if len(txt) < 2:
+        await update.message.reply_text("Kamida 2 ta harf yozing.")
+        return VZ_SRC_SEARCH
+    mode = ctx.user_data.get("vz_src", "post")
+    wait = await update.message.reply_text("⏳ Qidirilmoqda...")
+    try:
+        found = await run_read(search_sources, mode, txt)
+    except Exception as e:
+        logger.warning(f"[VZ_SRC] qidiruv xatosi: {e}")
+        if mode == "pred":
+            await wait.edit_text("⚠️ Spravochnik topilmadi yoki o'qib bo'lmadi.\n"
+                                 "«итоговый справочник» faylini (.csv) shu yerga yuboring, so'ng qayta urinib ko'ring.")
+            return VOZVRAT_UPLOAD
+        await wait.edit_text(f"❌ OSTATOK'dan o'qishda xato: {e}")
+        return VZ_SRC_SEARCH
+    if not found:
+        await wait.edit_text("🤷 Hech narsa topilmadi. Boshqacha yozib ko'ring:")
+        return VZ_SRC_SEARCH
+    ctx.user_data["vz_src_opts"] = found
+    unit = "partiya" if mode == "post" else "tovar"
+    kb = [[InlineKeyboardButton(f"{n} ({c} {unit})", callback_data=f"vzs:{i}")] for i, (n, c) in enumerate(found)]
+    await wait.edit_text("👇 Keraklisini tanlang (yoki boshqa nom yozing):", reply_markup=InlineKeyboardMarkup(kb))
+    return VZ_SRC_PICK
+
+
+def _filter_kb():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📦 Hammasi", callback_data="vzf:all")],
+        [InlineKeyboardButton("⛔ Muddati o'tganlar", callback_data="vzf:exp")],
+        [InlineKeyboardButton("⏳ Muddati yaqinlar (sana kiritiladi)", callback_data="vzf:near")],
+        [InlineKeyboardButton("❌ Bekor", callback_data="vzf:cancel")],
+    ])
+
+
+async def vz_src_pick_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    chat_id = query.message.chat_id
+    data = query.data
+
+    if data.startswith("vzs:"):
+        opts = ctx.user_data.get("vz_src_opts") or []
+        i = int(data.split(":")[1])
+        if i >= len(opts):
+            return VZ_SRC_PICK
+        ctx.user_data["vz_src_pick"] = opts[i][0]
+        await query.edit_message_text(
+            f"✅ Tanlandi: *{opts[i][0]}*\n\nQaysi partiyalar qaytarilsin?",
+            parse_mode="Markdown", reply_markup=_filter_kb(),
+        )
+        return VZ_SRC_PICK
+
+    kind = data.split(":")[1]
+    if kind == "cancel":
+        await query.edit_message_reply_markup(reply_markup=None)
+        await _back_to_main(ctx, chat_id, "❌ Bekor qilindi.")
+        from bot import MENU
+        return MENU
+    if kind == "near":
+        await query.edit_message_reply_markup(reply_markup=None)
+        await ctx.bot.send_message(
+            chat_id, "📅 Qaysi sanagacha tugaydiganlar olinsin?\n"
+                     "Sana yozing (`01.03.2027`) yoki oylar sonini (`3` — 3 oy ichida):",
+            parse_mode="Markdown",
+        )
+        return VZ_SRC_DATE
+    await query.edit_message_reply_markup(reply_markup=None)
+    return await _vz_src_build(update, ctx, kind, None)
+
+
+async def vz_src_date_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    import datetime as _d
+    txt = (update.message.text or "").strip()
+    if txt == BTN_BEKOR:
+        await _back_to_main(ctx, update.effective_chat.id, "❌ Bekor qilindi.")
+        from bot import MENU
+        return MENU
+    until = _parse_date(txt)
+    if until is None and txt.isdigit() and 0 < int(txt) <= 36:
+        # N oy ichida: masalan 24.11.2026 + 3 oy → 24.02.2027 gacha
+        t = _d.date.today()
+        m0 = t.month - 1 + int(txt)
+        y, m = t.year + m0 // 12, m0 % 12 + 1
+        import calendar
+        until = _d.date(y, m, min(t.day, calendar.monthrange(y, m)[1]))
+    if until is None:
+        await update.message.reply_text("⚠️ Tushunmadim. Masalan: `01.03.2027` yoki `3`", parse_mode="Markdown")
+        return VZ_SRC_DATE
+    return await _vz_src_build(update, ctx, "near", until)
+
+
+async def _vz_src_build(update: Update, ctx: ContextTypes.DEFAULT_TYPE, kind: str, until):
+    """OSTATOK'dan qatorlarni olib, vozvrat rejasiga aylantiradi va oldindan ko'rsatadi."""
+    import datetime as _d
+    from attendance import run_read
+    chat_id = update.effective_chat.id
+    mode = ctx.user_data.get("vz_src", "post")
+    name = ctx.user_data.get("vz_src_pick", "")
+    wait = await ctx.bot.send_message(chat_id, f"⏳ OSTATOK'dan «{name}» qoldiqlari olinmoqda...")
+    try:
+        rows = await run_read(fetch_source_rows, mode, name)
+        ost_date = await run_read(_ostatok_date_text)
+    except Exception as e:
+        await wait.edit_text(f"❌ OSTATOK'dan o'qishda xato: {e}")
+        return VZ_SRC_PICK
+
+    today = _d.date.today()
+    if kind == "exp":
+        rows = [r for r in rows if r["srok"] and r["srok"] < today]
+        ftxt = "muddati o'tganlar"
+    elif kind == "near":
+        rows = [r for r in rows if r["srok"] and r["srok"] <= until]
+        ftxt = f"{until:%d.%m.%Y} gacha tugaydiganlar"
+    else:
+        ftxt = "hammasi"
+
+    vz_rows, sklad = [], []
+    for r in rows:
+        srok = r["srok"].strftime("%d.%m.%Y") if r["srok"] else r["srok_txt"]
+        dori = f"{r['dori']} (срок {srok})" if srok else r["dori"]
+        if _nm(r["filial"]).startswith("СКЛАД"):
+            sklad.append([r["dori"], f"{srok} / {r['seriya']}".strip(" /"), r["soni"], r["summa"], r["post"]])
+        else:
+            vz_rows.append({"filial": r["filial"], "dori": dori, "soni": r["soni"]})
+
+    label = "Postavshik" if mode == "post" else "Predstavitelstvo"
+    ctx.user_data["vz_title"] = f"{label}: {name} ({ftxt})"
+    ctx.user_data["vz_sklad"] = sklad
+    ctx.user_data["vz_rows"] = vz_rows
+    try:
+        await wait.edit_text(
+            f"📊 {ost_date or 'OSTATOK'}\n"
+            f"Topildi: aptekalarda {len(vz_rows)} ta qator, skladda {len(sklad)} ta partiya."
+        )
+    except Exception:
+        pass
+    if not vz_rows:
+        await ctx.bot.send_message(
+            chat_id, "🤷 Aptekalarda bu shartga mos qoldiq yo'q — yuboriladigan narsa yo'q."
+            + (f"\n🏬 Skladda: {_fmt_qty(sum(r[2] for r in sklad))} dona." if sklad else "")
+        )
+        await _back_to_main(ctx, chat_id)
+        from bot import MENU
+        return MENU
+    return await _vozvrat_analyze_and_preview(update, ctx)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1019,7 +1412,7 @@ async def _peremesh_analyze_and_preview(update: Update, ctx: ContextTypes.DEFAUL
     ph = base["ph"]
 
     lines = [
-        "🔄 *Peremeshenie — tahlil natijasi*\n",
+        "🔄 *Peremeshenie — tahlil natijasi*" + (f"\n🏢 {ctx.user_data['pm_title']}" if ctx.user_data.get("pm_title") else "") + "\n",
         f"📄 Qatorlar: *{len(plan['rows'])}* ta",
         f"📤 Beruvchi filiallar: *{len(plan['out'])}* ta",
         f"📥 Qabul qiluvchi filiallar: *{len(plan['inc'])}* ta\n",
@@ -1092,6 +1485,7 @@ async def peremesh_confirm_callback(update: Update, ctx: ContextTypes.DEFAULT_TY
         return MENU
     ph = base["ph"]
     sender = _sender_name(update.effective_user)
+    _ptl = f" — {ctx.user_data['pm_title']}" if ctx.user_data.get("pm_title") else ""
 
     messages, detail = [], []
     # Beruvchi filiallar: "shu dorini shu aptekaga peremeshenie qiling"
@@ -1104,7 +1498,7 @@ async def peremesh_confirm_callback(update: Update, ctx: ContextTypes.DEFAULT_TY
             detail.append([fno, d["nomi"], dori, q, to_lbl, "Beradi"])
         messages.append({
             "filial_no": fno, "label": label, "rol": "Beruvchi 📤", "tid": d.get("tid", ""),
-            "header": (f"🔄 Peremeshenie\n👤 Kimdan: {sender}\n\n🏥 {label}\n\n"
+            "header": (f"🔄 Peremeshenie{_ptl}\n👤 Kimdan: {sender}\n\n🏥 {label}\n\n"
                        f"Quyidagi dorilarni ko'rsatilgan filiallarga peremeshenie qiling:\n\n"),
             "lines": dlines,
             "footer": "\n✅ Jo'natgach «Bajarildi» tugmasini bosing.",
@@ -1121,7 +1515,7 @@ async def peremesh_confirm_callback(update: Update, ctx: ContextTypes.DEFAULT_TY
             detail.append([fno, d["nomi"], dori, q, from_lbl, "Qabul qiladi"])
         messages.append({
             "filial_no": fno, "label": label, "rol": "Qabul qiluvchi 📥", "tid": d.get("tid", ""),
-            "header": (f"🔄 Peremeshenie\n👤 Kimdan: {sender}\n\n🏥 {label}\n\n"
+            "header": (f"🔄 Peremeshenie{_ptl}\n👤 Kimdan: {sender}\n\n🏥 {label}\n\n"
                        f"Sizga quyidagi dorilar peremeshenie orqali keladi:\n\n"),
             "lines": dlines,
             "footer": "\n✅ Qabul qilgach «Bajarildi» tugmasini bosing.",
@@ -1150,8 +1544,143 @@ async def peremesh_confirm_callback(update: Update, ctx: ContextTypes.DEFAULT_TY
         chat_id, document=InputFile(buf, filename=f"peremeshenie_hisobot_{_dt.now():%Y%m%d_%H%M}.xlsx"),
         caption=summary, parse_mode="Markdown",
     )
+    await _cv_mark_done(ctx, chat_id, summary)
     await _back_to_main(ctx, chat_id)
     return MENU
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 7b) 📥 TAYYOR TOPSHIRIQLAR — Claude tayyorlagan ro'yxatlar
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# "Claude_vazifa" varag'i (OSTATOK turgan jadvalda). Har bir qator — bitta pozitsiya:
+#   A Topshiriq ID | B Turi (vozvrat / peremesh) | C Sarlavha | D Filial (qayerdan) |
+#   E Dori | F Soni | G Qayerga (faqat peremesh) | H Izoh | I Holat | J Yaratildi
+# Holat bo'sh yoki "yangi" — hali yuborilmagan. Bot yuborgach "yuborildi ..." yozadi.
+# Filial nomi 1C dagidek yoki filial raqami bilan ("48" / "48 - ШАХРИСТАНСКИЙ") yozilishi mumkin.
+
+CV_PICK = 598
+CV_WS = "Claude_vazifa"
+CV_HEADERS = ["Topshiriq ID", "Turi", "Sarlavha", "Filial (qayerdan)", "Dori", "Soni",
+              "Qayerga (peremesh)", "Izoh", "Holat", "Yaratildi"]
+
+
+def _cv_ws():
+    from salary_handlers import _get_client
+    sh = _get_client().open_by_key(_ostatok_sheet_id())
+    try:
+        return sh.worksheet(CV_WS)
+    except Exception:
+        ws = sh.add_worksheet(title=CV_WS, rows=1000, cols=len(CV_HEADERS))
+        ws.append_row(CV_HEADERS)
+        return ws
+
+
+def cv_load_tasks() -> "OrderedDict":
+    """Yuborilmagan topshiriqlar: {id: {"turi", "sarlavha", "rows": [(row_no, filial, dori, soni, ga, izoh)]}}"""
+    vals = _cv_ws().get_all_values()
+    tasks = OrderedDict()
+    for i, r in enumerate(vals[1:], start=2):
+        r = (r + [""] * len(CV_HEADERS))[:len(CV_HEADERS)]
+        tid, turi, sarl, fil, dori, soni, ga, izoh, holat = [x.strip() for x in r[:9]]
+        if not tid or not dori or (holat and holat.lower() != "yangi"):
+            continue
+        q = _to_num(soni)
+        if not q:
+            continue
+        t = tasks.setdefault(tid, {"turi": turi.lower(), "sarlavha": sarl, "rows": []})
+        if sarl and not t["sarlavha"]:
+            t["sarlavha"] = sarl
+        t["rows"].append((i, fil, dori, q, ga, izoh))
+    return tasks
+
+
+def cv_mark(row_nos: list, text: str) -> bool:
+    try:
+        ws = _cv_ws()
+        ws.batch_update([{"range": f"I{n}", "values": [[text]]} for n in row_nos])
+        return True
+    except Exception as e:
+        logger.error(f"[CV] Holatni yozishda xato: {e}")
+        return False
+
+
+async def cv_list_tasks(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    from attendance import run_read
+    wait = await update.message.reply_text("⏳ Tayyor topshiriqlar o'qilmoqda...")
+    try:
+        tasks = await run_read(cv_load_tasks)
+    except Exception as e:
+        await wait.edit_text(f"❌ «{CV_WS}» varag'ini o'qib bo'lmadi: {e}")
+        return APPEAL_DORIXONA_TYPE
+    if not tasks:
+        await wait.edit_text("📭 Hozircha yangi topshiriq yo'q.\n"
+                             "Claude'dan so'rang — u ro'yxatni «Claude_vazifa» varag'iga yozadi.")
+        return APPEAL_DORIXONA_TYPE
+    ctx.user_data["cv_tasks"] = tasks
+    kb, lines = [], ["📥 *Tayyor topshiriqlar:*\n"]
+    for n, (tid, t) in enumerate(tasks.items()):
+        icon = "🔄" if t["turi"].startswith("peremesh") else "📦"
+        fil = len({r[1] for r in t["rows"]})
+        lines.append(f"{icon} *{tid}* — {t['sarlavha'] or t['turi']}\n    {len(t['rows'])} ta pozitsiya, {fil} ta filial")
+        kb.append([InlineKeyboardButton(f"{icon} {tid}", callback_data=f"cvt:{n}")])
+    kb.append([InlineKeyboardButton("❌ Bekor", callback_data="cvt:x")])
+    text = "\n".join(lines)
+    try:
+        await wait.edit_text(text[:4000], parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(kb))
+    except Exception:
+        await wait.edit_text(text[:4000].replace("*", ""), reply_markup=InlineKeyboardMarkup(kb))
+    return CV_PICK
+
+
+async def cv_pick_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    chat_id = query.message.chat_id
+    try:
+        await query.edit_message_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+    key = query.data.split(":")[1]
+    tasks = ctx.user_data.get("cv_tasks") or OrderedDict()
+    if key == "x" or not tasks:
+        await _back_to_main(ctx, chat_id, "❌ Bekor qilindi.")
+        from bot import MENU
+        return MENU
+    tid = list(tasks.keys())[int(key)]
+    t = tasks[tid]
+    ctx.user_data["cv_task_id"] = (tid, [r[0] for r in t["rows"]])
+    title = f"{tid}: {t['sarlavha']}" if t["sarlavha"] else tid
+
+    if t["turi"].startswith("peremesh"):
+        bad = [r for r in t["rows"] if not r[4]]
+        if bad:
+            await ctx.bot.send_message(chat_id, f"⚠️ {len(bad)} ta qatorda «Qayerga» bo'sh — ular tashlab ketildi.")
+        ctx.user_data["pm_rows"] = [{"dan": r[1], "ga": r[4], "dori": r[2], "soni": r[3]}
+                                    for r in t["rows"] if r[4]]
+        ctx.user_data["pm_title"] = title
+        ctx.user_data.pop("pm_base", None)
+        return await _peremesh_analyze_and_preview(update, ctx)
+
+    ctx.user_data["vz_rows"] = [{"filial": r[1], "dori": r[2], "soni": r[3]} for r in t["rows"]]
+    ctx.user_data["vz_title"] = title
+    ctx.user_data.pop("vz_sklad", None)
+    ctx.user_data.pop("vz_base", None)
+    return await _vozvrat_analyze_and_preview(update, ctx)
+
+
+async def _cv_mark_done(ctx, chat_id, summary: str = ""):
+    """Topshiriq yuborilgach — Claude_vazifa varag'ida "yuborildi" deb belgilaydi."""
+    task = ctx.user_data.get("cv_task_id")
+    if not task:
+        return
+    from attendance import run_write
+    import datetime as _d
+    tid, row_nos = task
+    ok = await run_write(cv_mark, row_nos, f"yuborildi {_d.datetime.now():%d.%m.%Y %H:%M}")
+    if not ok:
+        await ctx.bot.send_message(chat_id, f"⚠️ «{tid}» holatini varaqqa yozib bo'lmadi — qayta yuborilmasligi uchun "
+                                            f"{CV_WS} varag'ida Holat ustuniga qo'lda «yuborildi» yozing.")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1172,6 +1701,19 @@ def get_vozvrat_states() -> dict:
         VOZVRAT_CONFIRM: [
             CallbackQueryHandler(vozvrat_confirm_callback, pattern="^vz:"),
             MessageHandler(filters.TEXT & ~filters.COMMAND, vozvrat_confirm_text_handler),
+        ],
+        VZ_SRC_SEARCH: [
+            MessageHandler(filters.TEXT & ~filters.COMMAND, vz_src_search_handler),
+        ],
+        VZ_SRC_PICK: [
+            CallbackQueryHandler(vz_src_pick_callback, pattern="^vz[sf]:"),
+            MessageHandler(filters.TEXT & ~filters.COMMAND, vz_src_search_handler),
+        ],
+        VZ_SRC_DATE: [
+            MessageHandler(filters.TEXT & ~filters.COMMAND, vz_src_date_handler),
+        ],
+        CV_PICK: [
+            CallbackQueryHandler(cv_pick_callback, pattern="^cvt:"),
         ],
         PEREMESH_UPLOAD: [
             MessageHandler(
