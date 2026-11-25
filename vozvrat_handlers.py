@@ -520,11 +520,18 @@ async def _send_messages(ctx, admin_chat_id: int, messages: list, progress_msg=N
         try:
             parts = _chunks(m["header"], m["lines"], m["footer"])
             for pi, part in enumerate(parts):
-                await ctx.bot.send_message(
-                    chat_id=int(m["tid"]),
-                    text=part,
-                    reply_markup=kb if pi == len(parts) - 1 else None,
-                )
+                mk = kb if pi == len(parts) - 1 else None
+                if m.get("html"):
+                    try:
+                        await ctx.bot.send_message(chat_id=int(m["tid"]), text=part,
+                                                   parse_mode="HTML", reply_markup=mk)
+                        continue
+                    except Exception as e_html:
+                        if "parse" not in str(e_html).lower():
+                            raise
+                        part = re.sub(r"</?[bi]>", "", part)   # format xatosi — oddiy matn bilan
+                        part = part.replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
+                await ctx.bot.send_message(chat_id=int(m["tid"]), text=part, reply_markup=mk)
             results.append((m["filial_no"], m["label"], m["rol"], "✅", "Yuborildi", n))
             tid_names[int(m["tid"])] = m["label"]
             to_log.append((m["tid"], m["log_text"]))
@@ -712,7 +719,7 @@ async def dorixona_type_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             "🔄 *Peremeshenie*\n\n"
             "Tayyor tahlil qilingan *Excel* faylni yuboring "
-            "(ustunlar: Откуда, Кол-во, Препарат, Куда).",
+            "(ustunlar: Откуда, Наименование, Количество, Куда).",
             parse_mode="Markdown",
             reply_markup=ReplyKeyboardMarkup([[BTN_BEKOR]], resize_keyboard=True),
         )
@@ -1474,7 +1481,7 @@ async def _peremesh_analyze_and_preview(update: Update, ctx: ContextTypes.DEFAUL
     text = "\n".join(lines)
     if len(text) > 4000:
         text = text[:3990] + "\n..."
-    n_send = len(plan["out"]) + len(plan["inc"])
+    n_send = len(set(plan["out"]) | set(plan["inc"]))   # har filialga bitta xabar
     kb = InlineKeyboardMarkup([[
         InlineKeyboardButton(f"✅ Yuborish ({n_send} xabar)", callback_data="pm:send"),
         InlineKeyboardButton("❌ Bekor", callback_data="pm:cancel"),
@@ -1524,40 +1531,45 @@ async def peremesh_confirm_callback(update: Update, ctx: ContextTypes.DEFAULT_TY
     sender = _sender_name(update.effective_user)
     _ptl = f" — {ctx.user_data['pm_title']}" if ctx.user_data.get("pm_title") else ""
 
+    # Har bir filialga BITTA xabar: unda ham "jo'nating" (📤), ham "qabul qiling" (📥)
+    # bo'limlari bo'ladi. (Avval ikkita alohida xabar ketardi — beruvchi ham, qabul
+    # qiluvchi ham bo'lgan apteka ulardan birini ko'rmay qolishi mumkin edi.)
     messages, detail = [], []
-    # Beruvchi filiallar: "shu dorini shu aptekaga peremeshenie qiling"
-    for fno, lst in plan["out"].items():
+    fnos = list(plan["out"].keys()) + [f for f in plan["inc"].keys() if f not in plan["out"]]
+    for fno in fnos:
         d = ph[fno]
         label = _label(d)
-        dlines = []
-        for i, (dori, q, to_lbl) in enumerate(lst, 1):
-            dlines.append(f"{i}. {dori} — {_fmt_qty(q)} up.\n    ➡️ {to_lbl} ga")
-            detail.append([fno, d["nomi"], dori, q, to_lbl, "Beradi"])
+        out_lst = plan["out"].get(fno, [])
+        inc_lst = plan["inc"].get(fno, [])
+        from html import escape as _e
+        dlines, log_parts = [], []
+        if out_lst:
+            dlines.append("━━━━━━━━━━━━━━━")
+            dlines.append("📤 <b>JO'NATING — SIZDAN KETADI</b>")
+            dlines.append("<i>Quyidagi dorilarni ko'rsatilgan filiallarga peremeshenie qiling:</i>")
+            for i, (dori, q, to_lbl) in enumerate(out_lst, 1):
+                dlines.append(f"{i}. {_e(dori)} — <b>{_fmt_qty(q)} up.</b>\n    ➡️ <b>{_e(to_lbl)}</b> ga")
+                detail.append([fno, d["nomi"], dori, q, to_lbl, "Beradi"])
+            log_parts.append("beradi: " + "; ".join(f"{a} — {_fmt_qty(b)} → {c}" for a, b, c in out_lst))
+        if inc_lst:
+            if dlines:
+                dlines.append("")
+            dlines.append("━━━━━━━━━━━━━━━")
+            dlines.append("📥 <b>QABUL QILING — SIZGA KELADI</b>")
+            dlines.append("<i>Sizga quyidagi dorilar peremeshenie orqali keladi:</i>")
+            for i, (dori, q, from_lbl) in enumerate(inc_lst, 1):
+                dlines.append(f"{i}. {_e(dori)} — <b>{_fmt_qty(q)} up.</b>\n    ⬅️ <b>{_e(from_lbl)}</b> dan")
+                detail.append([fno, d["nomi"], dori, q, from_lbl, "Qabul qiladi"])
+            log_parts.append("qabul: " + "; ".join(f"{a} — {_fmt_qty(b)} ← {c}" for a, b, c in inc_lst))
+        rol = ("Beradi + qabul 🔁" if out_lst and inc_lst
+               else "Beruvchi 📤" if out_lst else "Qabul qiluvchi 📥")
         messages.append({
-            "filial_no": fno, "label": label, "rol": "Beruvchi 📤", "tid": d.get("tid", ""),
-            "header": (f"🔄 Peremeshenie{_ptl}\n👤 Kimdan: {sender}\n\n🏥 {label}\n\n"
-                       f"Quyidagi dorilarni ko'rsatilgan filiallarga peremeshenie qiling:\n\n"),
+            "filial_no": fno, "label": label, "rol": rol, "tid": d.get("tid", ""), "html": True,
+            "header": (f"🔄 <b>Peremeshenie</b>{_e(_ptl)}\n👤 Kimdan: {_e(sender)}\n\n"
+                       f"🏥 <b>{_e(label)}</b>\n\n"),
             "lines": dlines,
-            "footer": "\n✅ Jo'natgach «Bajarildi» tugmasini bosing.",
-            "log_text": "🔄 Peremeshenie (beradi): " + "; ".join(
-                f"{a} — {_fmt_qty(b)} → {c}" for a, b, c in lst),
-        })
-    # Qabul qiluvchi filiallar: "shu dori sizga N-filialdan kelyapti"
-    for fno, lst in plan["inc"].items():
-        d = ph[fno]
-        label = _label(d)
-        dlines = []
-        for i, (dori, q, from_lbl) in enumerate(lst, 1):
-            dlines.append(f"{i}. {dori} — {_fmt_qty(q)} up.\n    ⬅️ {from_lbl} dan")
-            detail.append([fno, d["nomi"], dori, q, from_lbl, "Qabul qiladi"])
-        messages.append({
-            "filial_no": fno, "label": label, "rol": "Qabul qiluvchi 📥", "tid": d.get("tid", ""),
-            "header": (f"🔄 Peremeshenie{_ptl}\n👤 Kimdan: {sender}\n\n🏥 {label}\n\n"
-                       f"Sizga quyidagi dorilar peremeshenie orqali keladi:\n\n"),
-            "lines": dlines,
-            "footer": "\n✅ Qabul qilgach «Bajarildi» tugmasini bosing.",
-            "log_text": "🔄 Peremeshenie (qabul): " + "; ".join(
-                f"{a} — {_fmt_qty(b)} ← {c}" for a, b, c in lst),
+            "footer": "━━━━━━━━━━━━━━━\n✅ Bajarilgach «Bajarildi» tugmasini bosing.",
+            "log_text": "🔄 Peremeshenie (" + " | ".join(log_parts) + ")",
         })
 
     progress = await ctx.bot.send_message(chat_id, f"⏳ Yuborilmoqda... 0 / {len(messages)}")
