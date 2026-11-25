@@ -471,6 +471,28 @@ def _sender_name(user) -> str:
     return n or (f"@{user.username}" if user.username else "Administrator")
 
 
+def log_murojaat_batch(entries: list) -> dict:
+    """
+    Murojaatlar jurnaliga bir nechta qatorni BITTA so'rov bilan yozadi.
+    (Avval har bir xabar uchun alohida yozilardi — 3-4 ta API so'rovi × o'nlab xabar
+    Google'ning daqiqalik limitiga urilib, jurnal yozuvlari yo'qolardi.)
+    entries: [(telegram_id, matn)] → {telegram_id: qator_raqami}
+    """
+    from datetime import datetime
+    from attendance import UZ_TZ
+    from salary_handlers import _get_murojaatlar_ws
+    ws = _get_murojaatlar_ws()
+    now_str = datetime.now(UZ_TZ).strftime("%d.%m.%Y %H:%M")
+    rows = [[now_str, str(t), str(x)[:300], "Kutilmoqda", "", "", ""] for t, x in entries]
+    res = ws.append_rows(rows, value_input_option="USER_ENTERED")
+    rng = ((res or {}).get("updates") or {}).get("updatedRange", "")
+    m = re.search(r"![A-Z]+(\d+)", rng)
+    if not m:
+        return {}
+    start = int(m.group(1))
+    return {str(t): start + i for i, (t, _) in enumerate(entries)}
+
+
 async def _send_messages(ctx, admin_chat_id: int, messages: list, progress_msg=None) -> list:
     """
     messages: [{filial_no, label, rol, tid, header, lines, footer, log_text}]
@@ -478,7 +500,7 @@ async def _send_messages(ctx, admin_chat_id: int, messages: list, progress_msg=N
     Qaytaradi: [(filial_no, label, rol, emoji, sabab, n_items)]
     """
     from attendance import run_write
-    from salary_handlers import log_murojaat, _tg_error_reason
+    from salary_handlers import _tg_error_reason
 
     kb = InlineKeyboardMarkup([[
         InlineKeyboardButton("✅ Bajarildi", callback_data=f"appealresp:done:{admin_chat_id}"),
@@ -488,6 +510,7 @@ async def _send_messages(ctx, admin_chat_id: int, messages: list, progress_msg=N
     tid_names = ctx.bot_data.setdefault("appeal_tid_names", {})
 
     results = []
+    to_log = []   # jurnalga bitta so'rov bilan yoziladi (Google API limitiga tushmaslik uchun)
     total = len(messages)
     for i, m in enumerate(messages, 1):
         n = len(m["lines"])
@@ -504,12 +527,7 @@ async def _send_messages(ctx, admin_chat_id: int, messages: list, progress_msg=N
                 )
             results.append((m["filial_no"], m["label"], m["rol"], "✅", "Yuborildi", n))
             tid_names[int(m["tid"])] = m["label"]
-            try:
-                row_idx = await run_write(log_murojaat, m["tid"], m["log_text"])
-                if row_idx and row_idx > 0:
-                    log_rows[int(m["tid"])] = row_idx
-            except Exception:
-                pass
+            to_log.append((m["tid"], m["log_text"]))
         except Exception as exc:
             results.append((m["filial_no"], m["label"], m["rol"], "❌", _tg_error_reason(exc), n))
             logger.warning(f"[VOZVRAT/PEREMESH] {m['label']} ga yuborilmadi: {exc}")
@@ -519,6 +537,14 @@ async def _send_messages(ctx, admin_chat_id: int, messages: list, progress_msg=N
             except Exception:
                 pass
         await asyncio.sleep(0.05)
+
+    if to_log:
+        try:
+            rows_map = await run_write(log_murojaat_batch, to_log)
+            for tid, row_idx in (rows_map or {}).items():
+                log_rows[int(tid)] = row_idx
+        except Exception as e:
+            logger.warning(f"[VOZVRAT/PEREMESH] Jurnalga yozishda xato: {e}")
     return results
 
 
