@@ -617,15 +617,21 @@ async def _apply_aliases(update: Update, ctx, base_key: str) -> bool:
 
 async def show_dorixona_type_menu(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     language = ctx.user_data.get("lang", "uz")
-    await update.message.reply_text(
+    # DIQQAT: Markdown matnida "_" ishlatmang (masalan Claude_vazifa) — Telegram
+    # xabarni rad etadi va bot javob bermay qoladi.
+    text = (
         "💊 *Dorixonalarga murojaat* — turini tanlang:\n\n"
         f"{BTN_ODDIY} — matnli xabar\n"
         f"{BTN_VOZVRAT} — skrinshot/Excel → har filialga o'z ro'yxati\n"
         f"{BTN_PEREMESH} — tayyor Excel → beruvchi va qabul qiluvchiga\n"
-        f"{BTN_TASKS} — Claude tayyorlagan ro'yxatlar (Claude_vazifa varag'i)",
-        parse_mode="Markdown",
-        reply_markup=dorixona_type_keyboard(language),
+        f"{BTN_TASKS} — Claude tayyorlagan ro'yxatlar"
     )
+    try:
+        await update.message.reply_text(text, parse_mode="Markdown",
+                                        reply_markup=dorixona_type_keyboard(language))
+    except Exception:
+        await update.message.reply_text(text.replace("*", ""),
+                                        reply_markup=dorixona_type_keyboard(language))
     return APPEAL_DORIXONA_TYPE
 
 
@@ -1266,10 +1272,15 @@ async def vz_src_pick_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         if i >= len(opts):
             return VZ_SRC_PICK
         ctx.user_data["vz_src_pick"] = opts[i][0]
-        await query.edit_message_text(
-            f"✅ Tanlandi: *{opts[i][0]}*\n\nQaysi partiyalar qaytarilsin?",
-            parse_mode="Markdown", reply_markup=_filter_kb(),
-        )
+        try:
+            await query.edit_message_text(
+                f"✅ Tanlandi: *{opts[i][0]}*\n\nQaysi partiyalar qaytarilsin?",
+                parse_mode="Markdown", reply_markup=_filter_kb(),
+            )
+        except Exception:
+            await query.edit_message_text(
+                f"✅ Tanlandi: {opts[i][0]}\n\nQaysi partiyalar qaytarilsin?", reply_markup=_filter_kb(),
+            )
         return VZ_SRC_PICK
 
     kind = data.split(":")[1]
